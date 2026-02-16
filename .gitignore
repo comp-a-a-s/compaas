@@ -7,3 +7,6 @@ __pycache__/
 .claude/agent-memory-local/
 .claude/settings.local.json
 *.egg-info/
+web-dashboard/node_modules/
+web-dashboard/dist/
+.venv/

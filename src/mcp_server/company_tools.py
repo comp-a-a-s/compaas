@@ -7,6 +7,9 @@ from fastmcp import FastMCP
 
 CORE_TEAM = {
     "cto": {"role": "Chief Technology Officer", "status": "permanent", "model": "opus"},
+    "chief-researcher": {"role": "Chief Researcher", "status": "permanent", "model": "opus"},
+    "ciso": {"role": "Chief Information Security Officer", "status": "permanent", "model": "opus"},
+    "cfo": {"role": "Chief Financial Officer", "status": "permanent", "model": "sonnet"},
     "vp-product": {"role": "VP of Product", "status": "permanent", "model": "sonnet"},
     "vp-engineering": {"role": "VP of Engineering", "status": "permanent", "model": "sonnet"},
     "lead-backend": {"role": "Lead Backend Engineer", "status": "permanent", "model": "sonnet"},

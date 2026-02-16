@@ -8,7 +8,7 @@ from textual.widgets import Header, Footer, Static, DataTable, RichLog
 
 def _resolve_data_dir() -> str:
     """Resolve company_data directory to an absolute path."""
-    env_dir = os.environ.get("VIRTUALTREE_DATA_DIR")
+    env_dir = os.environ.get("CRACKPIE_DATA_DIR")
     if env_dir:
         return os.path.abspath(env_dir)
 
@@ -32,15 +32,18 @@ class OrgChartPanel(Static):
     BORDER_TITLE = "Organization"
 
     CORE_AGENTS = [
-        ("Marcus Rivera (CEO)", "opus", "executive"),
-        ("Elena Vasquez (CTO)", "opus", "leadership"),
-        ("Sarah Chen (VP Product)", "sonnet", "leadership"),
-        ("David Okonkwo (VP Eng)", "sonnet", "leadership"),
-        ("James Park (Backend)", "sonnet", "engineering"),
-        ("Priya Sharma (Frontend)", "sonnet", "engineering"),
-        ("Lena Hoffman (Designer)", "sonnet", "design"),
-        ("Carlos Mendez (QA)", "sonnet", "engineering"),
-        ("Nina Kowalski (DevOps)", "sonnet", "engineering"),
+        ("Marcus (CEO)", "opus", "executive"),
+        ("Elena (CTO)", "opus", "leadership"),
+        ("Victor (Research)", "opus", "leadership"),
+        ("Rachel (CISO)", "opus", "leadership"),
+        ("Jonathan (CFO)", "sonnet", "leadership"),
+        ("Sarah (VP Product)", "sonnet", "leadership"),
+        ("David (VP Eng)", "sonnet", "leadership"),
+        ("James (Backend)", "sonnet", "engineering"),
+        ("Priya (Frontend)", "sonnet", "engineering"),
+        ("Lena (Designer)", "sonnet", "design"),
+        ("Carlos (QA)", "sonnet", "engineering"),
+        ("Nina (DevOps)", "sonnet", "engineering"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -248,7 +251,7 @@ class VirtualCompanyDashboard(App):
     }
     """
 
-    TITLE = "VirtualTree — Company Dashboard"
+    TITLE = "CrackPie — Company Dashboard"
     SUB_TITLE = "Board Head: Idan"
     BINDINGS = [
         ("r", "force_refresh", "Refresh"),
