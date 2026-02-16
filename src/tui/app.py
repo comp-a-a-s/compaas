@@ -6,6 +6,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Static, DataTable, RichLog
 
 from src.utils import resolve_data_dir
+from src.agents import AGENT_REGISTRY
 
 
 DATA_DIR = resolve_data_dir()
@@ -17,29 +18,15 @@ class OrgChartPanel(Static):
 
     BORDER_TITLE = "Organization"
 
-    CORE_AGENTS = [
-        ("Marcus (CEO)", "opus", "executive"),
-        ("Elena (CTO)", "opus", "leadership"),
-        ("Victor (Research)", "opus", "leadership"),
-        ("Rachel (CISO)", "opus", "leadership"),
-        ("Jonathan (CFO)", "sonnet", "leadership"),
-        ("Sarah (VP Product)", "sonnet", "leadership"),
-        ("David (VP Eng)", "sonnet", "leadership"),
-        ("James (Backend)", "sonnet", "engineering"),
-        ("Priya (Frontend)", "sonnet", "engineering"),
-        ("Lena (Designer)", "sonnet", "design"),
-        ("Carlos (QA)", "sonnet", "engineering"),
-        ("Nina (DevOps)", "sonnet", "engineering"),
-    ]
-
     def compose(self) -> ComposeResult:
         yield DataTable(id="org-table")
 
     def on_mount(self) -> None:
         table = self.query_one("#org-table", DataTable)
         table.add_columns("Agent", "Model", "Team", "Status")
-        for name, model, team in self.CORE_AGENTS:
-            table.add_row(name, model, team, "idle")
+        for slug, info in AGENT_REGISTRY.items():
+            display = f"{info['name']} ({info['role']})"
+            table.add_row(display, info["model"], info["team"], info["status"])
         self._load_hires(table)
 
     def _load_hires(self, table: DataTable) -> None:

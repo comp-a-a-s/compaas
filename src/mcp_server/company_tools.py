@@ -5,6 +5,9 @@ import yaml
 from datetime import datetime, timezone
 from fastmcp import FastMCP
 
+from src.validators import validate_agent_name, validate_model
+from src.utils import atomic_yaml_write, FileLock
+
 CORE_TEAM = {
     "cto": {"role": "Chief Technology Officer", "status": "permanent", "model": "opus"},
     "chief-researcher": {"role": "Chief Researcher", "status": "permanent", "model": "opus"},
@@ -22,7 +25,12 @@ CORE_TEAM = {
 ON_DEMAND_TEAM = {
     "security-engineer": {"role": "Security Engineer", "status": "available", "model": "opus"},
     "data-engineer": {"role": "Data Engineer", "status": "available", "model": "sonnet"},
-    "tech-writer": {"role": "Technical Writer", "status": "available", "model": "haiku"},
+    "tech-writer": {"role": "Technical Writer", "status": "available", "model": "sonnet"},
+}
+
+VALID_TOOLS = {
+    "Read", "Write", "Edit", "Bash", "Glob", "Grep",
+    "WebSearch", "WebFetch", "Task", "NotebookEdit",
 }
 
 
@@ -36,9 +44,7 @@ def register_company_tools(mcp: FastMCP, data_dir: str) -> None:
             return yaml.safe_load(f) or {"hired": []}
 
     def _save_hiring_log(log: dict) -> None:
-        os.makedirs(os.path.dirname(hiring_log_path), exist_ok=True)
-        with open(hiring_log_path, "w") as f:
-            yaml.dump(log, f, default_flow_style=False)
+        atomic_yaml_write(hiring_log_path, log)
 
     @mcp.tool
     def get_org_chart() -> str:
@@ -98,23 +104,45 @@ def register_company_tools(mcp: FastMCP, data_dir: str) -> None:
             tools: Comma-separated list of tools the agent needs.
             model: Model to use — sonnet, opus, or haiku.
         """
-        log = _load_hiring_log()
+        # Validate inputs
+        try:
+            validate_agent_name(name)
+        except ValueError as e:
+            return f"Error: {e}"
 
-        # Check if already hired
-        for h in log["hired"]:
-            if h["name"] == name:
-                return f"Agent '{name}' is already hired as {h['role']}."
+        try:
+            model = validate_model(model)
+        except ValueError as e:
+            return f"Error: {e}"
 
-        log["hired"].append({
-            "name": name,
-            "role": role,
-            "expertise": expertise,
-            "tools": [t.strip() for t in tools.split(",")],
-            "model": model,
-            "hired_at": datetime.now(timezone.utc).isoformat(),
-            "status": "active",
-        })
-        _save_hiring_log(log)
+        # Check for collision with built-in agents
+        if name in CORE_TEAM or name in ON_DEMAND_TEAM or name == "ceo":
+            return f"Error: '{name}' conflicts with a built-in agent name."
+
+        # Validate tool names
+        tool_list = [t.strip() for t in tools.split(",")]
+        invalid_tools = [t for t in tool_list if t not in VALID_TOOLS]
+        if invalid_tools:
+            return f"Error: Invalid tools: {invalid_tools}. Valid: {sorted(VALID_TOOLS)}"
+
+        with FileLock(hiring_log_path):
+            log = _load_hiring_log()
+
+            # Check if already hired
+            for h in log["hired"]:
+                if h["name"] == name:
+                    return f"Agent '{name}' is already hired as {h['role']}."
+
+            log["hired"].append({
+                "name": name,
+                "role": role,
+                "expertise": expertise,
+                "tools": tool_list,
+                "model": model,
+                "hired_at": datetime.now(timezone.utc).isoformat(),
+                "status": "active",
+            })
+            _save_hiring_log(log)
 
         return (
             f"Agent '{name}' hired as {role}.\n"
@@ -129,14 +157,15 @@ def register_company_tools(mcp: FastMCP, data_dir: str) -> None:
         Args:
             name: Agent identifier to remove.
         """
-        if name in CORE_TEAM or name in ON_DEMAND_TEAM:
+        if name in CORE_TEAM or name in ON_DEMAND_TEAM or name == "ceo":
             return f"Error: Cannot fire core/on-demand team member '{name}'."
 
-        log = _load_hiring_log()
-        for h in log["hired"]:
-            if h["name"] == name:
-                h["status"] = "inactive"
-                _save_hiring_log(log)
-                return f"Agent '{name}' deactivated."
+        with FileLock(hiring_log_path):
+            log = _load_hiring_log()
+            for h in log["hired"]:
+                if h["name"] == name:
+                    h["status"] = "inactive"
+                    _save_hiring_log(log)
+                    return f"Agent '{name}' deactivated."
 
         return f"Error: Agent '{name}' not found in hiring log."

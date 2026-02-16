@@ -6,6 +6,9 @@ import yaml
 from datetime import datetime, timezone
 from fastmcp import FastMCP
 
+from src.validators import validate_agent_name, validate_model
+from src.utils import atomic_yaml_write, FileLock
+
 
 # Parent agent templates — define base expertise and tools per parent
 PARENT_TEMPLATES = {
@@ -53,6 +56,15 @@ def _find_agents_dir() -> str:
     return os.path.abspath("./.claude/agents")
 
 
+def _escape_yaml_value(value: str) -> str:
+    """Escape a string for safe embedding in YAML frontmatter."""
+    # Quote strings that contain YAML-special characters
+    if any(c in value for c in (":", "{", "}", "[", "]", ",", "&", "*", "?", "|", "-", "<", ">", "=", "!", "%", "@", "`", "\n", '"', "'")):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
 def _generate_agent_content(
     name: str,
     parent_agent: str,
@@ -60,18 +72,7 @@ def _generate_agent_content(
     task_description: str,
     model: str,
 ) -> str:
-    """Generate the .md content for a micro-agent.
-
-    Args:
-        name: The agent's identifier slug.
-        parent_agent: The parent agent this micro-agent inherits from.
-        specialization: The narrow focus area for this agent.
-        task_description: Detailed context about the task to perform.
-        model: The model identifier to use.
-
-    Returns:
-        The full markdown content for the agent definition file.
-    """
+    """Generate the .md content for a micro-agent."""
     template = PARENT_TEMPLATES.get(parent_agent, {
         "base_expertise": "general software development",
         "tools": "Read, Write, Edit, Bash, Glob, Grep",
@@ -79,9 +80,11 @@ def _generate_agent_content(
     })
 
     tools = template["tools"]
+    safe_name = _escape_yaml_value(name)
+    safe_spec = _escape_yaml_value(specialization)
 
     content = f"""---
-name: {name}
+name: {safe_name}
 description: >
   Micro-agent specialist: {specialization}. Spawned from {parent_agent} for focused,
   high-quality work on a specific task.
@@ -121,12 +124,7 @@ Write all output to the project directory specified in your task.
 
 
 def register_micro_agent_tools(mcp: FastMCP, data_dir: str) -> None:
-    """Register micro-agent lifecycle tools with the MCP server.
-
-    Args:
-        mcp: The FastMCP server instance.
-        data_dir: Path to the company data directory for persisting the agent log.
-    """
+    """Register micro-agent lifecycle tools with the MCP server."""
     micro_log_path = os.path.join(data_dir, "micro_agents.yaml")
 
     def _load_log() -> dict:
@@ -136,9 +134,7 @@ def register_micro_agent_tools(mcp: FastMCP, data_dir: str) -> None:
             return yaml.safe_load(f) or {"agents": []}
 
     def _save_log(data: dict) -> None:
-        os.makedirs(os.path.dirname(micro_log_path), exist_ok=True)
-        with open(micro_log_path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False)
+        atomic_yaml_write(micro_log_path, data)
 
     @mcp.tool
     def spawn_micro_agent(
@@ -163,10 +159,22 @@ def register_micro_agent_tools(mcp: FastMCP, data_dir: str) -> None:
             template = PARENT_TEMPLATES.get(parent_agent, {})
             model = template.get("model", "sonnet")
 
+        # Validate model
+        try:
+            model = validate_model(model)
+        except ValueError as e:
+            return f"Error: {e}"
+
         # Generate a clean name from the specialization
         slug = specialization.lower().replace(" ", "-").replace("/", "-")
         slug = "".join(c for c in slug if c.isalnum() or c == "-")[:30]
         name = f"micro-{parent_agent.split('-')[-1]}-{slug}"
+
+        # Validate the generated name
+        try:
+            validate_agent_name(name)
+        except ValueError as e:
+            return f"Error generating agent name: {e}"
 
         # Find agents directory
         agents_dir = _find_agents_dir()
@@ -183,16 +191,17 @@ def register_micro_agent_tools(mcp: FastMCP, data_dir: str) -> None:
             f.write(content)
 
         # Log the creation
-        log = _load_log()
-        log["agents"].append({
-            "name": name,
-            "parent_agent": parent_agent,
-            "specialization": specialization,
-            "model": model,
-            "status": "active",
-            "spawned_at": datetime.now(timezone.utc).isoformat(),
-        })
-        _save_log(log)
+        with FileLock(micro_log_path):
+            log = _load_log()
+            log["agents"].append({
+                "name": name,
+                "parent_agent": parent_agent,
+                "specialization": specialization,
+                "model": model,
+                "status": "active",
+                "spawned_at": datetime.now(timezone.utc).isoformat(),
+            })
+            _save_log(log)
 
         return (
             f"Micro-agent '{name}' spawned successfully.\n"
@@ -238,6 +247,15 @@ def register_micro_agent_tools(mcp: FastMCP, data_dir: str) -> None:
         Args:
             name: The micro-agent name (e.g., 'micro-backend-db-schema').
         """
+        # Validate name to prevent path traversal
+        try:
+            validate_agent_name(name)
+        except ValueError as e:
+            return f"Error: {e}"
+
+        if not name.startswith("micro-"):
+            return f"Error: Can only retire micro-agents (name must start with 'micro-')."
+
         agents_dir = _find_agents_dir()
         agent_file = os.path.join(agents_dir, f"{name}.md")
 
@@ -248,12 +266,13 @@ def register_micro_agent_tools(mcp: FastMCP, data_dir: str) -> None:
         os.remove(agent_file)
 
         # Update log
-        log = _load_log()
-        for agent in log.get("agents", []):
-            if agent["name"] == name:
-                agent["status"] = "retired"
-                agent["retired_at"] = datetime.now(timezone.utc).isoformat()
-                break
-        _save_log(log)
+        with FileLock(micro_log_path):
+            log = _load_log()
+            for agent in log.get("agents", []):
+                if agent["name"] == name:
+                    agent["status"] = "retired"
+                    agent["retired_at"] = datetime.now(timezone.utc).isoformat()
+                    break
+            _save_log(log)
 
         return f"Micro-agent '{name}' retired and agent file removed."

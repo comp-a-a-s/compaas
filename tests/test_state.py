@@ -145,6 +145,8 @@ class TestTaskBoard:
         board = TaskBoard(data_dir)
         t1 = board.create_task(pid, "Backend", "Backend work", "lead-backend")
         t2 = board.create_task(pid, "Frontend", "Frontend work", "lead-frontend")
+        # Follow proper state machine: todo -> in_progress -> done
+        board.update_status(pid, t1, "in_progress")
         board.update_status(pid, t1, "done")
 
         # Filter by status

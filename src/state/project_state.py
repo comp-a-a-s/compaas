@@ -3,6 +3,9 @@ import uuid
 import yaml
 from datetime import datetime, timezone
 
+from src.validators import validate_safe_id, safe_path_join
+from src.utils import atomic_yaml_write, FileLock
+
 
 class ProjectStateManager:
     """Manages project lifecycle and state as YAML files."""
@@ -12,7 +15,8 @@ class ProjectStateManager:
         self.projects_dir = os.path.join(data_dir, "projects")
 
     def _ensure_dirs(self, project_id: str) -> str:
-        project_path = os.path.join(self.projects_dir, project_id)
+        validate_safe_id(project_id, "project_id")
+        project_path = safe_path_join(self.projects_dir, project_id)
         for subdir in ["ideas", "specs", "designs", "artifacts"]:
             os.makedirs(os.path.join(project_path, subdir), exist_ok=True)
         return project_path
@@ -34,34 +38,39 @@ class ProjectStateManager:
             "team": [],
         }
 
-        with open(os.path.join(project_path, "project.yaml"), "w") as f:
-            yaml.dump(project_data, f, default_flow_style=False)
+        atomic_yaml_write(os.path.join(project_path, "project.yaml"), project_data)
 
         # Initialize empty task board and decision log
-        with open(os.path.join(project_path, "tasks.yaml"), "w") as f:
-            yaml.dump({"tasks": []}, f)
-        with open(os.path.join(project_path, "decisions.yaml"), "w") as f:
-            yaml.dump({"decisions": []}, f)
+        atomic_yaml_write(os.path.join(project_path, "tasks.yaml"), {"tasks": []})
+        atomic_yaml_write(os.path.join(project_path, "decisions.yaml"), {"decisions": []})
 
         return project_id
 
     def get_project(self, project_id: str) -> dict | None:
-        path = os.path.join(self.projects_dir, project_id, "project.yaml")
+        try:
+            validate_safe_id(project_id, "project_id")
+        except ValueError:
+            return None
+        path = safe_path_join(self.projects_dir, project_id, "project.yaml")
         if not os.path.exists(path):
             return None
         with open(path) as f:
             return yaml.safe_load(f)
 
     def update_project(self, project_id: str, updates: dict) -> bool:
-        path = os.path.join(self.projects_dir, project_id, "project.yaml")
+        try:
+            validate_safe_id(project_id, "project_id")
+        except ValueError:
+            return False
+        path = safe_path_join(self.projects_dir, project_id, "project.yaml")
         if not os.path.exists(path):
             return False
-        with open(path) as f:
-            data = yaml.safe_load(f)
-        data.update(updates)
-        data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        with open(path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False)
+        with FileLock(path):
+            with open(path) as f:
+                data = yaml.safe_load(f)
+            data.update(updates)
+            data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            atomic_yaml_write(path, data)
         return True
 
     def list_projects(self) -> list[dict]:
@@ -69,10 +78,20 @@ class ProjectStateManager:
             return []
         projects = []
         for pid in sorted(os.listdir(self.projects_dir)):
-            pfile = os.path.join(self.projects_dir, pid, "project.yaml")
-            if os.path.exists(pfile):
+            if pid.startswith("."):
+                continue
+            try:
+                validate_safe_id(pid, "project_id")
+            except ValueError:
+                continue
+            pfile = safe_path_join(self.projects_dir, pid, "project.yaml")
+            if not os.path.exists(pfile):
+                continue
+            try:
                 with open(pfile) as f:
                     data = yaml.safe_load(f)
+                if not data:
+                    continue
                 projects.append({
                     "id": data["id"],
                     "name": data["name"],
@@ -80,4 +99,6 @@ class ProjectStateManager:
                     "type": data.get("type", "general"),
                     "created_at": data.get("created_at", ""),
                 })
+            except (yaml.YAMLError, KeyError, OSError):
+                continue
         return projects

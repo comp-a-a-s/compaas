@@ -5,6 +5,9 @@ import yaml
 from datetime import datetime, timezone
 from fastmcp import FastMCP
 
+from src.validators import validate_model, validate_complexity, validate_non_negative_int
+from src.utils import atomic_yaml_write, FileLock
+
 
 def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
     token_usage_path = os.path.join(data_dir, "token_usage.yaml")
@@ -17,9 +20,7 @@ def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
             return yaml.safe_load(f) or {"records": []}
 
     def _save_token_usage(data: dict) -> None:
-        os.makedirs(os.path.dirname(token_usage_path), exist_ok=True)
-        with open(token_usage_path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False)
+        atomic_yaml_write(token_usage_path, data)
 
     @mcp.tool
     def log_token_usage(
@@ -44,21 +45,33 @@ def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
             task_id: Associated task ID (optional).
             notes: Additional notes (optional).
         """
-        data = _load_token_usage()
-        record = {
-            "agent_name": agent_name,
-            "model": model,
-            "task_description": task_description,
-            "estimated_input_tokens": estimated_input_tokens,
-            "estimated_output_tokens": estimated_output_tokens,
-            "estimated_total_tokens": estimated_input_tokens + estimated_output_tokens,
-            "project_id": project_id,
-            "task_id": task_id,
-            "notes": notes,
-            "logged_at": datetime.now(timezone.utc).isoformat(),
-        }
-        data["records"].append(record)
-        _save_token_usage(data)
+        try:
+            model = validate_model(model)
+        except ValueError:
+            pass  # Allow logging with unknown models for flexibility
+
+        try:
+            validate_non_negative_int(estimated_input_tokens, "estimated_input_tokens")
+            validate_non_negative_int(estimated_output_tokens, "estimated_output_tokens")
+        except ValueError as e:
+            return f"Error: {e}"
+
+        with FileLock(token_usage_path):
+            data = _load_token_usage()
+            record = {
+                "agent_name": agent_name,
+                "model": model,
+                "task_description": task_description,
+                "estimated_input_tokens": estimated_input_tokens,
+                "estimated_output_tokens": estimated_output_tokens,
+                "estimated_total_tokens": estimated_input_tokens + estimated_output_tokens,
+                "project_id": project_id,
+                "task_id": task_id,
+                "notes": notes,
+                "logged_at": datetime.now(timezone.utc).isoformat(),
+            }
+            data["records"].append(record)
+            _save_token_usage(data)
         return f"Token usage logged: {agent_name} ({model}) ~{estimated_input_tokens + estimated_output_tokens} total tokens"
 
     @mcp.tool
@@ -194,8 +207,18 @@ def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
             model: Which model will be used (opus, sonnet, haiku).
             complexity: Task complexity — low, medium, high, very_high.
         """
+        # Validate inputs (fall back to defaults for invalid values)
+        try:
+            model = validate_model(model)
+        except ValueError:
+            model = "sonnet"
+
+        try:
+            complexity = validate_complexity(complexity)
+        except ValueError:
+            complexity = "medium"
+
         # Token estimates based on complexity and model
-        # These are rough estimates based on typical Claude Code agent tasks
         COMPLEXITY_MULTIPLIERS = {
             "low": {"input": 2000, "output": 1000},
             "medium": {"input": 8000, "output": 4000},
@@ -210,8 +233,8 @@ def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
             "haiku": {"input": 0.25, "output": 1.25},
         }
 
-        tokens = COMPLEXITY_MULTIPLIERS.get(complexity, COMPLEXITY_MULTIPLIERS["medium"])
-        costs = MODEL_COSTS.get(model, MODEL_COSTS["sonnet"])
+        tokens = COMPLEXITY_MULTIPLIERS[complexity]
+        costs = MODEL_COSTS[model]
 
         est_input = tokens["input"]
         est_output = tokens["output"]

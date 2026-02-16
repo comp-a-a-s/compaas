@@ -16,27 +16,9 @@ from starlette.responses import StreamingResponse
 from src.state.project_state import ProjectStateManager
 from src.state.task_board import TaskBoard
 from src.mcp_server.company_tools import CORE_TEAM, ON_DEMAND_TEAM
+from src.agents import AGENT_REGISTRY, get_agent_display_name
+from src.validators import validate_safe_id
 from src.utils import resolve_data_dir, resolve_project_root
-
-
-# Human names for agents — matches .claude/agents/*.md definitions
-AGENT_NAMES: dict[str, str] = {
-    "ceo": "Marcus",
-    "cto": "Elena",
-    "chief-researcher": "Victor",
-    "ciso": "Rachel",
-    "cfo": "Jonathan",
-    "vp-product": "Sarah",
-    "vp-engineering": "David",
-    "lead-backend": "James",
-    "lead-frontend": "Priya",
-    "lead-designer": "Lena",
-    "qa-lead": "Carlos",
-    "devops": "Nina",
-    "security-engineer": "Alex",
-    "data-engineer": "Maya",
-    "tech-writer": "Tom",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -59,12 +41,33 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# CORS — restrict to known origins
+_cors_origins_env = os.environ.get("CRACKPIE_CORS_ORIGINS", "")
+_allowed_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()] if _cors_origins_env else [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8420",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_methods=["GET"],
+    allow_headers=["Content-Type"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+@app.get("/api/health", summary="Health check endpoint")
+def health_check() -> dict:
+    return {
+        "status": "healthy",
+        "version": "0.1.0",
+        "data_dir_exists": os.path.isdir(DATA_DIR),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -145,11 +148,14 @@ def list_projects() -> list[dict]:
 @app.get("/api/projects/{project_id}", summary="Get a single project with full task board")
 def get_project(project_id: str) -> dict:
     """Return a project's full details including the complete task board."""
+    try:
+        validate_safe_id(project_id, "project_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
     project = state_manager.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
     tasks = task_board.get_board(project_id)
-    # Return both flat (for backwards compat) and nested (for typed clients)
     return {**project, "tasks": tasks, "project": project}
 
 
@@ -166,6 +172,10 @@ def get_tasks(
     """Return the task board for a project, optionally filtered by status and/or
     assignee.
     """
+    try:
+        validate_safe_id(project_id, "project_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
     project = state_manager.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
@@ -176,56 +186,58 @@ def get_tasks(
 # Activity stream (SSE)
 # ---------------------------------------------------------------------------
 
-async def _tail_activity_log(activity_log_path: str) -> AsyncGenerator[str, None]:
-    """Async generator that watches activity.log for new lines via polling.
+MAX_SSE_CONNECTIONS = 10
+_active_sse_connections = 0
 
-    Yields SSE-formatted strings. Polls every second by watching the file size.
-    New content is sent as individual ``data:`` events.
-    """
+
+async def _tail_activity_log(activity_log_path: str) -> AsyncGenerator[str, None]:
+    """Async generator that watches activity.log for new lines via polling."""
+    global _active_sse_connections
     last_size: int = 0
     last_pos: int = 0
 
-    # If the file already exists, start from the end so we only stream new events.
     if os.path.exists(activity_log_path):
         last_size = os.path.getsize(activity_log_path)
         last_pos = last_size
 
-    while True:
-        await asyncio.sleep(1)
-        if not os.path.exists(activity_log_path):
-            # Send a keep-alive comment while the file doesn't exist yet.
-            yield ": keep-alive\n\n"
-            continue
+    try:
+        while True:
+            await asyncio.sleep(1)
+            if not os.path.exists(activity_log_path):
+                yield ": keep-alive\n\n"
+                continue
 
-        current_size = os.path.getsize(activity_log_path)
-        if current_size > last_size:
-            with open(activity_log_path) as f:
-                f.seek(last_pos)
-                new_content = f.read()
-            last_size = current_size
-            last_pos = current_size
+            current_size = os.path.getsize(activity_log_path)
+            if current_size > last_size:
+                with open(activity_log_path) as f:
+                    f.seek(last_pos)
+                    new_content = f.read()
+                last_size = current_size
+                last_pos = current_size
 
-            for line in new_content.splitlines():
-                line = line.strip()
-                if line:
-                    # Escape any embedded newlines in the data value.
-                    escaped = line.replace("\n", "\\n")
-                    yield f"data: {escaped}\n\n"
-        elif current_size < last_size:
-            # File was truncated/rotated — reset position.
-            last_size = current_size
-            last_pos = 0
-        else:
-            # No change; send keep-alive comment so the connection stays open.
-            yield ": keep-alive\n\n"
+                for line in new_content.splitlines():
+                    line = line.strip()
+                    if line:
+                        escaped = line.replace("\n", "\\n")
+                        yield f"data: {escaped}\n\n"
+            elif current_size < last_size:
+                # File was truncated/rotated — reset position.
+                last_size = current_size
+                last_pos = 0
+            else:
+                yield ": keep-alive\n\n"
+    finally:
+        _active_sse_connections -= 1
 
 
 @app.get("/api/activity/stream", summary="SSE stream of activity.log changes")
 def activity_stream() -> StreamingResponse:
-    """Server-Sent Events endpoint.  Streams new lines from activity.log in
-    real-time.  Connect with ``EventSource('/api/activity/stream')`` in the
-    browser.
-    """
+    """Server-Sent Events endpoint."""
+    global _active_sse_connections
+    if _active_sse_connections >= MAX_SSE_CONNECTIONS:
+        raise HTTPException(status_code=429, detail="Too many SSE connections.")
+    _active_sse_connections += 1
+
     activity_log_path = os.path.join(DATA_DIR, "activity.log")
     return StreamingResponse(
         _tail_activity_log(activity_log_path),
@@ -246,9 +258,7 @@ def token_metrics(
     project_id: str = Query(default="", description="Filter by project ID"),
     agent_name: str = Query(default="", description="Filter by agent name"),
 ) -> dict:
-    """Return an aggregated token usage report, optionally filtered by project
-    or agent.
-    """
+    """Return an aggregated token usage report."""
     token_usage_path = os.path.join(DATA_DIR, "token_usage.yaml")
     if not os.path.exists(token_usage_path):
         return {"records": [], "total_records": 0, "grand_total_tokens": 0, "by_agent": {}, "by_model": {}}
@@ -296,50 +306,17 @@ def token_metrics(
 
 @app.get("/api/agents", summary="List all agents with their models and roles")
 def list_agents() -> list[dict]:
-    """Return every known agent (core team, on-demand, and dynamically hired)
-    with their display name, role, model, and status.
-    """
+    """Return every known agent (core team, on-demand, and dynamically hired)."""
     agents: list[dict] = []
 
-    # CEO is not in CORE_TEAM — add it explicitly.
-    agents.append({
-        "id": "ceo",
-        "name": "Marcus",
-        "role": "CEO — Central Orchestrator",
-        "model": "opus",
-        "status": "permanent",
-        "team": "leadership",
-    })
-
-    LEADERSHIP_IDS = {"cto", "vp-product", "vp-engineering", "chief-researcher", "ciso", "cfo"}
-    ENGINEERING_IDS = {"lead-backend", "lead-frontend", "qa-lead", "devops"}
-
-    for agent_id, info in CORE_TEAM.items():
-        if agent_id in LEADERSHIP_IDS:
-            team = "leadership"
-        elif "designer" in info.get("role", "").lower():
-            team = "design"
-        elif agent_id in ENGINEERING_IDS:
-            team = "engineering"
-        else:
-            team = "engineering"
+    for agent_id, info in AGENT_REGISTRY.items():
         agents.append({
             "id": agent_id,
-            "name": AGENT_NAMES.get(agent_id, agent_id),
+            "name": info["name"],
             "role": info["role"],
-            "model": info.get("model", "sonnet"),
-            "status": info.get("status", "permanent"),
-            "team": team,
-        })
-
-    for agent_id, info in ON_DEMAND_TEAM.items():
-        agents.append({
-            "id": agent_id,
-            "name": AGENT_NAMES.get(agent_id, agent_id),
-            "role": info["role"],
-            "model": info.get("model", "sonnet"),
-            "status": info.get("status", "available"),
-            "team": "on_demand",
+            "model": info["model"],
+            "status": info["status"],
+            "team": info["team"],
         })
 
     # Dynamically hired agents from hiring log.
@@ -366,17 +343,13 @@ def list_agents() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _parse_frontmatter(path: str) -> dict:
-    """Parse YAML frontmatter from a Markdown file.
-
-    Returns the parsed YAML dict, or an empty dict if no frontmatter is found.
-    """
+    """Parse YAML frontmatter from a Markdown file."""
     with open(path) as f:
         content = f.read()
 
     if not content.startswith("---"):
         return {}
 
-    # Find the closing '---' delimiter.
     end = content.find("\n---", 3)
     if end == -1:
         return {}
@@ -390,9 +363,7 @@ def _parse_frontmatter(path: str) -> dict:
 
 @app.get("/api/settings/models", summary="Current model assignments per agent from .claude/agents/*.md")
 def settings_models() -> list[dict]:
-    """Read all .claude/agents/*.md files, parse YAML frontmatter, and return
-    the name and model assignment for each agent definition file.
-    """
+    """Read all .claude/agents/*.md files and return model assignments."""
     agents_dir = os.path.join(PROJECT_ROOT, ".claude", "agents")
     result: list[dict] = []
 
@@ -402,16 +373,19 @@ def settings_models() -> list[dict]:
     for filename in sorted(os.listdir(agents_dir)):
         if not filename.endswith(".md"):
             continue
+        # Skip files that don't match expected naming patterns
+        base = filename[:-3]
+        if ".." in base or "/" in base:
+            continue
         filepath = os.path.join(agents_dir, filename)
         try:
             frontmatter = _parse_frontmatter(filepath)
         except OSError:
             continue
 
-        agent_id = filename[:-3]  # strip .md
         result.append({
-            "id": agent_id,
-            "name": frontmatter.get("name", agent_id),
+            "id": base,
+            "name": frontmatter.get("name", base),
             "model": frontmatter.get("model", "unknown"),
             "description": frontmatter.get("description", ""),
             "tools": frontmatter.get("tools", ""),

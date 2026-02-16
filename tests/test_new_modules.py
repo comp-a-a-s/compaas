@@ -109,11 +109,11 @@ class TestCompanyToolsOrgChart:
 
 class TestWebApiAgentNames:
     def test_agent_names_complete(self):
-        """Verify all agents have human names defined."""
-        from src.web.api import AGENT_NAMES
+        """Verify all agents have entries in the central registry."""
+        from src.agents import AGENT_REGISTRY
         from src.mcp_server.company_tools import CORE_TEAM, ON_DEMAND_TEAM
 
         for agent_id in CORE_TEAM:
-            assert agent_id in AGENT_NAMES, f"Missing name for core agent: {agent_id}"
+            assert agent_id in AGENT_REGISTRY, f"Missing registry entry for core agent: {agent_id}"
         for agent_id in ON_DEMAND_TEAM:
-            assert agent_id in AGENT_NAMES, f"Missing name for on-demand agent: {agent_id}"
+            assert agent_id in AGENT_REGISTRY, f"Missing registry entry for on-demand agent: {agent_id}"
