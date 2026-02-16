@@ -5,6 +5,9 @@ import yaml
 from datetime import datetime, timezone
 from fastmcp import FastMCP
 
+from src.validators import validate_safe_id, safe_path_join
+from src.utils import atomic_yaml_write, FileLock
+
 
 def register_memory_tools(mcp: FastMCP, data_dir: str) -> None:
     memory_path = os.path.join(data_dir, "company_memory.yaml")
@@ -16,9 +19,7 @@ def register_memory_tools(mcp: FastMCP, data_dir: str) -> None:
             return yaml.safe_load(f) or {}
 
     def _save_memory(memory: dict) -> None:
-        os.makedirs(os.path.dirname(memory_path), exist_ok=True)
-        with open(memory_path, "w") as f:
-            yaml.dump(memory, f, default_flow_style=False)
+        atomic_yaml_write(memory_path, memory)
 
     @mcp.tool
     def read_memory(key: str = "") -> str:
@@ -42,12 +43,13 @@ def register_memory_tools(mcp: FastMCP, data_dir: str) -> None:
             key: Memory key (e.g., 'output_dir', 'preferred_stack').
             value: Value to store.
         """
-        memory = _load_memory()
-        memory[key] = {
-            "value": value,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        _save_memory(memory)
+        with FileLock(memory_path):
+            memory = _load_memory()
+            memory[key] = {
+                "value": value,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _save_memory(memory)
         return f"Memory updated: {key} = {value}"
 
     @mcp.tool
@@ -69,24 +71,29 @@ def register_memory_tools(mcp: FastMCP, data_dir: str) -> None:
             decided_by: Who made the decision (agent name or 'board-head').
             alternatives: Other options that were considered.
         """
-        decisions_path = os.path.join(data_dir, "projects", project_id, "decisions.yaml")
+        try:
+            validate_safe_id(project_id, "project_id")
+        except ValueError as e:
+            return f"Error: {e}"
+
+        decisions_path = safe_path_join(data_dir, "projects", project_id, "decisions.yaml")
         if not os.path.exists(decisions_path):
             return f"Error: Project '{project_id}' not found."
 
-        with open(decisions_path) as f:
-            data = yaml.safe_load(f) or {"decisions": []}
+        with FileLock(decisions_path):
+            with open(decisions_path) as f:
+                data = yaml.safe_load(f) or {"decisions": []}
 
-        data["decisions"].append({
-            "title": title,
-            "decision": decision,
-            "rationale": rationale,
-            "decided_by": decided_by,
-            "alternatives": alternatives,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+            data["decisions"].append({
+                "title": title,
+                "decision": decision,
+                "rationale": rationale,
+                "decided_by": decided_by,
+                "alternatives": alternatives,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
 
-        with open(decisions_path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False)
+            atomic_yaml_write(decisions_path, data)
 
         return f"Decision logged: {title}"
 
@@ -97,7 +104,12 @@ def register_memory_tools(mcp: FastMCP, data_dir: str) -> None:
         Args:
             project_id: The project ID.
         """
-        decisions_path = os.path.join(data_dir, "projects", project_id, "decisions.yaml")
+        try:
+            validate_safe_id(project_id, "project_id")
+        except ValueError as e:
+            return f"Error: {e}"
+
+        decisions_path = safe_path_join(data_dir, "projects", project_id, "decisions.yaml")
         if not os.path.exists(decisions_path):
             return f"Error: Project '{project_id}' not found."
 

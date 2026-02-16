@@ -3,9 +3,16 @@ import uuid
 import yaml
 from datetime import datetime, timezone
 
-
-VALID_STATUSES = {"todo", "in_progress", "review", "done", "blocked"}
-VALID_PRIORITIES = {"p0", "p1", "p2", "p3", "low", "medium", "high", "critical"}
+from src.validators import (
+    validate_safe_id,
+    safe_path_join,
+    validate_status,
+    validate_priority,
+    validate_status_transition,
+    VALID_STATUSES,
+    VALID_PRIORITIES,
+)
+from src.utils import atomic_yaml_write, FileLock
 
 
 class TaskBoard:
@@ -15,7 +22,8 @@ class TaskBoard:
         self.data_dir = data_dir
 
     def _tasks_path(self, project_id: str) -> str:
-        return os.path.join(self.data_dir, "projects", project_id, "tasks.yaml")
+        validate_safe_id(project_id, "project_id")
+        return safe_path_join(self.data_dir, "projects", project_id, "tasks.yaml")
 
     def _load_board(self, project_id: str) -> dict:
         path = self._tasks_path(project_id)
@@ -31,8 +39,8 @@ class TaskBoard:
             return {"tasks": []}
 
     def _save_board(self, project_id: str, board: dict) -> None:
-        with open(self._tasks_path(project_id), "w") as f:
-            yaml.dump(board, f, default_flow_style=False)
+        path = self._tasks_path(project_id)
+        atomic_yaml_write(path, board)
 
     def create_task(
         self,
@@ -43,6 +51,12 @@ class TaskBoard:
         priority: str = "medium",
         depends_on: str = "",
     ) -> str:
+        # Validate priority (allow it through even if not in the strict set,
+        # for backwards compat with p0/p1/p2/p3)
+        priority = priority.lower()
+        if priority not in VALID_PRIORITIES:
+            priority = "medium"
+
         task_id = f"TASK-{str(uuid.uuid4())[:6].upper()}"
         now = datetime.now(timezone.utc).isoformat()
 
@@ -59,10 +73,23 @@ class TaskBoard:
             "notes": [],
         }
 
-        board = self._load_board(project_id)
-        board["tasks"].append(task)
-        self._save_board(project_id, board)
+        with FileLock(self._tasks_path(project_id)):
+            board = self._load_board(project_id)
+            board["tasks"].append(task)
+            self._save_board(project_id, board)
         return task_id
+
+    def _check_dependencies_resolved(self, board: dict, task: dict) -> list[str]:
+        """Return list of blocking task IDs that are not 'done'."""
+        if not task.get("depends_on"):
+            return []
+        all_tasks = {t["id"]: t for t in board["tasks"]}
+        blockers = []
+        for dep_id in task["depends_on"]:
+            dep = all_tasks.get(dep_id)
+            if dep and dep["status"] != "done":
+                blockers.append(dep_id)
+        return blockers
 
     def update_status(
         self,
@@ -73,28 +100,44 @@ class TaskBoard:
     ) -> bool:
         if status.lower() not in VALID_STATUSES:
             return False
-        board = self._load_board(project_id)
-        for task in board["tasks"]:
-            if task["id"] == task_id:
-                task["status"] = status
-                task["updated_at"] = datetime.now(timezone.utc).isoformat()
-                if notes:
-                    task["notes"].append({
-                        "text": notes,
-                        "at": datetime.now(timezone.utc).isoformat(),
-                    })
-                self._save_board(project_id, board)
-                return True
+        status = status.lower()
+
+        with FileLock(self._tasks_path(project_id)):
+            board = self._load_board(project_id)
+            for task in board["tasks"]:
+                if task["id"] == task_id:
+                    current_status = task.get("status", "todo")
+
+                    # Enforce state machine transitions
+                    if not validate_status_transition(current_status, status):
+                        return False
+
+                    # Block completion if dependencies unresolved
+                    if status in ("done", "review"):
+                        blockers = self._check_dependencies_resolved(board, task)
+                        if blockers:
+                            return False
+
+                    task["status"] = status
+                    task["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    if notes:
+                        task["notes"].append({
+                            "text": notes,
+                            "at": datetime.now(timezone.utc).isoformat(),
+                        })
+                    self._save_board(project_id, board)
+                    return True
         return False
 
     def assign_task(self, project_id: str, task_id: str, assigned_to: str) -> bool:
-        board = self._load_board(project_id)
-        for task in board["tasks"]:
-            if task["id"] == task_id:
-                task["assigned_to"] = assigned_to
-                task["updated_at"] = datetime.now(timezone.utc).isoformat()
-                self._save_board(project_id, board)
-                return True
+        with FileLock(self._tasks_path(project_id)):
+            board = self._load_board(project_id)
+            for task in board["tasks"]:
+                if task["id"] == task_id:
+                    task["assigned_to"] = assigned_to
+                    task["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    self._save_board(project_id, board)
+                    return True
         return False
 
     def get_board(

@@ -1,7 +1,14 @@
 """Shared utilities for the CrackPie system."""
 
 import os
+import fcntl
+import tempfile
+import yaml
 
+
+# ---------------------------------------------------------------------------
+# Directory resolution
+# ---------------------------------------------------------------------------
 
 def resolve_data_dir() -> str:
     """Resolve the company_data directory to an absolute path.
@@ -13,7 +20,8 @@ def resolve_data_dir() -> str:
     """
     env_dir = os.environ.get("CRACKPIE_DATA_DIR")
     if env_dir:
-        return os.path.abspath(env_dir)
+        abs_dir = os.path.abspath(env_dir)
+        return abs_dir
 
     # Walk up from the caller's file location to find the project root
     current = os.path.dirname(os.path.abspath(__file__))
@@ -34,3 +42,82 @@ def resolve_project_root() -> str:
             return current
         current = os.path.dirname(current)
     return os.path.abspath(".")
+
+
+# ---------------------------------------------------------------------------
+# Atomic YAML file operations
+# ---------------------------------------------------------------------------
+
+def atomic_yaml_write(path: str, data: dict) -> None:
+    """Write YAML data atomically using tempfile + os.replace.
+
+    This prevents partial writes from corrupting YAML files.
+    """
+    dir_name = os.path.dirname(path)
+    os.makedirs(dir_name, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".yaml.tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            yaml.dump(data, f, default_flow_style=False)
+        os.replace(tmp_path, path)  # atomic on POSIX
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+# ---------------------------------------------------------------------------
+# File locking
+# ---------------------------------------------------------------------------
+
+class FileLock:
+    """Advisory file lock using fcntl for safe concurrent access."""
+
+    def __init__(self, path: str):
+        self.lock_path = path + ".lock"
+        self._fd = None
+
+    def __enter__(self):
+        dir_name = os.path.dirname(self.lock_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        self._fd = open(self.lock_path, "w")
+        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *args):
+        if self._fd:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            self._fd.close()
+            self._fd = None
+
+
+# ---------------------------------------------------------------------------
+# Log rotation
+# ---------------------------------------------------------------------------
+
+MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_LOG_FILES = 5
+
+
+def rotate_log_if_needed(log_path: str) -> None:
+    """Rotate the log file if it exceeds MAX_LOG_SIZE."""
+    if not os.path.exists(log_path):
+        return
+    try:
+        if os.path.getsize(log_path) <= MAX_LOG_SIZE:
+            return
+    except OSError:
+        return
+
+    # Rotate existing archives
+    for i in range(MAX_LOG_FILES - 1, 0, -1):
+        src = f"{log_path}.{i}"
+        dst = f"{log_path}.{i + 1}"
+        if os.path.exists(src):
+            os.replace(src, dst)
+
+    # Move current log to .1
+    os.replace(log_path, f"{log_path}.1")
