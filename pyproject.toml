@@ -26,6 +26,13 @@ dev = [
 crackpie-tui = "src.tui.main:main"
 crackpie-web = "src.web.main:main"
 
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "strict"
