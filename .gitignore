@@ -1,0 +1,9 @@
+.env
+company_data/
+__pycache__/
+*.pyc
+.DS_Store
+.claude/agent-memory/
+.claude/agent-memory-local/
+.claude/settings.local.json
+*.egg-info/
