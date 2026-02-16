@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastmcp import FastMCP
 
 from src.validators import validate_safe_id, safe_path_join
-from src.utils import atomic_yaml_write, FileLock
+from src.utils import atomic_yaml_write, FileLock, emit_activity
 
 
 def register_memory_tools(mcp: FastMCP, data_dir: str) -> None:
@@ -50,6 +50,7 @@ def register_memory_tools(mcp: FastMCP, data_dir: str) -> None:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             _save_memory(memory)
+        emit_activity(data_dir, "system", "UPDATED", f"Memory key '{key}' written")
         return f"Memory updated: {key} = {value}"
 
     @mcp.tool
@@ -95,6 +96,7 @@ def register_memory_tools(mcp: FastMCP, data_dir: str) -> None:
 
             atomic_yaml_write(decisions_path, data)
 
+        emit_activity(data_dir, decided_by, "UPDATED", f"Decision logged: {title}")
         return f"Decision logged: {title}"
 
     @mcp.tool

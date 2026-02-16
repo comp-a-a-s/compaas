@@ -121,3 +121,35 @@ def rotate_log_if_needed(log_path: str) -> None:
 
     # Move current log to .1
     os.replace(log_path, f"{log_path}.1")
+
+
+# ---------------------------------------------------------------------------
+# Activity logging — emit events to activity.log for the SSE stream
+# ---------------------------------------------------------------------------
+
+def emit_activity(data_dir: str, agent: str, action: str, detail: str = "") -> None:
+    """Append a structured JSON line to activity.log.
+
+    Events are consumed by the SSE ``/api/activity/stream`` endpoint and
+    the TUI ActivityPanel.  The format is JSON so both consumers can
+    parse events reliably.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    log_path = os.path.join(data_dir, "activity.log")
+    os.makedirs(data_dir, exist_ok=True)
+    rotate_log_if_needed(log_path)
+
+    event = json.dumps({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "agent": agent,
+        "action": action,
+        "detail": detail,
+    })
+
+    try:
+        with open(log_path, "a") as f:
+            f.write(event + "\n")
+    except OSError:
+        pass  # Best-effort — never crash the tool call

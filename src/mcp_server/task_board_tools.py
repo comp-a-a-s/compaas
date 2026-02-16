@@ -2,6 +2,7 @@
 
 from fastmcp import FastMCP
 from src.state.task_board import TaskBoard
+from src.utils import emit_activity
 
 
 def register_task_tools(mcp: FastMCP, data_dir: str) -> None:
@@ -27,6 +28,7 @@ def register_task_tools(mcp: FastMCP, data_dir: str) -> None:
             depends_on: Comma-separated task IDs that must complete first.
         """
         task_id = board.create_task(project_id, title, description, assigned_to, priority, depends_on)
+        emit_activity(data_dir, assigned_to, "ASSIGNED", f"Task {task_id}: {title}")
         return f"Task {task_id} created: '{title}' assigned to {assigned_to}"
 
     @mcp.tool
@@ -45,6 +47,10 @@ def register_task_tools(mcp: FastMCP, data_dir: str) -> None:
             notes: Optional notes about the status change.
         """
         ok = board.update_status(project_id, task_id, status, notes)
+        if ok:
+            action_map = {"in_progress": "STARTED", "done": "COMPLETED", "blocked": "BLOCKED", "review": "UPDATED"}
+            action = action_map.get(status, "UPDATED")
+            emit_activity(data_dir, "system", action, f"Task {task_id} → {status}")
         return f"Task {task_id} → {status}" if ok else f"Error: Task '{task_id}' not found."
 
     @mcp.tool
@@ -76,4 +82,6 @@ def register_task_tools(mcp: FastMCP, data_dir: str) -> None:
             assigned_to: New agent name to assign to.
         """
         ok = board.assign_task(project_id, task_id, assigned_to)
+        if ok:
+            emit_activity(data_dir, assigned_to, "ASSIGNED", f"Task {task_id} reassigned")
         return f"Task {task_id} reassigned to {assigned_to}" if ok else f"Error: Task '{task_id}' not found."

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastmcp import FastMCP
 
 from src.validators import validate_model, validate_complexity, validate_non_negative_int
-from src.utils import atomic_yaml_write, FileLock
+from src.utils import atomic_yaml_write, FileLock, emit_activity
 
 
 def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
@@ -72,7 +72,9 @@ def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
             }
             data["records"].append(record)
             _save_token_usage(data)
-        return f"Token usage logged: {agent_name} ({model}) ~{estimated_input_tokens + estimated_output_tokens} total tokens"
+        total = estimated_input_tokens + estimated_output_tokens
+        emit_activity(data_dir, agent_name, "UPDATED", f"Logged ~{total} tokens ({model})")
+        return f"Token usage logged: {agent_name} ({model}) ~{total} total tokens"
 
     @mcp.tool
     def get_token_report(

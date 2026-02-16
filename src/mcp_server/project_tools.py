@@ -2,6 +2,7 @@
 
 from fastmcp import FastMCP
 from src.state.project_state import ProjectStateManager
+from src.utils import emit_activity
 
 
 def register_project_tools(mcp: FastMCP, data_dir: str) -> None:
@@ -11,6 +12,7 @@ def register_project_tools(mcp: FastMCP, data_dir: str) -> None:
     def create_project(name: str, description: str, project_type: str = "general") -> str:
         """Create a new project. Returns the project ID."""
         project_id = state.create_project(name, description, project_type)
+        emit_activity(data_dir, "system", "CREATED", f"Project '{name}' ({project_id})")
         return f"Project '{name}' created with ID: {project_id}\nPath: {data_dir}/projects/{project_id}/"
 
     @mcp.tool
@@ -39,6 +41,9 @@ def register_project_tools(mcp: FastMCP, data_dir: str) -> None:
         if not updates:
             return "Error: No updates provided. Specify status, team, or phase."
         ok = state.update_project(project_id, updates)
+        if ok:
+            changed = ", ".join(updates.keys())
+            emit_activity(data_dir, "system", "UPDATED", f"Project {project_id} ({changed})")
         return f"Project {project_id} updated." if ok else f"Error: Project '{project_id}' not found."
 
     @mcp.tool
