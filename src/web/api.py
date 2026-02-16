@@ -16,45 +16,35 @@ from starlette.responses import StreamingResponse
 from src.state.project_state import ProjectStateManager
 from src.state.task_board import TaskBoard
 from src.mcp_server.company_tools import CORE_TEAM, ON_DEMAND_TEAM
+from src.utils import resolve_data_dir, resolve_project_root
+
+
+# Human names for agents — matches .claude/agents/*.md definitions
+AGENT_NAMES: dict[str, str] = {
+    "ceo": "Marcus",
+    "cto": "Elena",
+    "chief-researcher": "Victor",
+    "ciso": "Rachel",
+    "cfo": "Jonathan",
+    "vp-product": "Sarah",
+    "vp-engineering": "David",
+    "lead-backend": "James",
+    "lead-frontend": "Priya",
+    "lead-designer": "Lena",
+    "qa-lead": "Carlos",
+    "devops": "Nina",
+    "security-engineer": "Alex",
+    "data-engineer": "Maya",
+    "tech-writer": "Tom",
+}
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_data_dir() -> str:
-    """Resolve the company_data directory to an absolute path.
-
-    Checks CRACKPIE_DATA_DIR env var first, then falls back to
-    ./company_data relative to the project root (where pyproject.toml lives).
-    """
-    env_dir = os.environ.get("CRACKPIE_DATA_DIR")
-    if env_dir:
-        return os.path.abspath(env_dir)
-
-    # Walk up from this file to find the project root (where pyproject.toml is).
-    current = os.path.dirname(os.path.abspath(__file__))
-    while current != os.path.dirname(current):  # stop at filesystem root
-        if os.path.exists(os.path.join(current, "pyproject.toml")):
-            return os.path.join(current, "company_data")
-        current = os.path.dirname(current)
-
-    # Fallback: relative to CWD
-    return os.path.abspath("./company_data")
-
-
-def _resolve_project_root() -> str:
-    """Resolve the project root directory (where pyproject.toml lives)."""
-    current = os.path.dirname(os.path.abspath(__file__))
-    while current != os.path.dirname(current):
-        if os.path.exists(os.path.join(current, "pyproject.toml")):
-            return current
-        current = os.path.dirname(current)
-    return os.path.abspath(".")
-
-
-DATA_DIR = _resolve_data_dir()
-PROJECT_ROOT = _resolve_project_root()
+DATA_DIR = resolve_data_dir()
+PROJECT_ROOT = resolve_project_root()
 
 state_manager = ProjectStateManager(DATA_DIR)
 task_board = TaskBoard(DATA_DIR)
@@ -159,7 +149,8 @@ def get_project(project_id: str) -> dict:
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
     tasks = task_board.get_board(project_id)
-    return {**project, "tasks": tasks}
+    # Return both flat (for backwards compat) and nested (for typed clients)
+    return {**project, "tasks": tasks, "project": project}
 
 
 # ---------------------------------------------------------------------------
@@ -320,14 +311,21 @@ def list_agents() -> list[dict]:
         "team": "leadership",
     })
 
+    LEADERSHIP_IDS = {"cto", "vp-product", "vp-engineering", "chief-researcher", "ciso", "cfo"}
+    ENGINEERING_IDS = {"lead-backend", "lead-frontend", "qa-lead", "devops"}
+
     for agent_id, info in CORE_TEAM.items():
-        team = "engineering"
-        if agent_id.startswith("cto") or agent_id.startswith("vp-") or agent_id in ("chief-researcher", "ciso", "cfo"):
+        if agent_id in LEADERSHIP_IDS:
             team = "leadership"
         elif "designer" in info.get("role", "").lower():
             team = "design"
+        elif agent_id in ENGINEERING_IDS:
+            team = "engineering"
+        else:
+            team = "engineering"
         agents.append({
             "id": agent_id,
+            "name": AGENT_NAMES.get(agent_id, agent_id),
             "role": info["role"],
             "model": info.get("model", "sonnet"),
             "status": info.get("status", "permanent"),
@@ -337,6 +335,7 @@ def list_agents() -> list[dict]:
     for agent_id, info in ON_DEMAND_TEAM.items():
         agents.append({
             "id": agent_id,
+            "name": AGENT_NAMES.get(agent_id, agent_id),
             "role": info["role"],
             "model": info.get("model", "sonnet"),
             "status": info.get("status", "available"),

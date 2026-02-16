@@ -43,16 +43,19 @@ def register_company_tools(mcp: FastMCP, data_dir: str) -> None:
     @mcp.tool
     def get_org_chart() -> str:
         """Get the current organization chart with all agents and their roles."""
+        LEADERSHIP_IDS = {"cto", "vp-product", "vp-engineering", "chief-researcher", "ciso", "cfo"}
+        ENGINEERING_IDS = {"lead-backend", "lead-frontend", "lead-designer", "qa-lead", "devops"}
+
         org = {
             "board_head": "User (Board Head — you report to them)",
             "ceo": "CEO (You — Central Orchestrator)",
             "leadership": {
                 name: info for name, info in CORE_TEAM.items()
-                if name.startswith("cto") or name.startswith("vp-")
+                if name in LEADERSHIP_IDS
             },
             "engineering": {
                 name: info for name, info in CORE_TEAM.items()
-                if name.startswith("lead-") or name in ("qa-lead", "devops")
+                if name in ENGINEERING_IDS
             },
             "on_demand_specialists": ON_DEMAND_TEAM,
         }

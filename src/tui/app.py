@@ -1,28 +1,14 @@
-"""Virtual Company TUI Dashboard — built with Textual."""
+"""CrackPie TUI Dashboard — built with Textual."""
 
 import os
 import yaml
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Static, DataTable, RichLog
 
-
-def _resolve_data_dir() -> str:
-    """Resolve company_data directory to an absolute path."""
-    env_dir = os.environ.get("CRACKPIE_DATA_DIR")
-    if env_dir:
-        return os.path.abspath(env_dir)
-
-    # Walk up from this file to find the project root
-    current = os.path.dirname(os.path.abspath(__file__))
-    while current != os.path.dirname(current):
-        if os.path.exists(os.path.join(current, "pyproject.toml")):
-            return os.path.join(current, "company_data")
-        current = os.path.dirname(current)
-
-    return os.path.abspath("./company_data")
+from src.utils import resolve_data_dir
 
 
-DATA_DIR = _resolve_data_dir()
+DATA_DIR = resolve_data_dir()
 ACTIVITY_LOG = os.path.join(DATA_DIR, "activity.log")
 
 

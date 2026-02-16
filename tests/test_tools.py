@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-import asyncio
 import pytest
 from fastmcp import FastMCP
 
@@ -10,6 +9,8 @@ from src.mcp_server.project_tools import register_project_tools
 from src.mcp_server.task_board_tools import register_task_tools
 from src.mcp_server.memory_tools import register_memory_tools
 from src.mcp_server.company_tools import register_company_tools
+from src.mcp_server.metrics_tools import register_metrics_tools
+from src.mcp_server.micro_agent_tools import register_micro_agent_tools
 
 
 @pytest.fixture
@@ -69,18 +70,39 @@ class TestCompanyTools:
         assert "fire_agent" in names
 
 
+class TestMetricsTools:
+    def test_register_tools(self, data_dir):
+        mcp = FastMCP("test")
+        register_metrics_tools(mcp, data_dir)
+        names = _get_tool_names(mcp)
+        assert "log_token_usage" in names
+        assert "get_token_report" in names
+        assert "get_session_durations" in names
+        assert "estimate_task_cost" in names
+
+
+class TestMicroAgentTools:
+    def test_register_tools(self, data_dir):
+        mcp = FastMCP("test")
+        register_micro_agent_tools(mcp, data_dir)
+        names = _get_tool_names(mcp)
+        assert "spawn_micro_agent" in names
+        assert "list_micro_agents" in names
+        assert "retire_micro_agent" in names
+
+
 class TestServerCreation:
     def test_create_all_scopes(self):
         from src.mcp_server.server import create_server
         server = create_server("all")
         assert server is not None
         names = _get_tool_names(server)
-        # Should have all tools from all scopes
-        assert len(names) >= 14
+        # Should have all tools from all scopes (4+4+4+4+4+3 = 23)
+        assert len(names) >= 20
 
     def test_create_individual_scopes(self):
         from src.mcp_server.server import create_server
-        for scope in ["project", "tasks", "memory", "company"]:
+        for scope in ["project", "tasks", "memory", "company", "metrics", "micro_agents"]:
             server = create_server(scope)
             assert server is not None
             names = _get_tool_names(server)

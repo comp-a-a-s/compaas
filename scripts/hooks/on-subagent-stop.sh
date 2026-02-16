@@ -14,7 +14,23 @@ print(data.get('agent_name') or data.get('agent_type') or 'unknown')
 
 SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || echo "")
 
-LOG_DIR="./company_data"
+# Resolve LOG_DIR: use CRACKPIE_DATA_DIR env var, or find company_data relative to this script
+if [ -n "$CRACKPIE_DATA_DIR" ]; then
+    LOG_DIR="$CRACKPIE_DATA_DIR"
+else
+    # Walk up from the script location to find company_data
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SEARCH_DIR="$SCRIPT_DIR"
+    while [ "$SEARCH_DIR" != "/" ]; do
+        if [ -d "$SEARCH_DIR/company_data" ]; then
+            LOG_DIR="$SEARCH_DIR/company_data"
+            break
+        fi
+        SEARCH_DIR="$(dirname "$SEARCH_DIR")"
+    done
+    # Fallback to CWD
+    LOG_DIR="${LOG_DIR:-./company_data}"
+fi
 mkdir -p "$LOG_DIR"
 
 echo "[$TIMESTAMP] COMPLETED: Agent '$AGENT_NAME' finished work" >> "$LOG_DIR/activity.log"
@@ -23,7 +39,6 @@ echo "[$TIMESTAMP] COMPLETED: Agent '$AGENT_NAME' finished work" >> "$LOG_DIR/ac
 echo "$INPUT" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-import datetime
 event = {
     'event': 'subagent_stop',
     'timestamp': '$TIMESTAMP',

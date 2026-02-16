@@ -29,7 +29,7 @@ export default function Layout({ activeTab, onTabChange, children }: LayoutProps
             </div>
             <div>
               <h1 className="text-base font-bold text-white leading-tight">CrackPie</h1>
-              <p className="text-xs text-gray-400 leading-tight">VirtualTree Dashboard</p>
+              <p className="text-xs text-gray-400 leading-tight">AI Company Dashboard</p>
             </div>
           </div>
         </div>

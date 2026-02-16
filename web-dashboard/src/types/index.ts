@@ -1,4 +1,5 @@
 export interface Agent {
+  id: string;
   name: string;
   role: string;
   model: string;
@@ -14,6 +15,8 @@ export interface Project {
   type?: string;
   created_at?: string;
   progress?: { done: number; total: number; percentage: number };
+  task_counts?: Record<string, number>;
+  total_tasks?: number;
 }
 
 export interface Task {

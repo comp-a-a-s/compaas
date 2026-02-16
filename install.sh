@@ -71,7 +71,7 @@ source .venv/bin/activate
 
 # 5. Install Python dependencies
 echo -e "${YELLOW}[5/8] Installing Python dependencies...${NC}"
-pip install -e ".[dev]" --quiet
+pip3 install -e ".[dev]" --quiet
 echo -e "${GREEN}  ✓ Python dependencies installed${NC}"
 
 # 6. Build web dashboard (if Node.js available)

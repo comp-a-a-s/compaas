@@ -213,7 +213,7 @@ export default function ProjectList({ projects, loading }: ProjectListProps) {
   if (projects.length === 0) {
     return (
       <div className="flex items-center justify-center h-48 text-gray-500 text-sm">
-        No projects found. Is the VirtualTree backend running?
+        No projects found. Is the CrackPie backend running?
       </div>
     );
   }

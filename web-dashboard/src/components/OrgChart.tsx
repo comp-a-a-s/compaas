@@ -72,7 +72,7 @@ function RowSection({ label, agents }: { label: string; agents: Agent[] }) {
       <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">{label}</h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
         {agents.map((agent) => (
-          <AgentCard key={agent.name} agent={agent} />
+          <AgentCard key={agent.id ?? agent.name} agent={agent} />
         ))}
       </div>
     </div>
@@ -111,22 +111,26 @@ export default function OrgChart({ agents, loading }: OrgChartProps) {
   if (agents.length === 0) {
     return (
       <div className="flex items-center justify-center h-48 text-gray-500 text-sm">
-        No agents found. Is the VirtualTree backend running?
+        No agents found. Is the CrackPie backend running?
       </div>
     );
   }
 
-  // Bucket agents into tiers based on role keywords
-  const ceo = agents.filter((a) => /ceo|chief executive|president/i.test(a.role));
+  // Bucket agents by team field first (from API), fall back to role keywords
+  const ceo = agents.filter((a) => a.team === 'executive' || /ceo|chief executive|president/i.test(a.role));
   const leadership = agents.filter(
     (a) =>
-      /cto|cfo|coo|vp |lead|director|head of|chief (?!executive)/i.test(a.role) &&
-      !/ceo|chief executive|president/i.test(a.role)
+      !ceo.includes(a) &&
+      (a.team === 'leadership' || (
+        /cto|cfo|coo|vp |director|head of|chief (?!executive)/i.test(a.role) &&
+        !/ceo|chief executive|president/i.test(a.role)
+      ))
   );
   const engineering = agents.filter(
     (a) =>
-      /engineer|developer|dev |architect|sre|qa|test|ops|backend|frontend|full.?stack/i.test(a.role) &&
-      !/ceo|cto|cfo|coo|vp |lead|director|head of|chief/i.test(a.role)
+      !ceo.includes(a) && !leadership.includes(a) &&
+      (a.team === 'engineering' || a.team === 'design' ||
+        /engineer|developer|dev |architect|sre|qa|test|ops|backend|frontend|full.?stack|designer/i.test(a.role))
   );
   const onDemand = agents.filter(
     (a) =>

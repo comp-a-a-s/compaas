@@ -1,7 +1,8 @@
 """
-Virtual Company MCP Server.
+CrackPie MCP Server.
 
-Provides tools for project management, task tracking, memory, and company operations.
+Provides tools for project management, task tracking, memory, company operations,
+token metrics, and micro-agent lifecycle management.
 Launched by the CEO agent via mcpServers config in .claude/agents/ceo.md.
 
 Usage:
@@ -25,30 +26,12 @@ from src.mcp_server.memory_tools import register_memory_tools
 from src.mcp_server.company_tools import register_company_tools
 from src.mcp_server.metrics_tools import register_metrics_tools
 from src.mcp_server.micro_agent_tools import register_micro_agent_tools
+from src.utils import resolve_data_dir
 
 
-def _resolve_data_dir() -> str:
-    """Resolve the company_data directory to an absolute path.
+DATA_DIR = resolve_data_dir()
 
-    Checks VIRTUALTREE_DATA_DIR env var first, then falls back to
-    ./company_data relative to the project root (where pyproject.toml lives).
-    """
-    env_dir = os.environ.get("CRACKPIE_DATA_DIR")
-    if env_dir:
-        return os.path.abspath(env_dir)
-
-    # Walk up from this file to find the project root (where pyproject.toml is)
-    current = os.path.dirname(os.path.abspath(__file__))
-    while current != os.path.dirname(current):  # stop at filesystem root
-        if os.path.exists(os.path.join(current, "pyproject.toml")):
-            return os.path.join(current, "company_data")
-        current = os.path.dirname(current)
-
-    # Fallback: relative to CWD
-    return os.path.abspath("./company_data")
-
-
-DATA_DIR = _resolve_data_dir()
+VALID_SCOPES = ("all", "project", "tasks", "memory", "company", "metrics", "micro_agents")
 
 
 def create_server(scope: str = "all", data_dir: str | None = None) -> FastMCP:
@@ -72,15 +55,15 @@ def create_server(scope: str = "all", data_dir: str | None = None) -> FastMCP:
     elif scope in registrars:
         registrars[scope](mcp, effective_dir)
     else:
-        print(f"Unknown scope: {scope}. Use: all, project, tasks, memory, company, metrics, micro_agents", file=sys.stderr)
+        print(f"Unknown scope: {scope}. Use: {', '.join(VALID_SCOPES)}", file=sys.stderr)
         sys.exit(1)
 
     return mcp
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scope", default="all", help="Tool scope to expose")
+    parser = argparse.ArgumentParser(description="CrackPie MCP Server")
+    parser.add_argument("--scope", default="all", choices=VALID_SCOPES, help="Tool scope to expose")
     args = parser.parse_args()
 
     server = create_server(args.scope)

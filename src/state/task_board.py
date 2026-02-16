@@ -4,6 +4,10 @@ import yaml
 from datetime import datetime, timezone
 
 
+VALID_STATUSES = {"todo", "in_progress", "review", "done", "blocked"}
+VALID_PRIORITIES = {"p0", "p1", "p2", "p3", "low", "medium", "high", "critical"}
+
+
 class TaskBoard:
     """Manages task CRUD for a project."""
 
@@ -17,8 +21,14 @@ class TaskBoard:
         path = self._tasks_path(project_id)
         if not os.path.exists(path):
             return {"tasks": []}
-        with open(path) as f:
-            return yaml.safe_load(f) or {"tasks": []}
+        try:
+            with open(path) as f:
+                data = yaml.safe_load(f)
+            if not isinstance(data, dict) or "tasks" not in data:
+                return {"tasks": []}
+            return data
+        except yaml.YAMLError:
+            return {"tasks": []}
 
     def _save_board(self, project_id: str, board: dict) -> None:
         with open(self._tasks_path(project_id), "w") as f:
@@ -61,6 +71,8 @@ class TaskBoard:
         status: str,
         notes: str = "",
     ) -> bool:
+        if status.lower() not in VALID_STATUSES:
+            return False
         board = self._load_board(project_id)
         for task in board["tasks"]:
             if task["id"] == task_id:
