@@ -11,6 +11,7 @@ from src.utils import atomic_yaml_write, FileLock, emit_activity
 
 def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
     token_usage_path = os.path.join(data_dir, "token_usage.yaml")
+    token_budgets_path = os.path.join(data_dir, "token_budgets.yaml")
     activity_log_path = os.path.join(data_dir, "activity.log")
 
     def _load_token_usage() -> dict:
@@ -21,6 +22,75 @@ def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
 
     def _save_token_usage(data: dict) -> None:
         atomic_yaml_write(token_usage_path, data)
+
+    def _load_budgets() -> dict:
+        if not os.path.exists(token_budgets_path):
+            return {"budgets": []}
+        with open(token_budgets_path) as f:
+            return yaml.safe_load(f) or {"budgets": []}
+
+    def _save_budgets(data: dict) -> None:
+        atomic_yaml_write(token_budgets_path, data)
+
+    def _get_usage_for(records: list, project_id: str = "", agent_name: str = "") -> int:
+        """Sum total tokens for matching records."""
+        filtered = records
+        if project_id:
+            filtered = [r for r in filtered if r.get("project_id") == project_id]
+        if agent_name:
+            filtered = [r for r in filtered if r.get("agent_name") == agent_name]
+        return sum(r.get("estimated_total_tokens", 0) for r in filtered)
+
+    def _check_budget(project_id: str = "", agent_name: str = "", new_tokens: int = 0) -> str | None:
+        """Check if adding new_tokens would exceed any applicable budget.
+
+        Returns a warning string if over budget, None otherwise.
+        """
+        budgets_data = _load_budgets()
+        budgets = budgets_data.get("budgets", [])
+        if not budgets:
+            return None
+
+        usage_data = _load_token_usage()
+        records = usage_data.get("records", [])
+        warnings = []
+
+        for budget in budgets:
+            b_project = budget.get("project_id", "")
+            b_agent = budget.get("agent_name", "")
+            b_limit = budget.get("token_limit", 0)
+
+            if b_limit <= 0:
+                continue
+
+            # Check if this budget applies
+            matches = False
+            if b_project and b_agent:
+                matches = (project_id == b_project and agent_name == b_agent)
+            elif b_project:
+                matches = (project_id == b_project)
+            elif b_agent:
+                matches = (agent_name == b_agent)
+
+            if not matches:
+                continue
+
+            current_usage = _get_usage_for(records, b_project, b_agent)
+            projected = current_usage + new_tokens
+            if projected > b_limit:
+                scope = []
+                if b_project:
+                    scope.append(f"project={b_project}")
+                if b_agent:
+                    scope.append(f"agent={b_agent}")
+                scope_str = ", ".join(scope)
+                warnings.append(
+                    f"BUDGET WARNING ({scope_str}): "
+                    f"{projected:,} tokens would exceed limit of {b_limit:,} "
+                    f"(current: {current_usage:,}, new: {new_tokens:,})"
+                )
+
+        return "\n".join(warnings) if warnings else None
 
     @mcp.tool
     def log_token_usage(
@@ -74,7 +144,14 @@ def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
             _save_token_usage(data)
         total = estimated_input_tokens + estimated_output_tokens
         emit_activity(data_dir, agent_name, "UPDATED", f"Logged ~{total} tokens ({model})")
-        return f"Token usage logged: {agent_name} ({model}) ~{total} total tokens"
+
+        # Check budget limits
+        budget_warning = _check_budget(project_id, agent_name, 0)  # tokens already logged
+        msg = f"Token usage logged: {agent_name} ({model}) ~{total} total tokens"
+        if budget_warning:
+            emit_activity(data_dir, "cfo", "BLOCKED", budget_warning.split("\n")[0])
+            msg += f"\n\n{budget_warning}"
+        return msg
 
     @mcp.tool
     def get_token_report(
@@ -195,6 +272,138 @@ def register_metrics_tools(mcp: FastMCP, data_dir: str) -> None:
             }
 
         return yaml.dump(summary, default_flow_style=False)
+
+    @mcp.tool
+    def set_token_budget(
+        token_limit: int,
+        project_id: str = "",
+        agent_name: str = "",
+    ) -> str:
+        """Set a token budget limit for a project, agent, or both.
+
+        When token usage is logged, it will be checked against the budget and
+        a warning is emitted if the limit is exceeded.
+
+        Args:
+            token_limit: Maximum total tokens allowed. Use 0 to remove a budget.
+            project_id: Apply budget to this project (optional).
+            agent_name: Apply budget to this agent (optional).
+        """
+        if not project_id and not agent_name:
+            return "Error: Must specify at least one of project_id or agent_name."
+
+        try:
+            validate_non_negative_int(token_limit, "token_limit")
+        except ValueError as e:
+            return f"Error: {e}"
+
+        with FileLock(token_budgets_path):
+            data = _load_budgets()
+            budgets = data.get("budgets", [])
+
+            # Find existing budget for this scope
+            existing = None
+            for b in budgets:
+                if b.get("project_id", "") == project_id and b.get("agent_name", "") == agent_name:
+                    existing = b
+                    break
+
+            if token_limit == 0:
+                # Remove budget
+                if existing:
+                    budgets.remove(existing)
+                    data["budgets"] = budgets
+                    _save_budgets(data)
+                    scope = []
+                    if project_id:
+                        scope.append(f"project={project_id}")
+                    if agent_name:
+                        scope.append(f"agent={agent_name}")
+                    return f"Budget removed for {', '.join(scope)}."
+                return "No matching budget found to remove."
+
+            if existing:
+                existing["token_limit"] = token_limit
+                existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+            else:
+                budgets.append({
+                    "project_id": project_id,
+                    "agent_name": agent_name,
+                    "token_limit": token_limit,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+
+            data["budgets"] = budgets
+            _save_budgets(data)
+
+        scope = []
+        if project_id:
+            scope.append(f"project={project_id}")
+        if agent_name:
+            scope.append(f"agent={agent_name}")
+        emit_activity(data_dir, "cfo", "UPDATED",
+                      f"Budget set: {token_limit:,} tokens for {', '.join(scope)}")
+        return f"Budget set: {token_limit:,} tokens for {', '.join(scope)}."
+
+    @mcp.tool
+    def get_token_budget(
+        project_id: str = "",
+        agent_name: str = "",
+    ) -> str:
+        """Check token budget status — current usage vs limit.
+
+        Args:
+            project_id: Check budget for this project (optional).
+            agent_name: Check budget for this agent (optional).
+        """
+        budgets_data = _load_budgets()
+        budgets = budgets_data.get("budgets", [])
+
+        if not budgets:
+            return "No token budgets configured."
+
+        usage_data = _load_token_usage()
+        records = usage_data.get("records", [])
+
+        # Filter budgets if scope specified
+        if project_id or agent_name:
+            budgets = [
+                b for b in budgets
+                if (not project_id or b.get("project_id", "") == project_id)
+                and (not agent_name or b.get("agent_name", "") == agent_name)
+            ]
+
+        if not budgets:
+            return "No matching budgets found."
+
+        result = []
+        for b in budgets:
+            b_project = b.get("project_id", "")
+            b_agent = b.get("agent_name", "")
+            b_limit = b.get("token_limit", 0)
+
+            current = _get_usage_for(records, b_project, b_agent)
+            remaining = max(0, b_limit - current)
+            pct = round((current / b_limit) * 100, 1) if b_limit > 0 else 0
+
+            scope = []
+            if b_project:
+                scope.append(f"project={b_project}")
+            if b_agent:
+                scope.append(f"agent={b_agent}")
+
+            status = "OK" if current <= b_limit else "OVER BUDGET"
+            result.append({
+                "scope": ", ".join(scope),
+                "limit": b_limit,
+                "used": current,
+                "remaining": remaining,
+                "usage_percent": pct,
+                "status": status,
+            })
+
+        return yaml.dump(result, default_flow_style=False)
 
     @mcp.tool
     def estimate_task_cost(

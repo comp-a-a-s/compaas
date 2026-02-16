@@ -300,6 +300,62 @@ def token_metrics(
     }
 
 
+@app.get("/api/metrics/budgets", summary="Token budget status from token_budgets.yaml")
+def token_budgets(
+    project_id: str = Query(default="", description="Filter by project ID"),
+    agent_name: str = Query(default="", description="Filter by agent name"),
+) -> list[dict]:
+    """Return current token budgets with usage status."""
+    budgets_path = os.path.join(DATA_DIR, "token_budgets.yaml")
+    token_usage_path = os.path.join(DATA_DIR, "token_usage.yaml")
+
+    if not os.path.exists(budgets_path):
+        return []
+
+    with open(budgets_path) as f:
+        budgets_data = yaml.safe_load(f) or {"budgets": []}
+    budgets = budgets_data.get("budgets", [])
+
+    # Load usage for calculations
+    records: list[dict] = []
+    if os.path.exists(token_usage_path):
+        with open(token_usage_path) as f:
+            usage_data = yaml.safe_load(f) or {"records": []}
+        records = usage_data.get("records", [])
+
+    # Filter budgets
+    if project_id:
+        budgets = [b for b in budgets if b.get("project_id", "") == project_id]
+    if agent_name:
+        budgets = [b for b in budgets if b.get("agent_name", "") == agent_name]
+
+    result: list[dict] = []
+    for b in budgets:
+        b_project = b.get("project_id", "")
+        b_agent = b.get("agent_name", "")
+        b_limit = b.get("token_limit", 0)
+
+        # Sum matching usage
+        filtered = records
+        if b_project:
+            filtered = [r for r in filtered if r.get("project_id") == b_project]
+        if b_agent:
+            filtered = [r for r in filtered if r.get("agent_name") == b_agent]
+        used = sum(r.get("estimated_total_tokens", 0) for r in filtered)
+
+        result.append({
+            "project_id": b_project,
+            "agent_name": b_agent,
+            "token_limit": b_limit,
+            "used": used,
+            "remaining": max(0, b_limit - used),
+            "usage_percent": round((used / b_limit) * 100, 1) if b_limit > 0 else 0,
+            "status": "OK" if used <= b_limit else "OVER BUDGET",
+        })
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Agents
 # ---------------------------------------------------------------------------
