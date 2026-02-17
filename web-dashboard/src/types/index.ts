@@ -96,3 +96,18 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
 }
+
+export interface AppConfig {
+  setup_complete: boolean;
+  user: { name: string };
+  agents: Record<string, string>;
+  ui: {
+    theme: string;
+    poll_interval_ms: number;
+  };
+  server: {
+    host: string;
+    port: number;
+    auto_open_browser: boolean;
+  };
+}

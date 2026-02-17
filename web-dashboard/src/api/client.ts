@@ -1,4 +1,4 @@
-import type { Agent, Project, Task, Decision, ActivityEvent, TokenReport, Budget, ChatMessage } from '../types';
+import type { Agent, Project, Task, Decision, ActivityEvent, TokenReport, Budget, ChatMessage, AppConfig } from '../types';
 
 const BASE = '/api';
 
@@ -19,19 +19,6 @@ export async function fetchAgents(): Promise<Agent[]> {
 
 export async function fetchAgentDetail(id: string): Promise<Agent | null> {
   return safeFetch<Agent | null>(`${BASE}/agents/${encodeURIComponent(id)}`, null);
-}
-
-export async function updateAgent(id: string, updates: { name?: string; status?: string }): Promise<boolean> {
-  try {
-    const res = await fetch(`${BASE}/agents/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
 }
 
 export async function fetchProjects(): Promise<Project[]> {
@@ -93,4 +80,34 @@ export async function clearChatHistory(): Promise<void> {
 export function createChatWebSocket(): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return new WebSocket(`${protocol}//${window.location.host}/api/chat/ws`);
+}
+
+export async function fetchConfig(): Promise<AppConfig | null> {
+  return safeFetch<AppConfig | null>(`${BASE}/config`, null);
+}
+
+export async function saveSetupConfig(config: Partial<AppConfig>): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/config/setup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function updateConfig(updates: Record<string, unknown>): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/config`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

@@ -9,18 +9,18 @@ interface MetricsPanelProps {
 // ---- Helpers ----
 function modelColor(model: string): string {
   const m = (model || '').toLowerCase();
-  if (m.includes('opus')) return '#cba6f7';
-  if (m.includes('sonnet')) return '#89b4fa';
-  if (m.includes('haiku')) return '#a6e3a1';
-  return '#a6adc8';
+  if (m.includes('opus')) return '#8b8fc7';
+  if (m.includes('sonnet')) return '#58a6ff';
+  if (m.includes('haiku')) return '#3fb950';
+  return '#8b949e';
 }
 
 function modelBadge(model: string): { bg: string; text: string } {
   const m = (model || '').toLowerCase();
-  if (m.includes('opus')) return { bg: '#2a1e3a', text: '#cba6f7' };
-  if (m.includes('sonnet')) return { bg: '#1e3050', text: '#89b4fa' };
-  if (m.includes('haiku')) return { bg: '#1a3020', text: '#a6e3a1' };
-  return { bg: '#313244', text: '#a6adc8' };
+  if (m.includes('opus')) return { bg: '#1c2233', text: '#8b8fc7' };
+  if (m.includes('sonnet')) return { bg: '#1c2940', text: '#58a6ff' };
+  if (m.includes('haiku')) return { bg: '#1a2e25', text: '#3fb950' };
+  return { bg: '#21262d', text: '#8b949e' };
 }
 
 // Cost estimate: very rough approximation
@@ -65,16 +65,16 @@ function SummaryCard({ label, value, sub, color }: SummaryCardProps) {
   return (
     <div
       className="rounded-xl p-4 flex flex-col gap-1 animate-slide-up"
-      style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+      style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
     >
-      <p className="text-xs uppercase tracking-widest" style={{ color: '#6c7086' }}>
+      <p className="text-xs uppercase tracking-widest" style={{ color: '#484f58' }}>
         {label}
       </p>
       <p className="text-2xl font-bold" style={{ color }}>
         {value}
       </p>
       {sub && (
-        <p className="text-xs" style={{ color: '#6c7086' }}>
+        <p className="text-xs" style={{ color: '#484f58' }}>
           {sub}
         </p>
       )}
@@ -90,7 +90,7 @@ function AgentBarChart({ byAgent }: AgentBarChartProps) {
   const entries = Object.entries(byAgent).sort((a, b) => b[1].total_tokens - a[1].total_tokens);
   if (entries.length === 0) {
     return (
-      <p className="text-xs py-4 text-center" style={{ color: '#6c7086' }}>
+      <p className="text-xs py-4 text-center" style={{ color: '#484f58' }}>
         No token data available
       </p>
     );
@@ -111,17 +111,17 @@ function AgentBarChart({ byAgent }: AgentBarChartProps) {
               <div className="flex items-center gap-2 min-w-0" style={{ flex: '0 0 180px' }}>
                 <div
                   className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                  style={{ backgroundColor: color, color: '#11111b' }}
+                  style={{ backgroundColor: color, color: '#0d1117' }}
                 >
                   {agentName.charAt(0).toUpperCase()}
                 </div>
-                <span className="text-xs font-medium truncate" style={{ color: '#cdd6f4' }}>
+                <span className="text-xs font-medium truncate" style={{ color: '#e6edf3' }}>
                   {agentName}
                 </span>
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="h-5 rounded-md overflow-hidden" style={{ backgroundColor: '#313244' }}>
+                <div className="h-5 rounded-md overflow-hidden" style={{ backgroundColor: '#21262d' }}>
                   <div
                     className="h-full rounded-md transition-all duration-700"
                     style={{ width: `${pct}%`, backgroundColor: color, opacity: 0.8 }}
@@ -136,7 +136,7 @@ function AgentBarChart({ byAgent }: AgentBarChartProps) {
                 <span className="text-xs font-medium" style={{ color }}>
                   {formatTokens(data.total_tokens)}
                 </span>
-                <span className="text-xs ml-2" style={{ color: '#6c7086' }}>
+                <span className="text-xs ml-2" style={{ color: '#484f58' }}>
                   {formatCost(cost)}
                 </span>
               </div>
@@ -157,7 +157,7 @@ function ModelTable({ byModel }: ModelTableProps) {
 
   if (entries.length === 0) {
     return (
-      <p className="text-xs py-4 text-center" style={{ color: '#6c7086' }}>
+      <p className="text-xs py-4 text-center" style={{ color: '#484f58' }}>
         No model data available
       </p>
     );
@@ -167,12 +167,12 @@ function ModelTable({ byModel }: ModelTableProps) {
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr style={{ borderBottom: '1px solid #313244' }}>
+          <tr style={{ borderBottom: '1px solid #21262d' }}>
             {['Model', 'Tokens', 'Tasks', 'Est. Cost'].map((col) => (
               <th
                 key={col}
                 className="text-left py-2 pr-4 font-semibold uppercase tracking-widest"
-                style={{ color: '#6c7086' }}
+                style={{ color: '#484f58' }}
               >
                 {col}
               </th>
@@ -184,7 +184,7 @@ function ModelTable({ byModel }: ModelTableProps) {
             const badge = modelBadge(model);
             const cost = estimateCost(model, data.total_tokens);
             return (
-              <tr key={model} style={{ borderBottom: '1px solid #1e1e2e' }}>
+              <tr key={model} style={{ borderBottom: '1px solid #0d1117' }}>
                 <td className="py-2.5 pr-4">
                   <span
                     className="px-2 py-0.5 rounded-full font-medium"
@@ -193,13 +193,13 @@ function ModelTable({ byModel }: ModelTableProps) {
                     {model}
                   </span>
                 </td>
-                <td className="py-2.5 pr-4 font-medium" style={{ color: '#cdd6f4' }}>
+                <td className="py-2.5 pr-4 font-medium" style={{ color: '#e6edf3' }}>
                   {formatTokens(data.total_tokens)}
                 </td>
-                <td className="py-2.5 pr-4" style={{ color: '#a6adc8' }}>
+                <td className="py-2.5 pr-4" style={{ color: '#8b949e' }}>
                   {data.task_count}
                 </td>
-                <td className="py-2.5" style={{ color: '#a6e3a1' }}>
+                <td className="py-2.5" style={{ color: '#3fb950' }}>
                   {formatCost(cost)}
                 </td>
               </tr>
@@ -220,25 +220,25 @@ function BudgetCard({ budget }: BudgetCardProps) {
   const isOver = budget.usage_percent > 100;
   const isWarning = budget.usage_percent > 80;
 
-  const barColor = isOver ? '#f38ba8' : isWarning ? '#f9e2af' : '#a6e3a1';
+  const barColor = isOver ? '#f85149' : isWarning ? '#d29922' : '#3fb950';
   const statusText = isOver ? 'OVER BUDGET' : isWarning ? 'WARNING' : 'OK';
-  const statusColor = isOver ? '#f38ba8' : isWarning ? '#f9e2af' : '#a6e3a1';
-  const statusBg = isOver ? '#3a1a1e' : isWarning ? '#3a3010' : '#1a3020';
+  const statusColor = isOver ? '#f85149' : isWarning ? '#d29922' : '#3fb950';
+  const statusBg = isOver ? '#2d1519' : isWarning ? '#2d2213' : '#1a2e25';
 
   return (
     <div
       className="rounded-xl p-4 flex flex-col gap-3"
       style={{
-        backgroundColor: '#181825',
-        border: `1px solid ${isOver ? '#f38ba8' : isWarning ? '#f9e2af' : '#45475a'}`,
+        backgroundColor: '#161b22',
+        border: `1px solid ${isOver ? '#f85149' : isWarning ? '#d29922' : '#30363d'}`,
       }}
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <p className="text-xs font-semibold" style={{ color: '#cdd6f4' }}>
+          <p className="text-xs font-semibold" style={{ color: '#e6edf3' }}>
             {budget.agent_name}
           </p>
-          <p className="text-xs mt-0.5" style={{ color: '#6c7086' }}>
+          <p className="text-xs mt-0.5" style={{ color: '#484f58' }}>
             Project: {budget.project_id}
           </p>
         </div>
@@ -253,20 +253,20 @@ function BudgetCard({ budget }: BudgetCardProps) {
       {/* Progress bar */}
       <div>
         <div className="flex justify-between text-xs mb-1">
-          <span style={{ color: '#6c7086' }}>
+          <span style={{ color: '#484f58' }}>
             {formatTokens(budget.used)} / {formatTokens(budget.token_limit)}
           </span>
           <span style={{ color: barColor }}>
             {budget.usage_percent.toFixed(1)}%
           </span>
         </div>
-        <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: '#313244' }}>
+        <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: '#21262d' }}>
           <div
             className="h-full rounded-full transition-all duration-500"
             style={{ width: `${pct}%`, backgroundColor: barColor }}
           />
         </div>
-        <p className="text-xs mt-1" style={{ color: '#6c7086' }}>
+        <p className="text-xs mt-1" style={{ color: '#484f58' }}>
           {formatTokens(budget.remaining)} remaining
         </p>
       </div>
@@ -284,7 +284,7 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
             <div
               key={i}
               className="rounded-xl p-4"
-              style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+              style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
             >
               <Skeleton className="h-3 w-20 mb-2" />
               <Skeleton className="h-8 w-16" />
@@ -293,7 +293,7 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
         </div>
         <div
           className="rounded-xl p-5"
-          style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+          style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
         >
           <Skeleton className="h-4 w-32 mb-4" />
           <div className="space-y-3">
@@ -327,38 +327,38 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
           label="Total Tokens"
           value={formatTokens(totalTokens)}
           sub={`${totalTokens.toLocaleString()} tokens`}
-          color="#89b4fa"
+          color="#58a6ff"
         />
         <SummaryCard
           label="Total Tasks"
           value={totalTasks.toString()}
           sub="tasks tracked"
-          color="#cba6f7"
+          color="#8b8fc7"
         />
         <SummaryCard
           label="Est. Cost"
           value={formatCost(totalCost)}
           sub="approximate USD"
-          color="#a6e3a1"
+          color="#3fb950"
         />
         <SummaryCard
           label="Active Budgets"
           value={budgets.length.toString()}
           sub={`${budgets.filter((b) => b.usage_percent > 80).length} warnings`}
-          color="#f9e2af"
+          color="#d29922"
         />
       </div>
 
       {/* Token usage by agent */}
       <div
         className="rounded-xl p-5"
-        style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+        style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
       >
-        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#6c7086' }}>
+        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#484f58' }}>
           Token Usage by Agent
         </h3>
         {Object.keys(byAgent).length === 0 ? (
-          <p className="text-xs py-4 text-center" style={{ color: '#6c7086' }}>
+          <p className="text-xs py-4 text-center" style={{ color: '#484f58' }}>
             No token usage data available. Check backend connection.
           </p>
         ) : (
@@ -369,9 +369,9 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
       {/* Model breakdown table */}
       <div
         className="rounded-xl p-5"
-        style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+        style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
       >
-        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#6c7086' }}>
+        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#484f58' }}>
           Model Breakdown
         </h3>
         <ModelTable byModel={byModel} />
@@ -379,15 +379,15 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
 
       {/* Budget status */}
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: '#6c7086' }}>
+        <h3 className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: '#484f58' }}>
           Budget Status ({budgets.length})
         </h3>
         {budgets.length === 0 ? (
           <div
             className="rounded-xl p-5 text-center"
-            style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+            style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
           >
-            <p className="text-xs" style={{ color: '#6c7086' }}>
+            <p className="text-xs" style={{ color: '#484f58' }}>
               No budget data available
             </p>
           </div>
@@ -404,12 +404,12 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
       {activeBudgets.filter((b) => b.usage_percent > 80).length > 0 && (
         <div
           className="rounded-xl p-4 flex items-start gap-3"
-          style={{ backgroundColor: '#2a1510', border: '1px solid #f38ba8' }}
+          style={{ backgroundColor: '#2d1519', border: '1px solid #f85149' }}
           role="alert"
         >
           <svg
             className="w-4 h-4 flex-shrink-0 mt-0.5"
-            style={{ color: '#f38ba8' }}
+            style={{ color: '#f85149' }}
             fill="none"
             stroke="currentColor"
             strokeWidth={2}
@@ -419,10 +419,10 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
           <div>
-            <p className="text-xs font-semibold" style={{ color: '#f38ba8' }}>
+            <p className="text-xs font-semibold" style={{ color: '#f85149' }}>
               Budget Warning
             </p>
-            <p className="text-xs mt-0.5" style={{ color: '#fab387' }}>
+            <p className="text-xs mt-0.5" style={{ color: '#d29922' }}>
               {budgets.filter((b) => b.usage_percent > 80).length} budget(s) at over 80% usage. Review token allocations.
             </p>
           </div>

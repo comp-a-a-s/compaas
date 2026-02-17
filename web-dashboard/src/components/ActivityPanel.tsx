@@ -8,22 +8,22 @@ interface ActivityPanelProps {
 // ---- Helpers ----
 function actionBadgeStyle(action: string): { bg: string; text: string } {
   const a = (action || '').toUpperCase();
-  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1e3a5f', text: '#89b4fa' };
-  if (a.includes('COMPLETED') || a.includes('DONE') || a.includes('FINISH')) return { bg: '#1a3a2a', text: '#a6e3a1' };
-  if (a.includes('BLOCKED') || a.includes('ERROR') || a.includes('FAIL')) return { bg: '#3a1a1e', text: '#f38ba8' };
-  if (a.includes('ASSIGNED') || a.includes('ASSIGN')) return { bg: '#2a1e3a', text: '#cba6f7' };
-  if (a.includes('UPDATED') || a.includes('UPDATE')) return { bg: '#3a3010', text: '#f9e2af' };
-  if (a.includes('CREATED') || a.includes('CREATE')) return { bg: '#103a35', text: '#94e2d5' };
-  return { bg: '#313244', text: '#a6adc8' };
+  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1c2940', text: '#58a6ff' };
+  if (a.includes('COMPLETED') || a.includes('DONE') || a.includes('FINISH')) return { bg: '#1a2e25', text: '#3fb950' };
+  if (a.includes('BLOCKED') || a.includes('ERROR') || a.includes('FAIL')) return { bg: '#2d1519', text: '#f85149' };
+  if (a.includes('ASSIGNED') || a.includes('ASSIGN')) return { bg: '#1c2233', text: '#8b8fc7' };
+  if (a.includes('UPDATED') || a.includes('UPDATE')) return { bg: '#2d2213', text: '#d29922' };
+  if (a.includes('CREATED') || a.includes('CREATE')) return { bg: '#1c2940', text: '#58a6ff' };
+  return { bg: '#21262d', text: '#8b949e' };
 }
 
 const ACTION_TYPES = ['ALL', 'STARTED', 'COMPLETED', 'BLOCKED', 'ASSIGNED', 'UPDATED', 'CREATED'];
 
 function agentAvatarColor(name: string): string {
   const colors = [
-    '#cba6f7', '#89b4fa', '#a6e3a1', '#94e2d5',
-    '#fab387', '#f9e2af', '#74c7ec', '#b4befe',
-    '#f38ba8', '#f5c2e7',
+    '#8b8fc7', '#58a6ff', '#3fb950', '#58a6ff',
+    '#d29922', '#d29922', '#58a6ff', '#8b8fc7',
+    '#f85149', '#8b8fc7',
   ];
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
@@ -67,16 +67,16 @@ function EmptyState() {
             key={i}
             className="w-3 h-3 rounded-full animate-pulse-dot"
             style={{
-              backgroundColor: '#45475a',
+              backgroundColor: '#30363d',
               animationDelay: `${i * 0.25}s`,
             }}
           />
         ))}
       </div>
-      <p className="text-sm" style={{ color: '#6c7086' }}>
+      <p className="text-sm" style={{ color: '#484f58' }}>
         Waiting for events...
       </p>
-      <p className="text-xs" style={{ color: '#45475a' }}>
+      <p className="text-xs" style={{ color: '#30363d' }}>
         Events will appear here as they stream in
       </p>
     </div>
@@ -98,14 +98,14 @@ function EventBubble({ event, index }: EventBubbleProps) {
     <div
       className="flex items-start gap-3 py-3 animate-slide-up"
       style={{
-        borderBottom: '1px solid #313244',
+        borderBottom: '1px solid #21262d',
         animationDelay: `${Math.min(index * 0.02, 0.3)}s`,
       }}
     >
       {/* Avatar */}
       <div
         className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5"
-        style={{ backgroundColor: color, color: '#11111b' }}
+        style={{ backgroundColor: color, color: '#0d1117' }}
         aria-hidden="true"
       >
         {initial}
@@ -114,7 +114,7 @@ function EventBubble({ event, index }: EventBubbleProps) {
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap mb-1">
-          <span className="text-xs font-semibold" style={{ color: '#cdd6f4' }}>
+          <span className="text-xs font-semibold" style={{ color: '#e6edf3' }}>
             {agentName}
           </span>
           <span
@@ -124,16 +124,16 @@ function EventBubble({ event, index }: EventBubbleProps) {
           >
             {event.action}
           </span>
-          <span className="text-xs ml-auto flex-shrink-0" style={{ color: '#45475a' }}>
+          <span className="text-xs ml-auto flex-shrink-0" style={{ color: '#30363d' }}>
             {formatDate(event.timestamp)} {formatTime(event.timestamp)}
           </span>
         </div>
 
         <div
           className="rounded-lg px-3 py-2.5"
-          style={{ backgroundColor: '#313244' }}
+          style={{ backgroundColor: '#21262d' }}
         >
-          <p className="text-xs leading-relaxed" style={{ color: '#a6adc8' }}>
+          <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
             {event.detail || '(no detail)'}
           </p>
         </div>
@@ -183,7 +183,7 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
           <label
             htmlFor="agent-filter"
             className="text-xs font-medium"
-            style={{ color: '#6c7086' }}
+            style={{ color: '#484f58' }}
           >
             Agent
           </label>
@@ -193,9 +193,9 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
             onChange={(e) => setAgentFilter(e.target.value)}
             className="text-xs rounded-lg px-2 py-1.5 transition-colors duration-200 cursor-pointer"
             style={{
-              backgroundColor: '#181825',
-              border: '1px solid #45475a',
-              color: '#cdd6f4',
+              backgroundColor: '#161b22',
+              border: '1px solid #30363d',
+              color: '#e6edf3',
               outline: 'none',
             }}
           >
@@ -209,7 +209,7 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium" style={{ color: '#6c7086' }}>
+          <span className="text-xs font-medium" style={{ color: '#484f58' }}>
             Action
           </span>
           <div className="flex gap-1 flex-wrap">
@@ -223,14 +223,14 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
                   className="text-xs px-2 py-1 rounded-full transition-all duration-200 cursor-pointer font-medium"
                   style={{
                     backgroundColor: active
-                      ? badge ? badge.bg : '#313244'
-                      : '#1e1e2e',
+                      ? badge ? badge.bg : '#21262d'
+                      : '#0d1117',
                     color: active
-                      ? badge ? badge.text : '#cdd6f4'
-                      : '#6c7086',
+                      ? badge ? badge.text : '#e6edf3'
+                      : '#484f58',
                     border: active
-                      ? `1px solid ${badge ? badge.text : '#cdd6f4'}`
-                      : '1px solid #45475a',
+                      ? `1px solid ${badge ? badge.text : '#e6edf3'}`
+                      : '1px solid #30363d',
                     outline: 'none',
                   }}
                 >
@@ -244,10 +244,10 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
         <div className="ml-auto flex items-center gap-2">
           <span
             className="w-1.5 h-1.5 rounded-full animate-pulse-dot"
-            style={{ backgroundColor: '#a6e3a1' }}
+            style={{ backgroundColor: '#3fb950' }}
             aria-hidden="true"
           />
-          <span className="text-xs" style={{ color: '#6c7086' }}>
+          <span className="text-xs" style={{ color: '#484f58' }}>
             {filteredEvents.length} events
             {(agentFilter || actionFilter !== 'ALL') ? ` (filtered from ${events.length})` : ''}
           </span>
@@ -258,8 +258,8 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
       <div
         className="flex-1 overflow-y-auto rounded-xl"
         style={{
-          backgroundColor: '#181825',
-          border: '1px solid #45475a',
+          backgroundColor: '#161b22',
+          border: '1px solid #30363d',
         }}
         role="feed"
         aria-label="Activity events"

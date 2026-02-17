@@ -8,6 +8,8 @@ import ProjectPanel from './components/ProjectPanel';
 import ActivityPanel from './components/ActivityPanel';
 import MetricsPanel from './components/MetricsPanel';
 import ChatPanel from './components/ChatPanel';
+import SetupWizard from './components/SetupWizard';
+import SettingsPanel from './components/SettingsPanel';
 
 import {
   fetchAgents,
@@ -17,9 +19,10 @@ import {
   fetchBudgets,
   fetchRecentActivity,
   createActivityStream,
+  fetchConfig,
 } from './api/client';
 
-import type { Agent, Project, Task, ActivityEvent, TokenReport, Budget } from './types';
+import type { Agent, Project, Task, ActivityEvent, TokenReport, Budget, AppConfig } from './types';
 
 const MAX_EVENTS = 200;
 const POLL_INTERVAL_MS = 5000;
@@ -52,6 +55,14 @@ function parseActivityLine(line: string): ActivityEvent | null {
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('overview');
 
+  // Config / setup state
+  const [, setConfig] = useState<AppConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(true);
+  const [showWizard, setShowWizard] = useState(false);
+
+  // Floating chat state
+  const [chatOpen, setChatOpen] = useState(false);
+
   // Data state
   const [agents, setAgents] = useState<Agent[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -66,6 +77,27 @@ export default function App() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [loadingMetrics, setLoadingMetrics] = useState(true);
+
+  // ---- Config check ----
+  useEffect(() => {
+    fetchConfig().then((cfg) => {
+      setConfig(cfg);
+      if (!cfg || !cfg.setup_complete) {
+        setShowWizard(true);
+      }
+      setConfigLoading(false);
+    }).catch(() => {
+      setConfigLoading(false);
+    });
+  }, []);
+
+  const handleSetupComplete = useCallback(() => {
+    setShowWizard(false);
+    // Reload config
+    fetchConfig().then((cfg) => {
+      if (cfg) setConfig(cfg);
+    });
+  }, []);
 
   // ---- Data loaders ----
 
@@ -127,6 +159,8 @@ export default function App() {
 
   // ---- Initial load + polling ----
   useEffect(() => {
+    if (showWizard) return; // Don't load data while wizard is shown
+
     loadAgents();
     loadProjects();
     loadMetrics();
@@ -150,10 +184,12 @@ export default function App() {
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [loadAgents, loadProjects, loadMetrics]);
+  }, [loadAgents, loadProjects, loadMetrics, showWizard]);
 
   // ---- SSE activity stream ----
   useEffect(() => {
+    if (showWizard) return;
+
     let es: EventSource | null = null;
 
     try {
@@ -172,7 +208,34 @@ export default function App() {
     return () => {
       es?.close();
     };
-  }, []);
+  }, [showWizard]);
+
+  // ---- Loading / wizard screens ----
+
+  if (configLoading) {
+    return (
+      <div
+        className="flex items-center justify-center h-screen"
+        style={{ backgroundColor: '#0d1117', color: '#484f58' }}
+      >
+        <div className="text-center">
+          <div
+            className="w-10 h-10 rounded-lg flex items-center justify-center mx-auto mb-3"
+            style={{ backgroundColor: '#8b8fc7' }}
+          >
+            <svg className="w-5 h-5" style={{ color: '#0d1117' }} fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2L2 8.5l10 13.5 10-13.5L12 2z" />
+            </svg>
+          </div>
+          <p className="text-sm">Loading CrackPie...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (showWizard) {
+    return <SetupWizard onComplete={handleSetupComplete} />;
+  }
 
   // ---- Render ----
 
@@ -196,7 +259,6 @@ export default function App() {
           <AgentPanel
             agents={agents}
             loading={loadingAgents}
-            onAgentUpdated={loadAgents}
           />
         );
 
@@ -225,8 +287,8 @@ export default function App() {
           />
         );
 
-      case 'chat':
-        return <ChatPanel />;
+      case 'settings':
+        return <SettingsPanel />;
 
       default:
         return (
@@ -244,7 +306,13 @@ export default function App() {
   };
 
   return (
-    <Layout activeTab={activeTab} onTabChange={setActiveTab}>
+    <Layout
+      activeTab={activeTab}
+      onTabChange={setActiveTab}
+      chatOpen={chatOpen}
+      onChatToggle={() => setChatOpen((prev) => !prev)}
+      chatPanel={<ChatPanel floating />}
+    >
       {renderContent()}
     </Layout>
   );

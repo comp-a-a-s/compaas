@@ -55,7 +55,7 @@ _allowed_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_methods=["GET", "PATCH", "DELETE"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -360,41 +360,91 @@ def token_budgets(
 
 
 # ---------------------------------------------------------------------------
-# Agent overrides (persistent name / status customization)
+# Configuration system
 # ---------------------------------------------------------------------------
 
-AGENT_OVERRIDES_PATH = os.path.join(DATA_DIR, "agent_overrides.yaml")
+CONFIG_PATH = os.path.join(DATA_DIR, "config.yaml")
 
-VALID_AGENT_STATUSES = {"permanent", "active", "available", "busy", "inactive", "on_demand"}
+DEFAULT_CONFIG: dict = {
+    "setup_complete": False,
+    "user": {"name": ""},
+    "agents": {
+        "ceo": "Marcus", "cto": "Elena", "chief-researcher": "Victor",
+        "ciso": "Rachel", "cfo": "Jonathan", "vp-product": "Sarah",
+        "vp-engineering": "David", "lead-backend": "James",
+        "lead-frontend": "Priya", "lead-designer": "Lena",
+        "qa-lead": "Carlos", "devops": "Nina",
+        "security-engineer": "Alex", "data-engineer": "Maya",
+        "tech-writer": "Tom",
+    },
+    "ui": {
+        "theme": "dark",
+        "poll_interval_ms": 5000,
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8420,
+        "auto_open_browser": True,
+    },
+}
 
 
-def _load_agent_overrides() -> dict[str, dict]:
-    """Load agent overrides from disk."""
-    if not os.path.exists(AGENT_OVERRIDES_PATH):
-        return {}
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge override into base."""
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _load_config() -> dict:
+    """Load config merged with defaults."""
+    if not os.path.exists(CONFIG_PATH):
+        return DEFAULT_CONFIG.copy()
     try:
-        with open(AGENT_OVERRIDES_PATH) as f:
+        with open(CONFIG_PATH) as f:
             data = yaml.safe_load(f) or {}
-        return data.get("overrides", {})
+        return _deep_merge(DEFAULT_CONFIG, data)
     except (yaml.YAMLError, OSError):
-        return {}
+        return DEFAULT_CONFIG.copy()
 
 
-def _save_agent_overrides(overrides: dict[str, dict]) -> None:
-    """Persist agent overrides to disk."""
-    os.makedirs(os.path.dirname(AGENT_OVERRIDES_PATH), exist_ok=True)
-    with open(AGENT_OVERRIDES_PATH, "w") as f:
-        yaml.dump({"overrides": overrides}, f, default_flow_style=False)
+def _save_config(config: dict) -> None:
+    """Persist config to disk."""
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, "w") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 
-def _apply_overrides(agent_id: str, agent: dict) -> dict:
-    """Apply any saved overrides to an agent dict."""
-    overrides = _load_agent_overrides()
-    if agent_id in overrides:
-        for key in ("name", "status"):
-            if key in overrides[agent_id]:
-                agent[key] = overrides[agent_id][key]
-    return agent
+def _get_agent_name(agent_id: str, default: str) -> str:
+    """Get custom agent name from config, falling back to default."""
+    config = _load_config()
+    return config.get("agents", {}).get(agent_id, default)
+
+
+@app.get("/api/config", summary="Get current configuration")
+def get_config() -> dict:
+    return _load_config()
+
+
+@app.post("/api/config/setup", summary="Save initial setup configuration")
+def setup_config(config: dict) -> dict:
+    config["setup_complete"] = True
+    merged = _deep_merge(DEFAULT_CONFIG, config)
+    merged["setup_complete"] = True
+    _save_config(merged)
+    return {"status": "ok"}
+
+
+@app.patch("/api/config", summary="Update configuration settings")
+def update_config(updates: dict) -> dict:
+    config = _load_config()
+    merged = _deep_merge(config, updates)
+    _save_config(merged)
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -409,13 +459,13 @@ def list_agents() -> list[dict]:
     for agent_id, info in AGENT_REGISTRY.items():
         entry = {
             "id": agent_id,
-            "name": info["name"],
+            "name": _get_agent_name(agent_id, info["name"]),
             "role": info["role"],
             "model": info["model"],
             "status": info["status"],
             "team": info["team"],
         }
-        agents.append(_apply_overrides(agent_id, entry))
+        agents.append(entry)
 
     # Dynamically hired agents from hiring log.
     hiring_log_path = os.path.join(DATA_DIR, "hiring_log.yaml")
@@ -432,7 +482,7 @@ def list_agents() -> list[dict]:
                 "expertise": h.get("expertise", ""),
                 "hired_at": h.get("hired_at", ""),
             }
-            agents.append(_apply_overrides(h["name"], entry))
+            agents.append(entry)
 
     return agents
 
@@ -495,7 +545,7 @@ def get_agent_detail(agent_id: str) -> dict:
 
     result = {
         "id": agent_id,
-        "name": info.get("name", agent_id),
+        "name": _get_agent_name(agent_id, info.get("name", agent_id)),
         "role": info.get("role", ""),
         "model": info.get("model", "sonnet"),
         "status": info.get("status", ""),
@@ -505,61 +555,7 @@ def get_agent_detail(agent_id: str) -> dict:
         "assigned_tasks": assigned_tasks,
         "recent_activity": activity,
     }
-    return _apply_overrides(agent_id, result)
-
-
-@app.patch("/api/agents/{agent_id}", summary="Update agent name or status")
-def update_agent(agent_id: str, updates: dict) -> dict:
-    """Update an agent's display name and/or status.
-
-    Accepts JSON body with optional fields: ``name``, ``status``.
-    Changes are persisted in agent_overrides.yaml.
-    """
-    # Verify the agent exists
-    info = AGENT_REGISTRY.get(agent_id)
-    if not info:
-        hiring_log_path = os.path.join(DATA_DIR, "hiring_log.yaml")
-        if os.path.exists(hiring_log_path):
-            with open(hiring_log_path) as f:
-                log = yaml.safe_load(f) or {"hired": []}
-            for h in log.get("hired", []):
-                if h["name"] == agent_id:
-                    info = h
-                    break
-    if not info:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-
-    new_name = updates.get("name")
-    new_status = updates.get("status")
-
-    if new_name is None and new_status is None:
-        raise HTTPException(status_code=400, detail="Provide at least 'name' or 'status' to update.")
-
-    if new_name is not None:
-        new_name = str(new_name).strip()
-        if not new_name or len(new_name) > 50:
-            raise HTTPException(status_code=400, detail="Name must be 1-50 characters.")
-
-    if new_status is not None:
-        new_status = str(new_status).strip().lower()
-        if new_status not in VALID_AGENT_STATUSES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid status '{new_status}'. Valid: {', '.join(sorted(VALID_AGENT_STATUSES))}",
-            )
-
-    overrides = _load_agent_overrides()
-    if agent_id not in overrides:
-        overrides[agent_id] = {}
-
-    if new_name is not None:
-        overrides[agent_id]["name"] = new_name
-    if new_status is not None:
-        overrides[agent_id]["status"] = new_status
-
-    _save_agent_overrides(overrides)
-
-    return {"id": agent_id, "updated": {k: v for k, v in [("name", new_name), ("status", new_status)] if v is not None}}
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -705,7 +701,7 @@ def _append_chat_message(role: str, content: str) -> dict:
     return msg
 
 
-def _build_context_prompt(user_message: str, history_limit: int = 8) -> str:
+def _build_context_prompt(user_message: str, history_limit: int = 8, user_name: str = "User") -> str:
     """Build a prompt that includes recent conversation context."""
     messages = _load_chat_messages()
     recent = messages[-history_limit:] if len(messages) > history_limit else messages
@@ -716,12 +712,12 @@ def _build_context_prompt(user_message: str, history_limit: int = 8) -> str:
     parts: list[str] = []
     parts.append("Recent conversation context:")
     for msg in recent:
-        speaker = "Idan" if msg["role"] == "user" else "You (Marcus, CEO)"
+        speaker = user_name if msg["role"] == "user" else "You (Marcus, CEO)"
         parts.append(f"{speaker}: {msg['content']}")
     parts.append("")
-    parts.append(f"Idan says now: {user_message}")
+    parts.append(f"{user_name} says now: {user_message}")
     parts.append("")
-    parts.append("Respond to Idan's latest message. You have full access to your MCP tools for company operations.")
+    parts.append(f"Respond to {user_name}'s latest message. You have full access to your MCP tools for company operations.")
     return "\n".join(parts)
 
 
@@ -741,23 +737,14 @@ def clear_chat_history() -> dict:
 
 @app.websocket("/api/chat/ws")
 async def chat_websocket(websocket: WebSocket) -> None:
-    """WebSocket endpoint for real-time CEO chat.
-
-    Client sends: {"message": "text"}
-    Server sends:
-      {"type": "user_ack", "message": {...}}
-      {"type": "chunk", "content": "partial text"}
-      {"type": "done", "content": "full response"}
-      {"type": "error", "content": "error description"}
-    """
+    """WebSocket endpoint for real-time CEO chat."""
     await websocket.accept()
 
-    # Check if claude CLI is available
     claude_path = shutil.which("claude")
     if not claude_path:
         await websocket.send_json({
             "type": "error",
-            "content": "Claude CLI not found in PATH. Install it with: npm install -g @anthropic-ai/claude-code",
+            "content": "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
         })
         await websocket.close()
         return
@@ -782,9 +769,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
             await websocket.send_json({"type": "user_ack", "message": user_msg})
 
             # Build prompt with conversation context
-            prompt = _build_context_prompt(user_message)
+            config = _load_config()
+            user_name = config.get("user", {}).get("name", "User")
+            prompt = _build_context_prompt(user_message, user_name=user_name)
 
-            # Spawn claude --agent ceo -p "prompt"
+            process = None
             try:
                 process = await asyncio.create_subprocess_exec(
                     claude_path, "--agent", "ceo", "-p", prompt,
@@ -792,46 +781,61 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     stderr=asyncio.subprocess.PIPE,
                     cwd=PROJECT_ROOT,
                 )
+
+                response_parts: list[str] = []
+                assert process.stdout is not None
+
+                # Read with timeout - send thinking indicator periodically
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(process.stdout.read(512), timeout=5.0)
+                        if not chunk:
+                            break
+                        text = chunk.decode("utf-8", errors="replace")
+                        response_parts.append(text)
+                        await websocket.send_json({"type": "chunk", "content": text})
+                    except asyncio.TimeoutError:
+                        # No output yet — send thinking indicator to keep connection alive
+                        await websocket.send_json({"type": "thinking"})
+                        # Check if process is still running
+                        if process.returncode is not None:
+                            break
+
+                # Wait for process to finish (max 10s after stdout closes)
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    process.kill()
+
+                full_response = "".join(response_parts).strip()
+
+                if not full_response and process.returncode != 0:
+                    assert process.stderr is not None
+                    stderr_text = (await process.stderr.read()).decode("utf-8", errors="replace").strip()
+                    error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
+                    await websocket.send_json({"type": "error", "content": error_msg})
+                    continue
+
+                if full_response:
+                    async with _chat_lock:
+                        _append_chat_message("ceo", full_response)
+
+                await websocket.send_json({"type": "done", "content": full_response})
+
             except OSError as exc:
-                await websocket.send_json({
-                    "type": "error",
-                    "content": f"Failed to start CEO agent: {exc}",
-                })
-                continue
-
-            # Stream stdout chunks back to the client
-            response_parts: list[str] = []
-            assert process.stdout is not None
-            while True:
-                chunk = await process.stdout.read(512)
-                if not chunk:
-                    break
-                text = chunk.decode("utf-8", errors="replace")
-                response_parts.append(text)
-                await websocket.send_json({"type": "chunk", "content": text})
-
-            await process.wait()
-
-            full_response = "".join(response_parts).strip()
-
-            # Check for errors
-            if process.returncode != 0 and not full_response:
-                assert process.stderr is not None
-                stderr_text = (await process.stderr.read()).decode("utf-8", errors="replace").strip()
-                error_msg = stderr_text or f"CEO agent exited with code {process.returncode}"
-                await websocket.send_json({"type": "error", "content": error_msg})
-                continue
-
-            # Store CEO response
-            async with _chat_lock:
-                _append_chat_message("ceo", full_response)
-
-            await websocket.send_json({"type": "done", "content": full_response})
+                await websocket.send_json({"type": "error", "content": f"Failed to start CEO agent: {exc}"})
+            except Exception as exc:
+                await websocket.send_json({"type": "error", "content": f"Chat error: {str(exc)[:200]}"})
+            finally:
+                if process and process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
 
     except WebSocketDisconnect:
         pass
     except Exception:
-        # Connection lost or unexpected error — close gracefully
         try:
             await websocket.close()
         except Exception:
