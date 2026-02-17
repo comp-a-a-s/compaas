@@ -41,11 +41,11 @@ function renderInlineMarkdown(text: string): React.ReactNode {
       parts.push(<span key={key++}>{remaining.slice(0, first.index)}</span>);
     }
     if (first.type === 'bold') {
-      parts.push(<strong key={key++} style={{ fontWeight: 700, color: '#e6edf3' }}>{first.match[1]}</strong>);
+      parts.push(<strong key={key++} style={{ fontWeight: 700, color: 'var(--tf-text)' }}>{first.match[1]}</strong>);
     } else if (first.type === 'italic') {
       parts.push(<em key={key++} style={{ fontStyle: 'italic' }}>{first.match[1]}</em>);
     } else {
-      parts.push(<code key={key++} style={{ backgroundColor: '#21262d', border: '1px solid #30363d', borderRadius: '3px', padding: '0 4px', fontSize: '11px', fontFamily: 'ui-monospace, monospace' }}>{first.match[1]}</code>);
+      parts.push(<code key={key++} style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)', borderRadius: '3px', padding: '0 4px', fontSize: '11px', fontFamily: 'ui-monospace, monospace' }}>{first.match[1]}</code>);
     }
     remaining = remaining.slice(first.index + first.match[0].length);
   }
@@ -60,29 +60,29 @@ function renderMarkdown(text: string): React.ReactNode {
     const line = lines[i];
     // H3
     if (line.startsWith('### ')) {
-      result.push(<h3 key={i} style={{ color: '#e6edf3', fontSize: '13px', fontWeight: 700, margin: '8px 0 4px' }}>{line.slice(4)}</h3>);
+      result.push(<h3 key={i} style={{ color: 'var(--tf-text)', fontSize: '13px', fontWeight: 700, margin: '8px 0 4px' }}>{line.slice(4)}</h3>);
     }
     // H2
     else if (line.startsWith('## ')) {
-      result.push(<h2 key={i} style={{ color: '#e6edf3', fontSize: '14px', fontWeight: 700, margin: '8px 0 4px' }}>{line.slice(3)}</h2>);
+      result.push(<h2 key={i} style={{ color: 'var(--tf-text)', fontSize: '14px', fontWeight: 700, margin: '8px 0 4px' }}>{line.slice(3)}</h2>);
     }
     // H1
     else if (line.startsWith('# ')) {
-      result.push(<h1 key={i} style={{ color: '#e6edf3', fontSize: '15px', fontWeight: 700, margin: '8px 0 4px' }}>{line.slice(2)}</h1>);
+      result.push(<h1 key={i} style={{ color: 'var(--tf-text)', fontSize: '15px', fontWeight: 700, margin: '8px 0 4px' }}>{line.slice(2)}</h1>);
     }
     // Bullet list
     else if (line.startsWith('- ') || line.startsWith('* ')) {
       result.push(<div key={i} style={{ display: 'flex', gap: '6px', margin: '2px 0' }}>
-        <span style={{ color: '#58a6ff', flexShrink: 0 }}>•</span>
-        <span style={{ color: '#e6edf3' }}>{renderInlineMarkdown(line.slice(2))}</span>
+        <span style={{ color: 'var(--tf-accent-blue)', flexShrink: 0 }}>•</span>
+        <span style={{ color: 'var(--tf-text)' }}>{renderInlineMarkdown(line.slice(2))}</span>
       </div>);
     }
     // Numbered list
     else if (/^\d+\. /.test(line)) {
       const num = line.match(/^(\d+)\. /)?.[1] ?? '';
       result.push(<div key={i} style={{ display: 'flex', gap: '6px', margin: '2px 0' }}>
-        <span style={{ color: '#58a6ff', flexShrink: 0, minWidth: '16px' }}>{num}.</span>
-        <span style={{ color: '#e6edf3' }}>{renderInlineMarkdown(line.replace(/^\d+\. /, ''))}</span>
+        <span style={{ color: 'var(--tf-accent-blue)', flexShrink: 0, minWidth: '16px' }}>{num}.</span>
+        <span style={{ color: 'var(--tf-text)' }}>{renderInlineMarkdown(line.replace(/^\d+\. /, ''))}</span>
       </div>);
     }
     // Code block
@@ -93,7 +93,7 @@ function renderMarkdown(text: string): React.ReactNode {
         codeLines.push(lines[i]);
         i++;
       }
-      result.push(<pre key={i} style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', padding: '10px 12px', margin: '6px 0', fontSize: '11px', color: '#e6edf3', overflowX: 'auto', fontFamily: 'ui-monospace, monospace' }}><code>{codeLines.join('\n')}</code></pre>);
+      result.push(<pre key={i} style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', borderRadius: '6px', padding: '10px 12px', margin: '6px 0', fontSize: '11px', color: 'var(--tf-text)', overflowX: 'auto', fontFamily: 'ui-monospace, monospace' }}><code>{codeLines.join('\n')}</code></pre>);
     }
     // Empty line -> spacer
     else if (line.trim() === '') {
@@ -101,7 +101,7 @@ function renderMarkdown(text: string): React.ReactNode {
     }
     // Normal paragraph
     else {
-      result.push(<p key={i} style={{ color: '#e6edf3', fontSize: '13px', lineHeight: '1.6', margin: '2px 0' }}>{renderInlineMarkdown(line)}</p>);
+      result.push(<p key={i} style={{ color: 'var(--tf-text)', fontSize: '13px', lineHeight: '1.6', margin: '2px 0' }}>{renderInlineMarkdown(line)}</p>);
     }
     i++;
   }
@@ -126,7 +126,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
       {!isUser && (
         <div
           className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2 mt-1"
-          style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
+          style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
           title="Marcus (CEO)"
         >
           M
@@ -136,7 +136,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
       <div
         className="max-w-[75%] rounded-2xl px-4 py-2.5"
         style={{
-          backgroundColor: isUser ? '#1c2940' : '#21262d',
+          backgroundColor: isUser ? '#1c2940' : 'var(--tf-surface-raised)',
           borderBottomRightRadius: isUser ? '4px' : undefined,
           borderBottomLeftRadius: !isUser ? '4px' : undefined,
         }}
@@ -145,12 +145,12 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         <div className="flex items-center gap-2 mb-1">
           <span
             className="text-xs font-semibold"
-            style={{ color: isUser ? '#58a6ff' : '#8b8fc7' }}
+            style={{ color: isUser ? 'var(--tf-accent-blue)' : 'var(--tf-accent)' }}
           >
             {isUser ? 'You' : 'Marcus (CEO)'}
           </span>
           {message.timestamp && (
-            <span className="text-xs" style={{ color: '#30363d' }}>
+            <span className="text-xs" style={{ color: 'var(--tf-border)' }}>
               {formatTime(message.timestamp)}
             </span>
           )}
@@ -161,7 +161,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
                   key={i}
                   className="w-1.5 h-1.5 rounded-full animate-pulse-dot"
                   style={{
-                    backgroundColor: '#8b8fc7',
+                    backgroundColor: 'var(--tf-accent)',
                     animationDelay: `${i * 0.2}s`,
                   }}
                 />
@@ -174,7 +174,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         {isUser ? (
           <p
             className="text-sm leading-relaxed whitespace-pre-wrap break-words"
-            style={{ color: '#e6edf3' }}
+            style={{ color: 'var(--tf-text)' }}
           >
             {message.content || (isStreaming ? '' : '(empty response)')}
           </p>
@@ -182,7 +182,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
           <div className="text-sm leading-relaxed break-words">
             {message.content
               ? renderMarkdown(message.content)
-              : (isStreaming ? null : <span style={{ color: '#484f58' }}>(empty response)</span>)
+              : (isStreaming ? null : <span style={{ color: 'var(--tf-text-muted)' }}>(empty response)</span>)
             }
           </div>
         )}
@@ -192,7 +192,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
       {isUser && (
         <div
           className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ml-2 mt-1"
-          style={{ backgroundColor: '#58a6ff', color: '#0d1117' }}
+          style={{ backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}
           title="You (Idan)"
         >
           I
@@ -209,11 +209,11 @@ function EmptyState() {
     <div className="flex flex-col items-center justify-center flex-1 gap-4 py-20">
       <div
         className="w-16 h-16 rounded-2xl flex items-center justify-center"
-        style={{ backgroundColor: '#21262d' }}
+        style={{ backgroundColor: 'var(--tf-surface-raised)' }}
       >
         <svg
           className="w-8 h-8"
-          style={{ color: '#8b8fc7' }}
+          style={{ color: 'var(--tf-accent)' }}
           fill="none"
           stroke="currentColor"
           strokeWidth={1.5}
@@ -227,10 +227,10 @@ function EmptyState() {
         </svg>
       </div>
       <div className="text-center">
-        <p className="text-sm font-medium" style={{ color: '#e6edf3' }}>
+        <p className="text-sm font-medium" style={{ color: 'var(--tf-text)' }}>
           Chat with Marcus, the CEO
         </p>
-        <p className="text-xs mt-1" style={{ color: '#484f58' }}>
+        <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
           Send a message to start a conversation. Marcus has full access
           to company tools and can manage projects, tasks, and team operations.
         </p>
@@ -245,10 +245,10 @@ type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
 function StatusBadge({ status }: { status: ConnectionStatus }) {
   const config: Record<ConnectionStatus, { color: string; label: string }> = {
-    connecting: { color: '#d29922', label: 'Connecting...' },
-    connected: { color: '#3fb950', label: 'Connected' },
-    disconnected: { color: '#484f58', label: 'Disconnected' },
-    error: { color: '#f85149', label: 'Error' },
+    connecting: { color: 'var(--tf-warning)', label: 'Connecting...' },
+    connected: { color: 'var(--tf-success)', label: 'Connected' },
+    disconnected: { color: 'var(--tf-text-muted)', label: 'Disconnected' },
+    error: { color: 'var(--tf-error)', label: 'Error' },
   };
 
   const { color, label } = config[status];
@@ -336,7 +336,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
               break;
 
             case 'thinking':
-              setThinkingContent((prev) => prev + (data.content || '💭 '));
+              setThinkingContent(data.content || 'Marcus is thinking...');
               break;
 
             case 'chunk':
@@ -455,15 +455,15 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
           <div className="flex items-center gap-3">
             <div
               className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
-              style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
+              style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
             >
               M
             </div>
             <div>
-              <h3 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>
                 Marcus — CEO Chat
               </h3>
-              <p className="text-xs" style={{ color: '#484f58' }}>
+              <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
                 AI Virtual Company Orchestrator
               </p>
             </div>
@@ -476,17 +476,17 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
                 onClick={handleClear}
                 className="text-xs px-2 py-1 rounded-lg transition-colors duration-200 cursor-pointer"
                 style={{
-                  backgroundColor: '#21262d',
-                  color: '#484f58',
-                  border: '1px solid #30363d',
+                  backgroundColor: 'var(--tf-surface-raised)',
+                  color: 'var(--tf-text-muted)',
+                  border: '1px solid var(--tf-border)',
                 }}
                 onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.color = '#f85149';
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = '#f85149';
+                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-error)';
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-error)';
                 }}
                 onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.color = '#484f58';
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = '#30363d';
+                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-muted)';
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
                 }}
               >
                 Clear
@@ -498,7 +498,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
 
       {/* Floating header: status + thinking toggle + clear */}
       {floating && (
-        <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid #21262d' }}>
+        <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
           <StatusBadge status={connectionStatus} />
           <div className="flex items-center gap-2">
             {/* Thinking toggle */}
@@ -508,9 +508,9 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
               style={{
                 padding: '2px 8px',
                 borderRadius: '4px',
-                border: '1px solid #30363d',
-                backgroundColor: showThinking ? '#21262d' : 'transparent',
-                color: '#484f58',
+                border: '1px solid var(--tf-border)',
+                backgroundColor: showThinking ? 'var(--tf-surface-raised)' : 'transparent',
+                color: 'var(--tf-text-muted)',
                 fontSize: '10px',
                 cursor: 'pointer',
               }}
@@ -521,9 +521,9 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
               <button
                 onClick={handleClear}
                 className="text-xs px-2 py-0.5 rounded transition-colors duration-200 cursor-pointer"
-                style={{ color: '#484f58', background: 'none', border: 'none' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#f85149'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#484f58'; }}
+                style={{ color: 'var(--tf-text-muted)', background: 'none', border: 'none' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-error)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-muted)'; }}
               >
                 Clear
               </button>
@@ -535,9 +535,9 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
       {/* Messages area */}
       <div
         className={`flex-1 overflow-y-auto ${floating ? 'px-3 py-3' : 'rounded-xl px-4 py-4'}`}
-        style={floating ? { backgroundColor: '#0d1117' } : {
-          backgroundColor: '#161b22',
-          border: '1px solid #30363d',
+        style={floating ? { backgroundColor: 'var(--tf-bg)' } : {
+          backgroundColor: 'var(--tf-surface)',
+          border: '1px solid var(--tf-border)',
         }}
       >
         {!hasMessages ? (
@@ -554,10 +554,10 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
             {/* Streaming response */}
             {streamingContent && (
               <>
-                {/* Thinking display */}
+                {/* Thinking display — shown when showThinking toggle is on */}
                 {showThinking && thinkingContent && (
-                  <div style={{ padding: '8px 12px', backgroundColor: '#0d1117', borderRadius: '8px', marginBottom: '4px', borderLeft: '2px solid #30363d' }}>
-                    <p style={{ color: '#484f58', fontSize: '11px', fontStyle: 'italic' }}>{thinkingContent}</p>
+                  <div style={{ padding: '8px 12px', backgroundColor: 'var(--tf-bg)', borderRadius: '8px', marginBottom: '4px', borderLeft: '2px solid var(--tf-border)' }}>
+                    <p style={{ color: 'var(--tf-text-muted)', fontSize: '11px', fontStyle: 'italic' }}>{thinkingContent}</p>
                   </div>
                 )}
                 <MessageBubble
@@ -574,22 +574,22 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
             {/* Waiting indicator (before first chunk arrives) */}
             {isWaiting && !streamingContent && (
               <>
-                {/* Thinking display during wait */}
-                {showThinking && thinkingContent && (
-                  <div style={{ padding: '8px 12px', backgroundColor: '#0d1117', borderRadius: '8px', marginBottom: '4px', borderLeft: '2px solid #30363d' }}>
-                    <p style={{ color: '#484f58', fontSize: '11px', fontStyle: 'italic' }}>{thinkingContent}</p>
+                {/* Thinking display during wait — always shown when thinkingContent is non-empty */}
+                {thinkingContent && (
+                  <div style={{ padding: '8px 12px', backgroundColor: 'var(--tf-bg)', borderRadius: '8px', marginBottom: '4px', borderLeft: '2px solid var(--tf-border)' }}>
+                    <p style={{ color: 'var(--tf-text-muted)', fontSize: '11px', fontStyle: 'italic' }}>{thinkingContent}</p>
                   </div>
                 )}
                 <div className="flex justify-start mb-3">
                   <div
                     className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2"
-                    style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
+                    style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
                   >
                     M
                   </div>
                   <div
                     className="rounded-2xl px-4 py-3"
-                    style={{ backgroundColor: '#21262d', borderBottomLeftRadius: '4px' }}
+                    style={{ backgroundColor: 'var(--tf-surface-raised)', borderBottomLeftRadius: '4px' }}
                   >
                     <div className="flex gap-1.5">
                       {[0, 1, 2].map((i) => (
@@ -597,7 +597,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
                           key={i}
                           className="w-2 h-2 rounded-full animate-pulse-dot"
                           style={{
-                            backgroundColor: '#8b8fc7',
+                            backgroundColor: 'var(--tf-accent)',
                             animationDelay: `${i * 0.3}s`,
                           }}
                         />
@@ -616,13 +616,13 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
       {/* Input area */}
       <div
         className={`flex items-end gap-2 flex-shrink-0 ${floating ? 'px-3 py-2' : 'mt-3'}`}
-        style={floating ? { borderTop: '1px solid #21262d' } : undefined}
+        style={floating ? { borderTop: '1px solid var(--tf-surface-raised)' } : undefined}
       >
         <div
           className="flex-1 rounded-xl overflow-hidden"
           style={{
-            backgroundColor: '#161b22',
-            border: '1px solid #30363d',
+            backgroundColor: 'var(--tf-surface)',
+            border: '1px solid var(--tf-border)',
           }}
         >
           <textarea
@@ -636,7 +636,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
             className="w-full resize-none px-4 py-3 text-sm outline-none"
             style={{
               backgroundColor: 'transparent',
-              color: '#e6edf3',
+              color: 'var(--tf-text)',
               maxHeight: '120px',
               minHeight: '44px',
             }}
@@ -653,8 +653,8 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
           disabled={isWaiting || !input.trim()}
           className="flex items-center justify-center w-11 h-11 rounded-xl transition-all duration-200 flex-shrink-0"
           style={{
-            backgroundColor: isWaiting || !input.trim() ? '#21262d' : '#8b8fc7',
-            color: isWaiting || !input.trim() ? '#30363d' : '#0d1117',
+            backgroundColor: isWaiting || !input.trim() ? 'var(--tf-surface-raised)' : 'var(--tf-accent)',
+            color: isWaiting || !input.trim() ? 'var(--tf-border)' : 'var(--tf-bg)',
             cursor: isWaiting || !input.trim() ? 'not-allowed' : 'pointer',
           }}
           title="Send message (Enter)"
@@ -676,7 +676,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
       </div>
 
       {!floating && (
-        <p className="text-xs mt-2 text-center" style={{ color: '#30363d' }}>
+        <p className="text-xs mt-2 text-center" style={{ color: 'var(--tf-border)' }}>
           Press Enter to send, Shift+Enter for newline
         </p>
       )}

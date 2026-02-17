@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { fetchConfig, updateConfig } from '../api/client';
 import type { AppConfig } from '../types';
+import { useThemeSwitch } from '../hooks/useTheme';
+import type { ThemeName } from '../hooks/useTheme';
 
 // ---- Types ----
 
@@ -8,24 +10,41 @@ interface SettingsPanelProps {
   onConfigUpdated?: () => void;
 }
 
-// ---- Constants ----
+// ---- CSS variable colour references (no hard-coded hex) ----
+
+const C = {
+  bg: 'var(--tf-bg)',
+  surface: 'var(--tf-surface)',
+  surfaceRaised: 'var(--tf-surface-raised)',
+  border: 'var(--tf-border)',
+  textPrimary: 'var(--tf-text)',
+  textSecondary: 'var(--tf-text-secondary)',
+  textMuted: 'var(--tf-text-muted)',
+  accent: 'var(--tf-accent-blue)',
+  accentDim: 'var(--tf-accent-dim)',
+  success: 'var(--tf-success)',
+  warning: 'var(--tf-warning)',
+  error: 'var(--tf-error)',
+} as const;
+
+// ---- Agent roster with correct IDs ----
 
 const AGENT_ROSTER = [
-  { id: 'marcus', role: 'CEO' },
-  { id: 'elena', role: 'CTO' },
-  { id: 'victor', role: 'Chief Researcher' },
-  { id: 'rachel', role: 'CISO' },
-  { id: 'jonathan', role: 'CFO' },
-  { id: 'sarah', role: 'VP Product' },
-  { id: 'david', role: 'VP Engineering' },
-  { id: 'james', role: 'Lead Backend' },
-  { id: 'priya', role: 'Lead Frontend' },
-  { id: 'lena', role: 'Lead Designer' },
-  { id: 'carlos', role: 'QA Lead' },
-  { id: 'nina', role: 'DevOps' },
-  { id: 'alex', role: 'Security Engineer' },
-  { id: 'maya', role: 'Data Engineer' },
-  { id: 'tom', role: 'Tech Writer' },
+  { id: 'ceo', role: 'CEO' },
+  { id: 'cto', role: 'CTO' },
+  { id: 'chief-researcher', role: 'Chief Researcher' },
+  { id: 'ciso', role: 'CISO' },
+  { id: 'cfo', role: 'CFO' },
+  { id: 'vp-product', role: 'VP Product' },
+  { id: 'vp-engineering', role: 'VP Engineering' },
+  { id: 'lead-backend', role: 'Lead Backend' },
+  { id: 'lead-frontend', role: 'Lead Frontend' },
+  { id: 'lead-designer', role: 'Lead Designer' },
+  { id: 'qa-lead', role: 'QA Lead' },
+  { id: 'devops', role: 'DevOps' },
+  { id: 'security-engineer', role: 'Security Engineer' },
+  { id: 'data-engineer', role: 'Data Engineer' },
+  { id: 'tech-writer', role: 'Tech Writer' },
 ];
 
 const POLL_INTERVAL_OPTIONS = [
@@ -35,515 +54,414 @@ const POLL_INTERVAL_OPTIONS = [
   { label: '30 seconds', value: 30000 },
 ];
 
-// ---- Colours ----
+const THEMES = [
+  { id: 'midnight', label: 'Midnight', description: 'Deep dark', preview: ['#0d1117', '#161b22', '#e6edf3'] },
+  { id: 'twilight', label: 'Twilight', description: 'Soft blue dark', preview: ['#0f1923', '#1a2332', '#d0d8e4'] },
+  { id: 'dawn', label: 'Dawn', description: 'Light mode', preview: ['#ffffff', '#f6f8fa', '#24292f'] },
+];
 
-const C = {
-  bg: '#0d1117',
-  surface: '#161b22',
-  surfaceRaised: '#21262d',
-  border: '#30363d',
-  textPrimary: '#e6edf3',
-  textSecondary: '#8b949e',
-  textMuted: '#484f58',
-  accent: '#58a6ff',
-  accentDim: '#1f6feb',
-  success: '#3fb950',
-  warning: '#d29922',
-  error: '#f85149',
-} as const;
+// ---- Shared input style helper ----
 
-// ---- Small shared primitives ----
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <h2
-      style={{
-        fontSize: '12px',
-        fontWeight: 600,
-        textTransform: 'uppercase',
-        letterSpacing: '0.07em',
-        color: C.textMuted,
-        marginBottom: '12px',
-      }}
-    >
-      {children}
-    </h2>
-  );
+function inputStyle(extra?: React.CSSProperties): React.CSSProperties {
+  return {
+    width: '100%',
+    padding: '8px 12px',
+    backgroundColor: C.surfaceRaised,
+    border: `1px solid ${C.border}`,
+    borderRadius: '6px',
+    color: C.textPrimary,
+    fontSize: '13px',
+    outline: 'none',
+    boxSizing: 'border-box',
+    ...extra,
+  };
 }
 
-function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+// ---- Section card ----
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div
       style={{
         backgroundColor: C.surface,
         border: `1px solid ${C.border}`,
-        borderRadius: '8px',
+        borderRadius: '12px',
         overflow: 'hidden',
-        ...style,
+        marginBottom: '16px',
       }}
     >
-      {children}
+      <div
+        style={{
+          padding: '14px 20px',
+          borderBottom: `1px solid ${C.border}`,
+        }}
+      >
+        <h3 style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>
+          {title}
+        </h3>
+      </div>
+      <div style={{ padding: '20px' }}>
+        {children}
+      </div>
     </div>
   );
 }
 
-function SavedBadge({ visible }: { visible: boolean }) {
-  return (
-    <span
-      aria-live="polite"
-      style={{
-        fontSize: '11px',
-        color: C.success,
-        fontWeight: 500,
-        opacity: visible ? 1 : 0,
-        transition: 'opacity 0.3s',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '4px',
-      }}
-    >
-      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-        <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke={C.success} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      Saved
-    </span>
-  );
-}
+// ---- Toggle switch ----
 
-// ---- Reusable inline field row ----
-
-interface InlineFieldProps {
+function Toggle({
+  value,
+  onChange,
+  label,
+  description,
+}: {
+  value: boolean;
+  onChange: (v: boolean) => void;
   label: string;
-  value: string;
-  placeholder?: string;
-  onSave: (v: string) => Promise<void>;
   description?: string;
-}
-
-function InlineField({ label, value: initialValue, placeholder, onSave, description }: InlineFieldProps) {
-  const [value, setValue] = useState(initialValue);
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Sync if parent value changes (config reload)
-  useEffect(() => {
-    setValue(initialValue);
-  }, [initialValue]);
-
-  const triggerSave = useCallback(
-    (v: string) => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = setTimeout(async () => {
-        setSaving(true);
-        await onSave(v);
-        setSaving(false);
-        setSaved(true);
-        if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
-        savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
-      }, 600);
-    },
-    [onSave]
-  );
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value;
-    setValue(v);
-    triggerSave(v);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
-    };
-  }, []);
-
-  const id = `settings-field-${label.replace(/\s+/g, '-').toLowerCase()}`;
-
+}) {
   return (
-    <div style={{ padding: '14px 16px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '4px' }}>
-        <label
-          htmlFor={id}
-          style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary }}
-        >
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
+      <div>
+        <div style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary, marginBottom: description ? '2px' : 0 }}>
           {label}
-        </label>
-        {saving ? (
-          <span style={{ fontSize: '11px', color: C.textMuted }}>Saving...</span>
-        ) : (
-          <SavedBadge visible={saved} />
+        </div>
+        {description && (
+          <div style={{ fontSize: '11px', color: C.textSecondary }}>{description}</div>
         )}
       </div>
-      {description && (
-        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '8px' }}>{description}</p>
-      )}
-      <input
-        id={id}
-        type="text"
-        value={value}
-        placeholder={placeholder}
-        onChange={handleChange}
+      <button
+        role="switch"
+        aria-checked={value}
+        onClick={() => onChange(!value)}
         style={{
-          width: '100%',
-          maxWidth: '360px',
-          padding: '7px 10px',
-          backgroundColor: C.surfaceRaised,
-          border: `1px solid ${C.border}`,
-          borderRadius: '5px',
-          color: C.textPrimary,
-          fontSize: '13px',
+          position: 'relative',
+          width: '44px',
+          height: '24px',
+          borderRadius: '12px',
+          border: `1px solid ${value ? C.accent : C.border}`,
+          cursor: 'pointer',
+          backgroundColor: value ? C.accentDim : C.surfaceRaised,
           outline: 'none',
-          boxSizing: 'border-box',
+          transition: 'background-color 0.2s',
+          flexShrink: 0,
+          padding: 0,
         }}
-        onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-        onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-      />
+        aria-label={label}
+        onFocus={(e) => { e.currentTarget.style.boxShadow = `0 0 0 2px ${C.accentDim}`; }}
+        onBlur={(e) => { e.currentTarget.style.boxShadow = 'none'; }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            top: '3px',
+            left: value ? '22px' : '3px',
+            width: '16px',
+            height: '16px',
+            borderRadius: '50%',
+            backgroundColor: value ? C.accent : C.textMuted,
+            transition: 'left 0.2s, background-color 0.2s',
+          }}
+          aria-hidden="true"
+        />
+      </button>
     </div>
   );
 }
 
-// ---- Agent name grid ----
+// ---- Theme selector (uses useThemeSwitch hook) ----
 
-interface AgentNameGridProps {
-  agentNames: Record<string, string>;
-  onSave: (id: string, name: string) => Promise<void>;
-}
+function ThemeSelector() {
+  const { setTheme, currentTheme } = useThemeSwitch();
 
-function AgentNameGrid({ agentNames, onSave }: AgentNameGridProps) {
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-        gap: '1px',
-        backgroundColor: C.border,
-      }}
-    >
-      {AGENT_ROSTER.map((agent) => {
-        const currentName = agentNames[agent.id] ?? '';
-        return (
-          <AgentNameCell
-            key={agent.id}
-            agentId={agent.id}
-            role={agent.role}
-            currentName={currentName}
-            onSave={(name) => onSave(agent.id, name)}
-          />
-        );
-      })}
+    <div>
+      <p style={{ fontSize: '12px', fontWeight: 600, color: C.textSecondary, marginBottom: '10px' }}>
+        Theme
+      </p>
+      <div style={{ display: 'flex', gap: '10px' }}>
+        {THEMES.map((t) => {
+          const selected = currentTheme === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTheme(t.id as ThemeName)}
+              style={{
+                flex: 1,
+                padding: '10px',
+                borderRadius: '8px',
+                border: `2px solid ${selected ? C.accent : C.border}`,
+                backgroundColor: C.surfaceRaised,
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'border-color 0.2s',
+                outline: 'none',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
+                {t.preview.map((color, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      width: '16px',
+                      height: '16px',
+                      borderRadius: '3px',
+                      backgroundColor: color,
+                      border: '1px solid rgba(255,255,255,0.1)',
+                    }}
+                  />
+                ))}
+              </div>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: selected ? C.accent : C.textPrimary }}>
+                {t.label}
+              </div>
+              <div style={{ fontSize: '10px', color: C.textMuted }}>
+                {t.description}
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-interface AgentNameCellProps {
+// ---- Agent name editor row ----
+
+function AgentNameRow({
+  agentId,
+  role,
+  currentName,
+  onSaved,
+}: {
   agentId: string;
   role: string;
   currentName: string;
-  onSave: (name: string) => Promise<void>;
-}
-
-function AgentNameCell({ agentId, role, currentName, onSave }: AgentNameCellProps) {
-  const [value, setValue] = useState(currentName);
-  const [saved, setSaved] = useState(false);
+  onSaved?: (id: string, name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(currentName);
   const [saving, setSaving] = useState(false);
-  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [saved, setSaved] = useState(false);
 
-  useEffect(() => {
-    setValue(currentName);
-  }, [currentName]);
-
-  const triggerSave = useCallback(
-    (v: string) => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = setTimeout(async () => {
-        setSaving(true);
-        await onSave(v);
-        setSaving(false);
-        setSaved(true);
-        if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
-        savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
-      }, 700);
-    },
-    [onSave]
-  );
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value;
-    setValue(v);
-    triggerSave(v);
+  const handleSave = async () => {
+    if (!draft.trim() || draft === currentName) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const config = await fetchConfig();
+      const updatedAgents = { ...(config?.agents ?? {}), [agentId]: draft.trim() };
+      await updateConfig({ agents: updatedAgents });
+      setSaved(true);
+      onSaved?.(agentId, draft.trim());
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      // silently fail
+    } finally {
+      setSaving(false);
+      setEditing(false);
+    }
   };
-
-  useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
-    };
-  }, []);
-
-  const inputId = `agent-name-${agentId}`;
 
   return (
     <div
       style={{
-        backgroundColor: C.surface,
-        padding: '12px 14px',
-      }}
-    >
-      <div style={{ marginBottom: '7px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <span
-            style={{
-              fontSize: '10px',
-              fontWeight: 600,
-              textTransform: 'uppercase',
-              letterSpacing: '0.06em',
-              color: C.textMuted,
-              display: 'block',
-            }}
-          >
-            {agentId}
-          </span>
-          <span style={{ fontSize: '11px', color: C.accent }}>{role}</span>
-        </div>
-        {saving ? (
-          <span style={{ fontSize: '10px', color: C.textMuted }}>...</span>
-        ) : (
-          <SavedBadge visible={saved} />
-        )}
-      </div>
-      <label htmlFor={inputId} style={{ position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0,0,0,0)' }}>
-        Name for {role}
-      </label>
-      <input
-        id={inputId}
-        type="text"
-        value={value}
-        onChange={handleChange}
-        style={{
-          width: '100%',
-          padding: '5px 8px',
-          backgroundColor: C.surfaceRaised,
-          border: `1px solid ${C.border}`,
-          borderRadius: '4px',
-          color: C.textPrimary,
-          fontSize: '12px',
-          outline: 'none',
-          boxSizing: 'border-box',
-        }}
-        onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-        onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-      />
-    </div>
-  );
-}
-
-// ---- Poll interval control ----
-
-interface PollIntervalControlProps {
-  value: number;
-  onSave: (v: number) => Promise<void>;
-}
-
-function PollIntervalControl({ value: initialValue, onSave }: PollIntervalControlProps) {
-  const [value, setValue] = useState(initialValue);
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    setValue(initialValue);
-  }, [initialValue]);
-
-  const handleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const v = Number(e.target.value);
-    setValue(v);
-    setSaving(true);
-    await onSave(v);
-    setSaving(false);
-    setSaved(true);
-    if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
-    savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
-    };
-  }, []);
-
-  return (
-    <div style={{ padding: '14px 16px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '4px' }}>
-        <label
-          htmlFor="settings-poll-interval"
-          style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary }}
-        >
-          Poll interval
-        </label>
-        {saving ? (
-          <span style={{ fontSize: '11px', color: C.textMuted }}>Saving...</span>
-        ) : (
-          <SavedBadge visible={saved} />
-        )}
-      </div>
-      <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '8px' }}>
-        How often the dashboard fetches updated data from the backend.
-      </p>
-      <select
-        id="settings-poll-interval"
-        value={value}
-        onChange={handleChange}
-        style={{
-          padding: '7px 10px',
-          backgroundColor: C.surfaceRaised,
-          border: `1px solid ${C.border}`,
-          borderRadius: '5px',
-          color: C.textPrimary,
-          fontSize: '13px',
-          outline: 'none',
-          cursor: 'pointer',
-          minWidth: '160px',
-        }}
-        onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-        onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-      >
-        {POLL_INTERVAL_OPTIONS.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-// ---- Theme selector ----
-
-const THEME_OPTIONS = [
-  { id: 'midnight', label: 'Midnight', desc: 'Deep dark', colors: ['#0d1117', '#161b22', '#e6edf3'] },
-  { id: 'twilight', label: 'Twilight', desc: 'Softer dark', colors: ['#0f1923', '#1a2332', '#d0d8e4'] },
-  { id: 'dawn', label: 'Dawn', desc: 'Light mode', colors: ['#ffffff', '#f6f8fa', '#24292f'] },
-];
-
-function ThemeSelector() {
-  const [selected, setSelected] = useState(localStorage.getItem('thunderflow_theme') ?? 'midnight');
-  return (
-    <div style={{ padding: '16px', display: 'flex', gap: '12px' }}>
-      {THEME_OPTIONS.map(t => (
-        <button
-          key={t.id}
-          onClick={() => { setSelected(t.id); localStorage.setItem('thunderflow_theme', t.id); }}
-          style={{
-            flex: 1,
-            padding: '12px',
-            borderRadius: '8px',
-            border: `2px solid ${selected === t.id ? C.accent : C.border}`,
-            backgroundColor: C.surfaceRaised,
-            cursor: 'pointer',
-            textAlign: 'left',
-            transition: 'border-color 0.2s',
-          }}
-        >
-          <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
-            {t.colors.map((c, i) => (
-              <div key={i} style={{ width: '20px', height: '20px', borderRadius: '4px', backgroundColor: c, border: '1px solid rgba(255,255,255,0.1)' }} />
-            ))}
-          </div>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: selected === t.id ? C.accent : C.textPrimary }}>{t.label}</div>
-          <div style={{ fontSize: '11px', color: C.textMuted }}>{t.desc}</div>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ---- Telegram configured badge ----
-
-function TelegramConfiguredBadge() {
-  const isConfigured = localStorage.getItem('thunderflow_telegram_configured') === 'true';
-  return (
-    <span
-      style={{
-        marginLeft: 'auto',
-        fontSize: '11px',
-        fontWeight: 500,
-        color: isConfigured ? '#3fb950' : '#484f58',
         display: 'flex',
         alignItems: 'center',
-        gap: '4px',
+        gap: '10px',
+        padding: '10px 14px',
+        borderRadius: '8px',
+        backgroundColor: C.surfaceRaised,
+        border: `1px solid ${C.border}`,
       }}
     >
-      {isConfigured ? (
+      {/* Avatar */}
+      <div
+        style={{
+          width: '32px',
+          height: '32px',
+          borderRadius: '50%',
+          backgroundColor: C.accentDim,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '12px',
+          fontWeight: 600,
+          color: C.textPrimary,
+          flexShrink: 0,
+        }}
+      >
+        {currentName.charAt(0).toUpperCase()}
+      </div>
+
+      {/* Role label */}
+      <div style={{ flex: '0 0 160px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 500, color: C.textSecondary }}>{role}</div>
+        <div style={{ fontSize: '10px', color: C.textMuted }}>id: {agentId}</div>
+      </div>
+
+      {/* Name field */}
+      {editing ? (
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleSave();
+            if (e.key === 'Escape') { setEditing(false); setDraft(currentName); }
+          }}
+          autoFocus
+          style={{ ...inputStyle(), flex: 1 }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+        />
+      ) : (
+        <div style={{ flex: 1, fontSize: '13px', fontWeight: 500, color: C.textPrimary }}>
+          {currentName}
+        </div>
+      )}
+
+      {/* Saved indicator */}
+      {saved && (
+        <span style={{ fontSize: '11px', color: C.success, flexShrink: 0 }}>Saved!</span>
+      )}
+
+      {/* Edit / Save / Cancel buttons */}
+      {editing ? (
         <>
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-            <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="#3fb950" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          Configured
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            style={{
+              padding: '5px 12px',
+              borderRadius: '6px',
+              border: `1px solid ${C.accent}`,
+              backgroundColor: C.accentDim,
+              color: C.textPrimary,
+              fontSize: '12px',
+              cursor: saving ? 'default' : 'pointer',
+              opacity: saving ? 0.7 : 1,
+            }}
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={() => { setEditing(false); setDraft(currentName); }}
+            style={{
+              padding: '5px 10px',
+              borderRadius: '6px',
+              border: `1px solid ${C.border}`,
+              backgroundColor: 'transparent',
+              color: C.textSecondary,
+              fontSize: '12px',
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
         </>
       ) : (
-        'Not configured'
+        <button
+          onClick={() => { setEditing(true); setDraft(currentName); }}
+          style={{
+            padding: '5px 10px',
+            borderRadius: '6px',
+            border: `1px solid ${C.border}`,
+            backgroundColor: 'transparent',
+            color: C.textSecondary,
+            fontSize: '12px',
+            cursor: 'pointer',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textSecondary; }}
+        >
+          Rename
+        </button>
       )}
-    </span>
+    </div>
   );
 }
 
-// ---- Telegram settings fields ----
+// ---- Telegram section ----
 
-function TelegramSettingsFields() {
-  const [token, setToken] = useState(localStorage.getItem('thunderflow_telegram_token') ?? '');
-  const [chatId, setChatId] = useState(localStorage.getItem('thunderflow_telegram_chatid') ?? '');
+function TelegramSection() {
+  const [botToken, setBotToken] = useState('');
+  const [chatId, setChatId] = useState('');
+  const [configured, setConfigured] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  useEffect(() => {
+    setBotToken(localStorage.getItem('thunderflow_telegram_token') ?? '');
+    setChatId(localStorage.getItem('thunderflow_telegram_chatid') ?? '');
+    setConfigured(localStorage.getItem('thunderflow_telegram_configured') === 'true');
+  }, []);
+
   const handleSave = () => {
-    localStorage.setItem('thunderflow_telegram_token', token);
-    localStorage.setItem('thunderflow_telegram_chatid', chatId);
-    if (token && chatId) {
+    if (botToken && chatId) {
+      localStorage.setItem('thunderflow_telegram_token', botToken);
+      localStorage.setItem('thunderflow_telegram_chatid', chatId);
       localStorage.setItem('thunderflow_telegram_configured', 'true');
-    } else {
-      localStorage.setItem('thunderflow_telegram_configured', 'false');
+      setConfigured(true);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
     }
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleClear = () => {
+    localStorage.removeItem('thunderflow_telegram_token');
+    localStorage.removeItem('thunderflow_telegram_chatid');
+    localStorage.removeItem('thunderflow_telegram_configured');
+    setBotToken('');
+    setChatId('');
+    setConfigured(false);
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {configured && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 12px',
+            backgroundColor: 'rgba(63,185,80,0.08)',
+            border: '1px solid rgba(63,185,80,0.25)',
+            borderRadius: '6px',
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 8l4 4 8-8" stroke={C.success} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span style={{ fontSize: '12px', color: C.success }}>Telegram is configured</span>
+        </div>
+      )}
+
       <div>
         <label
           htmlFor="telegram-token"
-          style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
+          style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
         >
           Bot Token
         </label>
         <input
           id="telegram-token"
           type="password"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
+          value={botToken}
+          onChange={(e) => setBotToken(e.target.value)}
           placeholder="1234567890:ABCdef..."
-          style={{
-            width: '100%',
-            padding: '7px 10px',
-            backgroundColor: C.surfaceRaised,
-            border: `1px solid ${C.border}`,
-            borderRadius: '5px',
-            color: C.textPrimary,
-            fontSize: '13px',
-            outline: 'none',
-            boxSizing: 'border-box',
-          }}
+          style={inputStyle()}
           onFocus={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; }}
           onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
         />
       </div>
+
       <div>
         <label
           htmlFor="telegram-chatid"
-          style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
+          style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
         >
           Chat ID
         </label>
@@ -553,444 +471,269 @@ function TelegramSettingsFields() {
           value={chatId}
           onChange={(e) => setChatId(e.target.value)}
           placeholder="-1001234567890"
-          style={{
-            width: '100%',
-            padding: '7px 10px',
-            backgroundColor: C.surfaceRaised,
-            border: `1px solid ${C.border}`,
-            borderRadius: '5px',
-            color: C.textPrimary,
-            fontSize: '13px',
-            outline: 'none',
-            boxSizing: 'border-box',
-          }}
+          style={inputStyle()}
           onFocus={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; }}
           onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
         />
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
         <button
           onClick={handleSave}
+          disabled={!botToken || !chatId}
           style={{
             padding: '7px 16px',
-            borderRadius: '5px',
-            border: '1px solid #2ca5e0',
-            backgroundColor: 'rgba(44,165,224,0.12)',
-            color: '#2ca5e0',
-            fontSize: '12px',
-            fontWeight: 500,
-            cursor: 'pointer',
-            transition: 'background-color 0.2s',
+            borderRadius: '6px',
+            border: `1px solid ${!botToken || !chatId ? C.border : '#2ca5e0'}`,
+            backgroundColor: !botToken || !chatId ? 'transparent' : 'rgba(44,165,224,0.12)',
+            color: !botToken || !chatId ? C.textMuted : '#2ca5e0',
+            fontSize: '13px',
+            cursor: !botToken || !chatId ? 'default' : 'pointer',
+            opacity: !botToken || !chatId ? 0.5 : 1,
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(44,165,224,0.22)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'rgba(44,165,224,0.12)'; }}
         >
-          Save Telegram Settings
+          Save Credentials
         </button>
-        {saved && (
-          <span style={{ fontSize: '11px', color: C.success, display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-              <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke={C.success} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            Saved
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---- Server settings section ----
-
-interface ServerSettingsProps {
-  server: AppConfig['server'] | null;
-  configFilePath?: string;
-}
-
-function ServerSettings({ server, configFilePath }: ServerSettingsProps) {
-  const filePath = configFilePath ?? 'company_data/config.yaml';
-
-  return (
-    <div>
-      <Card>
-        {server ? (
-          <div>
-            {[
-              { label: 'Host', value: server.host },
-              { label: 'Port', value: String(server.port) },
-              { label: 'Auto-open browser', value: server.auto_open_browser ? 'Enabled' : 'Disabled' },
-            ].map((row, idx, arr) => (
-              <div
-                key={row.label}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '12px 16px',
-                  borderBottom: idx < arr.length - 1 ? `1px solid ${C.border}` : 'none',
-                }}
-              >
-                <span style={{ fontSize: '13px', color: C.textSecondary }}>{row.label}</span>
-                <span
-                  style={{
-                    fontSize: '13px',
-                    fontWeight: 500,
-                    color: C.textPrimary,
-                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-                  }}
-                >
-                  {row.value}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ padding: '16px', fontSize: '13px', color: C.textMuted }}>
-            Server information unavailable.
-          </div>
-        )}
-      </Card>
-
-      <div
-        style={{
-          marginTop: '12px',
-          padding: '14px 16px',
-          backgroundColor: 'rgba(210,153,34,0.08)',
-          border: `1px solid rgba(210,153,34,0.25)`,
-          borderRadius: '8px',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '10px',
-          }}
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 16 16"
-            fill="none"
-            aria-hidden="true"
-            style={{ flexShrink: 0, marginTop: '1px' }}
-          >
-            <path
-              d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM0 8a8 8 0 1116 0A8 8 0 010 8z"
-              fill={C.warning}
-              fillOpacity="0.8"
-            />
-            <path d="M8 4a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 018 4zM8 10.5a1 1 0 110 2 1 1 0 010-2z" fill={C.warning} />
-          </svg>
-          <div>
-            <p style={{ fontSize: '13px', fontWeight: 500, color: C.warning, marginBottom: '6px' }}>
-              Server settings require a restart
-            </p>
-            <p style={{ fontSize: '12px', color: C.textSecondary, lineHeight: '1.5', marginBottom: '10px' }}>
-              To change host, port, or auto-open browser settings, edit the config file directly then restart
-              the server process.
-            </p>
-            <div style={{ marginBottom: '8px' }}>
-              <span style={{ fontSize: '11px', color: C.textMuted, display: 'block', marginBottom: '4px' }}>
-                Config file path
-              </span>
-              <code
-                style={{
-                  fontSize: '12px',
-                  color: C.accent,
-                  backgroundColor: C.surfaceRaised,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: '4px',
-                  padding: '3px 8px',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-                  display: 'inline-block',
-                }}
-              >
-                {filePath}
-              </code>
-            </div>
-            <div
-              style={{
-                backgroundColor: C.surfaceRaised,
-                border: `1px solid ${C.border}`,
-                borderRadius: '4px',
-                padding: '10px 12px',
-              }}
-            >
-              <p style={{ fontSize: '11px', color: C.textMuted, fontWeight: 600, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                How to apply changes
-              </p>
-              <ol style={{ paddingLeft: '14px', margin: 0 }}>
-                {[
-                  `Open ${filePath} in a text editor`,
-                  'Edit the desired server settings under the server: key',
-                  'Save the file',
-                  'Stop thunderflow-web (Ctrl+C)',
-                  'Run thunderflow-web again',
-                ].map((step, i) => (
-                  <li
-                    key={i}
-                    style={{
-                      fontSize: '12px',
-                      color: C.textSecondary,
-                      lineHeight: '1.6',
-                      paddingLeft: '4px',
-                    }}
-                  >
-                    {step}
-                  </li>
-                ))}
-              </ol>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---- Loading skeleton ----
-
-function SettingsSkeleton() {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      {[1, 2, 3, 4].map((i) => (
-        <div key={i}>
-          <div
+        {configured && (
+          <button
+            onClick={handleClear}
             style={{
-              width: '80px',
-              height: '10px',
-              backgroundColor: C.surfaceRaised,
-              borderRadius: '4px',
-              marginBottom: '12px',
-              animation: 'pulse 1.5s ease-in-out infinite',
-            }}
-          />
-          <div
-            style={{
-              height: '60px',
-              backgroundColor: C.surface,
+              padding: '7px 14px',
+              borderRadius: '6px',
               border: `1px solid ${C.border}`,
-              borderRadius: '8px',
-              animation: 'pulse 1.5s ease-in-out infinite',
+              backgroundColor: 'transparent',
+              color: C.textSecondary,
+              fontSize: '13px',
+              cursor: 'pointer',
             }}
-          />
-        </div>
-      ))}
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
-        }
-      `}</style>
+            onMouseEnter={(e) => { e.currentTarget.style.color = C.error; e.currentTarget.style.borderColor = C.error; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = C.textSecondary; e.currentTarget.style.borderColor = C.border; }}
+          >
+            Clear
+          </button>
+        )}
+        {saved && <span style={{ fontSize: '12px', color: C.success }}>Saved!</span>}
+      </div>
     </div>
   );
 }
 
-// ---- Main component ----
+// ---- Main Settings Panel ----
 
 export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
-  const loadConfig = useCallback(async () => {
-    setLoadError(false);
-    const data = await fetchConfig();
-    if (data) {
-      setConfig(data);
-    } else {
-      setLoadError(true);
-    }
-    setLoading(false);
-  }, []);
+  // Local form state (mirrors config)
+  const [userName, setUserName] = useState('');
+  const [pollInterval, setPollInterval] = useState(5000);
+  const [autoOpen, setAutoOpen] = useState(true);
 
   useEffect(() => {
-    loadConfig();
-  }, [loadConfig]);
-
-  const patchConfig = useCallback(
-    async (updates: Record<string, unknown>): Promise<void> => {
-      const ok = await updateConfig(updates);
-      if (ok) {
-        onConfigUpdated?.();
-        // Refresh local config to reflect persisted state
-        const fresh = await fetchConfig();
-        if (fresh) setConfig(fresh);
+    fetchConfig().then((cfg) => {
+      if (cfg) {
+        setConfig(cfg);
+        setUserName(cfg.user?.name ?? '');
+        setPollInterval(cfg.ui?.poll_interval_ms ?? 5000);
+        setAutoOpen(cfg.server?.auto_open_browser ?? true);
       }
-    },
-    [onConfigUpdated]
-  );
+    });
+  }, []);
 
-  const handleUserNameSave = useCallback(
-    async (name: string) => {
-      await patchConfig({ user: { name } });
-    },
-    [patchConfig]
-  );
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
 
-  const handleAgentNameSave = useCallback(
-    async (id: string, name: string) => {
-      await patchConfig({ agents: { [id]: name } });
-    },
-    [patchConfig]
-  );
+    const patch: Partial<AppConfig> = {
+      user: { name: userName.trim() },
+      ui: { theme: config?.ui?.theme ?? 'midnight', ...(config?.ui ?? {}), poll_interval_ms: pollInterval },
+      server: { host: config?.server?.host ?? '', port: config?.server?.port ?? 3000, ...(config?.server ?? {}), auto_open_browser: autoOpen },
+    };
 
-  const handlePollIntervalSave = useCallback(
-    async (ms: number) => {
-      await patchConfig({ ui: { poll_interval_ms: ms } });
-    },
-    [patchConfig]
-  );
+    try {
+      await updateConfig(patch);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+      onConfigUpdated?.();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const agentNameMap: Record<string, string> = config?.agents ?? {};
+
+  const handleAgentSaved = (id: string, name: string) => {
+    setConfig((prev) => prev ? {
+      ...prev,
+      agents: { ...(prev.agents ?? {}), [id]: name },
+    } : prev);
+    onConfigUpdated?.();
+  };
 
   return (
-    <div
-      style={{
-        maxWidth: '860px',
-        margin: '0 auto',
-        paddingBottom: '48px',
-      }}
-    >
-      {/* Page header */}
-      <div style={{ marginBottom: '28px' }}>
-        <h1 style={{ fontSize: '18px', fontWeight: 600, color: C.textPrimary, marginBottom: '4px' }}>
+    <div style={{ maxWidth: '720px', margin: '0 auto' }} className="animate-fade-in">
+      <div style={{ marginBottom: '24px' }}>
+        <h2 style={{ fontSize: '18px', fontWeight: 700, color: C.textPrimary, marginBottom: '4px' }}>
           Settings
-        </h1>
+        </h2>
         <p style={{ fontSize: '13px', color: C.textSecondary }}>
-          Manage your profile, team names, and dashboard preferences.
+          Manage your ThunderFlow dashboard configuration.
         </p>
       </div>
 
-      {loading && <SettingsSkeleton />}
+      {/* General settings */}
+      <Section title="General">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div>
+            <label
+              htmlFor="settings-username"
+              style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
+            >
+              Your Name (Board Head)
+            </label>
+            <input
+              id="settings-username"
+              type="text"
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              placeholder="e.g. Idan"
+              style={inputStyle({ maxWidth: '320px' })}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
 
-      {!loading && loadError && (
-        <div
-          role="alert"
+          <div>
+            <label
+              htmlFor="settings-poll"
+              style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
+            >
+              Poll Interval
+            </label>
+            <select
+              id="settings-poll"
+              value={pollInterval}
+              onChange={(e) => setPollInterval(Number(e.target.value))}
+              style={{ ...inputStyle(), maxWidth: '200px', cursor: 'pointer' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            >
+              {POLL_INTERVAL_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <Toggle
+            value={autoOpen}
+            onChange={setAutoOpen}
+            label="Auto-open browser"
+            description="Automatically open the dashboard when thunderflow-web starts"
+          />
+        </div>
+      </Section>
+
+      {/* Appearance */}
+      <Section title="Appearance">
+        <ThemeSelector />
+      </Section>
+
+      {/* Agent names */}
+      <Section title="Agent Names">
+        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
+          Customise the display name for each AI agent. Click "Rename" to edit.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {AGENT_ROSTER.map((agent) => (
+            <AgentNameRow
+              key={agent.id}
+              agentId={agent.id}
+              role={agent.role}
+              currentName={agentNameMap[agent.id] ?? agent.role}
+              onSaved={handleAgentSaved}
+            />
+          ))}
+        </div>
+      </Section>
+
+      {/* Telegram */}
+      <Section title="Telegram Integration">
+        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
+          Configure Telegram to continue CEO conversations from your phone.
+          Create a bot via @BotFather, then paste the credentials below.
+        </p>
+        <TelegramSection />
+      </Section>
+
+      {/* Save button */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          padding: '20px 0',
+        }}
+      >
+        <button
+          onClick={handleSave}
+          disabled={saving}
           style={{
-            padding: '14px 16px',
-            backgroundColor: 'rgba(248,81,73,0.1)',
-            border: `1px solid rgba(248,81,73,0.3)`,
+            padding: '9px 24px',
             borderRadius: '8px',
-            fontSize: '13px',
-            color: C.error,
+            border: `1px solid ${C.accent}`,
+            backgroundColor: C.accentDim,
+            color: C.textPrimary,
+            fontSize: '14px',
+            fontWeight: 500,
+            cursor: saving ? 'default' : 'pointer',
+            opacity: saving ? 0.7 : 1,
             display: 'flex',
             alignItems: 'center',
-            gap: '10px',
+            gap: '8px',
           }}
         >
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <circle cx="7" cy="7" r="6" stroke={C.error} strokeWidth="1.5" />
-            <path d="M7 4v3m0 2.5v.5" stroke={C.error} strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-          Failed to load configuration. Check that the thunderflow-web server is running.
-          <button
-            onClick={loadConfig}
-            style={{
-              marginLeft: 'auto',
-              padding: '4px 12px',
-              borderRadius: '4px',
-              border: `1px solid ${C.error}`,
-              backgroundColor: 'transparent',
-              color: C.error,
-              fontSize: '12px',
-              cursor: 'pointer',
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      )}
+          {saving && (
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+              style={{ animation: 'spin 1s linear infinite' }}
+            >
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.3" />
+              <path d="M12 2a10 10 0 0110 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          )}
+          {saving ? 'Saving...' : 'Save Settings'}
+        </button>
 
-      {!loading && config && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+        {saveSuccess && (
+          <span style={{ fontSize: '13px', color: C.success }}>
+            Settings saved successfully!
+          </span>
+        )}
 
-          {/* ---- Profile ---- */}
-          <section aria-labelledby="section-profile">
-            <SectionTitle>
-              <span id="section-profile">Profile</span>
-            </SectionTitle>
-            <Card>
-              <InlineField
-                label="Your name (Board Head)"
-                value={config.user?.name ?? ''}
-                placeholder="e.g. Idan"
-                description="This is how agents will address you in conversations and reports."
-                onSave={handleUserNameSave}
-              />
-            </Card>
-          </section>
+        {saveError && (
+          <span role="alert" style={{ fontSize: '13px', color: C.error }}>
+            {saveError}
+          </span>
+        )}
+      </div>
 
-          {/* ---- Team Names ---- */}
-          <section aria-labelledby="section-team">
-            <SectionTitle>
-              <span id="section-team">Team Names</span>
-            </SectionTitle>
-            <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '10px' }}>
-              Each name saves automatically when you stop typing.
-            </p>
-            <Card>
-              <AgentNameGrid
-                agentNames={config.agents ?? {}}
-                onSave={handleAgentNameSave}
-              />
-            </Card>
-          </section>
-
-          {/* ---- UI Preferences ---- */}
-          <section aria-labelledby="section-ui">
-            <SectionTitle>
-              <span id="section-ui">UI Preferences</span>
-            </SectionTitle>
-            <Card>
-              <PollIntervalControl
-                value={config.ui?.poll_interval_ms ?? 5000}
-                onSave={handlePollIntervalSave}
-              />
-            </Card>
-          </section>
-
-          {/* ---- Appearance ---- */}
-          <section aria-labelledby="section-appearance">
-            <SectionTitle>
-              <span id="section-appearance">Appearance</span>
-            </SectionTitle>
-            <Card>
-              <ThemeSelector />
-            </Card>
-          </section>
-
-          {/* ---- Telegram Integration ---- */}
-          <section aria-labelledby="section-telegram">
-            <SectionTitle><span id="section-telegram">Telegram Integration</span></SectionTitle>
-            <Card>
-              <div style={{ padding: '16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-                  <div style={{ width: '32px', height: '32px', borderRadius: '8px', backgroundColor: '#2ca5e0', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
-                      <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
-                    </svg>
-                  </div>
-                  <div>
-                    <p style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary }}>Telegram Bot</p>
-                    <p style={{ fontSize: '12px', color: C.textSecondary }}>Continue sessions from your phone</p>
-                  </div>
-                  <TelegramConfiguredBadge />
-                </div>
-                <TelegramSettingsFields />
-              </div>
-            </Card>
-          </section>
-
-          {/* ---- Server Settings ---- */}
-          <section aria-labelledby="section-server">
-            <SectionTitle>
-              <span id="section-server">Server Settings</span>
-            </SectionTitle>
-            <ServerSettings server={config.server ?? null} />
-          </section>
-
-        </div>
-      )}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }

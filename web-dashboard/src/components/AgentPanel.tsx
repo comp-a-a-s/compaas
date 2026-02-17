@@ -10,55 +10,55 @@ interface AgentPanelProps {
 // ---- Helpers ----
 function modelBadge(model: string): { bg: string; text: string; label: string } {
   const m = model.toLowerCase();
-  if (m.includes('opus')) return { bg: '#1c2233', text: '#8b8fc7', label: 'Opus' };
-  if (m.includes('sonnet')) return { bg: '#1c2940', text: '#58a6ff', label: 'Sonnet' };
-  if (m.includes('haiku')) return { bg: '#1a2e25', text: '#3fb950', label: 'Haiku' };
-  return { bg: '#21262d', text: '#8b949e', label: model };
+  if (m.includes('opus')) return { bg: '#1c2233', text: 'var(--tf-accent)', label: 'Opus' };
+  if (m.includes('sonnet')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)', label: 'Sonnet' };
+  if (m.includes('haiku')) return { bg: '#1a2e25', text: 'var(--tf-success)', label: 'Haiku' };
+  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)', label: model };
 }
 
 function avatarColor(model: string): string {
   const m = model.toLowerCase();
-  if (m.includes('opus')) return '#8b8fc7';
-  if (m.includes('sonnet')) return '#58a6ff';
-  if (m.includes('haiku')) return '#3fb950';
-  return '#8b949e';
+  if (m.includes('opus')) return 'var(--tf-accent)';
+  if (m.includes('sonnet')) return 'var(--tf-accent-blue)';
+  if (m.includes('haiku')) return 'var(--tf-success)';
+  return 'var(--tf-text-secondary)';
 }
 
 function statusStyle(status: string): { dot: string; label: string } {
   const s = status.toLowerCase();
-  if (s === 'permanent' || s === 'active') return { dot: '#3fb950', label: 'Active' };
-  if (s === 'available') return { dot: '#d29922', label: 'Available' };
-  if (s === 'on_demand') return { dot: '#58a6ff', label: 'On-demand' };
-  if (s === 'busy') return { dot: '#d29922', label: 'Busy' };
-  return { dot: '#484f58', label: status };
+  if (s === 'permanent' || s === 'active') return { dot: 'var(--tf-success)', label: 'Active' };
+  if (s === 'available') return { dot: 'var(--tf-warning)', label: 'Available' };
+  if (s === 'on_demand') return { dot: 'var(--tf-accent-blue)', label: 'On-demand' };
+  if (s === 'busy') return { dot: 'var(--tf-warning)', label: 'Busy' };
+  return { dot: 'var(--tf-text-muted)', label: status };
 }
 
 function priorityBadge(priority: string): { bg: string; text: string } {
   const p = priority.toUpperCase();
-  if (p === 'P0') return { bg: '#2d1519', text: '#f85149' };
-  if (p === 'P1') return { bg: '#2d2213', text: '#d29922' };
-  if (p === 'P2') return { bg: '#2d2213', text: '#d29922' };
-  return { bg: '#21262d', text: '#484f58' };
+  if (p === 'P0') return { bg: '#2d1519', text: 'var(--tf-error)' };
+  if (p === 'P1') return { bg: '#2d2213', text: 'var(--tf-warning)' };
+  if (p === 'P2') return { bg: '#2d2213', text: 'var(--tf-warning)' };
+  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-muted)' };
 }
 
 function taskStatusColor(status: string): string {
   const s = status.toLowerCase();
-  if (s === 'done' || s === 'completed') return '#3fb950';
-  if (s === 'in_progress' || s === 'in progress') return '#58a6ff';
-  if (s === 'blocked') return '#f85149';
-  if (s === 'review') return '#8b8fc7';
-  return '#8b949e';
+  if (s === 'done' || s === 'completed') return 'var(--tf-success)';
+  if (s === 'in_progress' || s === 'in progress') return 'var(--tf-accent-blue)';
+  if (s === 'blocked') return 'var(--tf-error)';
+  if (s === 'review') return 'var(--tf-accent)';
+  return 'var(--tf-text-secondary)';
 }
 
 function actionBadgeStyle(action: string): { bg: string; text: string } {
   const a = action.toUpperCase();
-  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1c2940', text: '#58a6ff' };
-  if (a.includes('COMPLETED') || a.includes('DONE')) return { bg: '#1a2e25', text: '#3fb950' };
-  if (a.includes('BLOCKED') || a.includes('ERROR')) return { bg: '#2d1519', text: '#f85149' };
-  if (a.includes('ASSIGNED')) return { bg: '#1c2233', text: '#8b8fc7' };
-  if (a.includes('UPDATED')) return { bg: '#2d2213', text: '#d29922' };
-  if (a.includes('CREATED')) return { bg: '#1c2940', text: '#58a6ff' };
-  return { bg: '#21262d', text: '#8b949e' };
+  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
+  if (a.includes('COMPLETED') || a.includes('DONE')) return { bg: '#1a2e25', text: 'var(--tf-success)' };
+  if (a.includes('BLOCKED') || a.includes('ERROR')) return { bg: '#2d1519', text: 'var(--tf-error)' };
+  if (a.includes('ASSIGNED')) return { bg: '#1c2233', text: 'var(--tf-accent)' };
+  if (a.includes('UPDATED')) return { bg: '#2d2213', text: 'var(--tf-warning)' };
+  if (a.includes('CREATED')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
+  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)' };
 }
 
 // ---- Skeleton ----
@@ -83,8 +83,8 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
       onClick={onSelect}
       className="w-full text-left rounded-xl p-4 flex flex-col gap-3 transition-all duration-200 cursor-pointer"
       style={{
-        backgroundColor: selected ? '#21262d' : '#161b22',
-        border: `1px solid ${selected ? '#8b8fc7' : '#30363d'}`,
+        backgroundColor: selected ? 'var(--tf-surface-raised)' : 'var(--tf-surface)',
+        border: `1px solid ${selected ? 'var(--tf-accent)' : 'var(--tf-border)'}`,
         outline: 'none',
       }}
       onMouseEnter={(e) => {
@@ -94,7 +94,7 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
       }}
       onMouseLeave={(e) => {
         if (!selected) {
-          (e.currentTarget as HTMLButtonElement).style.borderColor = '#30363d';
+          (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
         }
       }}
     >
@@ -102,7 +102,7 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
       <div className="flex items-start justify-between">
         <div
           className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
-          style={{ backgroundColor: color, color: '#0d1117' }}
+          style={{ backgroundColor: color, color: 'var(--tf-bg)' }}
         >
           {initial}
         </div>
@@ -120,10 +120,10 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
 
       {/* Name + role */}
       <div>
-        <p className="text-sm font-semibold leading-tight" style={{ color: '#e6edf3' }}>
+        <p className="text-sm font-semibold leading-tight" style={{ color: 'var(--tf-text)' }}>
           {agent.name}
         </p>
-        <p className="text-xs mt-0.5 leading-tight" style={{ color: '#8b949e' }}>
+        <p className="text-xs mt-0.5 leading-tight" style={{ color: 'var(--tf-text-secondary)' }}>
           {agent.role}
         </p>
       </div>
@@ -139,7 +139,7 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
         {agent.team && (
           <span
             className="text-xs px-2 py-0.5 rounded-full"
-            style={{ backgroundColor: '#0d1117', color: '#484f58', border: '1px solid #30363d' }}
+            style={{ backgroundColor: 'var(--tf-bg)', color: 'var(--tf-text-muted)', border: '1px solid var(--tf-border)' }}
           >
             {agent.team}
           </span>
@@ -171,25 +171,25 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
   return (
     <div
       className="rounded-xl flex flex-col h-full animate-slide-in-right overflow-hidden"
-      style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
+      style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
     >
       {/* Header */}
       <div
         className="px-5 py-4 flex items-start justify-between flex-shrink-0"
-        style={{ borderBottom: '1px solid #21262d' }}
+        style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
       >
         <div className="flex items-center gap-3">
           <div
             className="w-12 h-12 rounded-full flex items-center justify-center text-base font-bold flex-shrink-0"
-            style={{ backgroundColor: color, color: '#0d1117' }}
+            style={{ backgroundColor: color, color: 'var(--tf-bg)' }}
           >
             {initial}
           </div>
           <div>
-            <h3 className="text-sm font-bold" style={{ color: '#e6edf3' }}>
+            <h3 className="text-sm font-bold" style={{ color: 'var(--tf-text)' }}>
               {agent.name}
             </h3>
-            <p className="text-xs" style={{ color: '#8b949e' }}>
+            <p className="text-xs" style={{ color: 'var(--tf-text-secondary)' }}>
               {agent.role}
             </p>
             <div className="flex items-center gap-2 mt-1.5">
@@ -209,10 +209,10 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
         <button
           onClick={onClose}
           className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer"
-          style={{ color: '#484f58', backgroundColor: 'transparent' }}
+          style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
           aria-label="Close detail panel"
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
           }}
           onMouseLeave={(e) => {
             (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
@@ -229,10 +229,10 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
         {/* Description */}
         {agent.description && (
           <section aria-label="Agent description">
-            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
+            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
               Description
             </h4>
-            <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
               {agent.description}
             </p>
           </section>
@@ -240,10 +240,10 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
 
         {/* Model info */}
         <section aria-label="Model info">
-          <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
+          <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
             Model
           </h4>
-          <p className="text-xs" style={{ color: '#e6edf3' }}>
+          <p className="text-xs" style={{ color: 'var(--tf-text)' }}>
             {agent.model}
           </p>
         </section>
@@ -251,10 +251,10 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
         {/* Expertise */}
         {agent.expertise && (
           <section aria-label="Agent expertise">
-            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
+            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
               Expertise
             </h4>
-            <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
               {agent.expertise}
             </p>
           </section>
@@ -263,7 +263,7 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
         {/* Tools */}
         {tools.length > 0 && (
           <section aria-label="Agent tools">
-            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
+            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
               Tools
             </h4>
             <div className="flex flex-wrap gap-1.5">
@@ -271,7 +271,7 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
                 <span
                   key={tool}
                   className="text-xs px-2 py-0.5 rounded-full"
-                  style={{ backgroundColor: '#21262d', color: '#58a6ff', border: '1px solid #30363d' }}
+                  style={{ backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-accent-blue)', border: '1px solid var(--tf-border)' }}
                 >
                   {tool}
                 </span>
@@ -282,28 +282,28 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
 
         {/* Assigned Tasks */}
         <section aria-label="Assigned tasks">
-          <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
+          <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
             Assigned Tasks ({assignedTasks.length})
           </h4>
           {assignedTasks.length === 0 ? (
-            <p className="text-xs" style={{ color: '#484f58' }}>
+            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
               No tasks assigned
             </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr style={{ borderBottom: '1px solid #21262d' }}>
-                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: '#484f58' }}>
+                  <tr style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
+                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: 'var(--tf-text-muted)' }}>
                       Task
                     </th>
-                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: '#484f58' }}>
+                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: 'var(--tf-text-muted)' }}>
                       Project
                     </th>
-                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: '#484f58' }}>
+                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: 'var(--tf-text-muted)' }}>
                       Priority
                     </th>
-                    <th className="text-left py-1.5 font-medium" style={{ color: '#484f58' }}>
+                    <th className="text-left py-1.5 font-medium" style={{ color: 'var(--tf-text-muted)' }}>
                       Status
                     </th>
                   </tr>
@@ -313,11 +313,11 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
                     const pri = priorityBadge(task.priority);
                     const statusColor = taskStatusColor(task.status);
                     return (
-                      <tr key={task.id} style={{ borderBottom: '1px solid #0d1117' }}>
-                        <td className="py-1.5 pr-3" style={{ color: '#e6edf3', maxWidth: '140px' }}>
+                      <tr key={task.id} style={{ borderBottom: '1px solid var(--tf-bg)' }}>
+                        <td className="py-1.5 pr-3" style={{ color: 'var(--tf-text)', maxWidth: '140px' }}>
                           <span className="truncate block">{task.title}</span>
                         </td>
-                        <td className="py-1.5 pr-3" style={{ color: '#8b949e' }}>
+                        <td className="py-1.5 pr-3" style={{ color: 'var(--tf-text-secondary)' }}>
                           {task.project_name}
                         </td>
                         <td className="py-1.5 pr-3">
@@ -342,11 +342,11 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
 
         {/* Recent Activity timeline */}
         <section aria-label="Recent activity">
-          <h4 className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: '#484f58' }}>
+          <h4 className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--tf-text-muted)' }}>
             Recent Activity ({recentActivity.length})
           </h4>
           {recentActivity.length === 0 ? (
-            <p className="text-xs" style={{ color: '#484f58' }}>
+            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
               No recent activity
             </p>
           ) : (
@@ -357,7 +357,7 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
                   <div
                     key={i}
                     className="flex gap-3 rounded-lg px-3 py-2.5"
-                    style={{ backgroundColor: '#21262d' }}
+                    style={{ backgroundColor: 'var(--tf-surface-raised)' }}
                   >
                     <div className="flex flex-col items-center">
                       <span
@@ -368,11 +368,11 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
+                      <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
                         {evt.detail}
                       </p>
                       {evt.timestamp && (
-                        <p className="text-xs mt-0.5" style={{ color: '#484f58' }}>
+                        <p className="text-xs mt-0.5" style={{ color: 'var(--tf-text-muted)' }}>
                           {new Date(evt.timestamp).toLocaleString('en-US', {
                             month: 'short',
                             day: 'numeric',
@@ -397,6 +397,7 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
 export default function AgentPanel({ agents, loading }: AgentPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailedAgent, setDetailedAgent] = useState<Agent | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Fetch full detail when an agent is selected
   useEffect(() => {
@@ -414,6 +415,12 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
   // Use the detailed version if available, otherwise fall back to list version
   const selectedAgent = detailedAgent ?? agents.find((a) => a.id === selectedId) ?? null;
 
+  // Filter agents by search query
+  const filteredAgents = agents.filter((a) => {
+    const q = searchQuery.toLowerCase();
+    return a.name.toLowerCase().includes(q) || a.role.toLowerCase().includes(q) || (a.team || '').toLowerCase().includes(q);
+  });
+
   const handleSelect = (id: string) => {
     setSelectedId((prev) => (prev === id ? null : id));
   };
@@ -425,7 +432,7 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
           <div
             key={i}
             className="rounded-xl p-4 space-y-3"
-            style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
+            style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
           >
             <Skeleton className="w-10 h-10 rounded-full" />
             <Skeleton className="h-4 w-3/4" />
@@ -439,7 +446,7 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
   if (agents.length === 0) {
     return (
       <div className="flex items-center justify-center py-16">
-        <p className="text-sm" style={{ color: '#484f58' }}>
+        <p className="text-sm" style={{ color: 'var(--tf-text-muted)' }}>
           No agents found. Make sure the backend is running.
         </p>
       </div>
@@ -447,37 +454,70 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
   }
 
   return (
-    <div className="flex gap-5 h-full animate-fade-in" style={{ minHeight: '600px' }}>
-      {/* Agent grid */}
-      <div
-        className="overflow-y-auto"
-        style={{ flex: selectedAgent ? '0 0 auto' : '1', width: selectedAgent ? '420px' : '100%' }}
-      >
-        <div
-          className="grid gap-3"
+    <div className="flex flex-col gap-4 h-full animate-fade-in" style={{ minHeight: '600px' }}>
+      {/* Search / filter input */}
+      <div>
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search agents by name, role, or team..."
+          aria-label="Search agents"
           style={{
-            gridTemplateColumns: selectedAgent
-              ? 'repeat(2, 1fr)'
-              : 'repeat(3, 1fr)',
+            width: '100%',
+            maxWidth: '360px',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            border: '1px solid var(--tf-border)',
+            backgroundColor: 'var(--tf-surface)',
+            color: 'var(--tf-text)',
+            fontSize: '13px',
+            outline: 'none',
+            boxSizing: 'border-box',
           }}
-        >
-          {agents.map((agent) => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              selected={selectedId === agent.id}
-              onSelect={() => handleSelect(agent.id)}
-            />
-          ))}
-        </div>
+          onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--tf-accent)'; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--tf-border)'; }}
+        />
       </div>
 
-      {/* Detail panel */}
-      {selectedAgent && (
-        <div className="flex-1 overflow-hidden" style={{ minWidth: 0 }}>
-          <DetailPanel agent={selectedAgent} onClose={() => setSelectedId(null)} />
+      <div className="flex gap-5 flex-1" style={{ minHeight: 0 }}>
+        {/* Agent grid */}
+        <div
+          className="overflow-y-auto"
+          style={{ flex: selectedAgent ? '0 0 auto' : '1', width: selectedAgent ? '420px' : '100%' }}
+        >
+          {filteredAgents.length === 0 && searchQuery ? (
+            <p className="text-sm py-8 text-center" style={{ color: 'var(--tf-text-muted)' }}>
+              No agents match "{searchQuery}"
+            </p>
+          ) : (
+            <div
+              className="grid gap-3"
+              style={{
+                gridTemplateColumns: selectedAgent
+                  ? 'repeat(2, 1fr)'
+                  : 'repeat(3, 1fr)',
+              }}
+            >
+              {filteredAgents.map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  selected={selectedId === agent.id}
+                  onSelect={() => handleSelect(agent.id)}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Detail panel */}
+        {selectedAgent && (
+          <div className="flex-1 overflow-hidden" style={{ minWidth: 0 }}>
+            <DetailPanel agent={selectedAgent} onClose={() => setSelectedId(null)} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
