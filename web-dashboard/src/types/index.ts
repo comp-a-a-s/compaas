@@ -90,3 +90,9 @@ export interface Budget {
   usage_percent: number;
   status: string;
 }
+
+export interface ChatMessage {
+  role: 'user' | 'ceo';
+  content: string;
+  timestamp: string;
+}

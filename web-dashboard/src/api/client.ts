@@ -1,4 +1,4 @@
-import type { Agent, Project, Task, Decision, ActivityEvent, TokenReport, Budget } from '../types';
+import type { Agent, Project, Task, Decision, ActivityEvent, TokenReport, Budget, ChatMessage } from '../types';
 
 const BASE = '/api';
 
@@ -63,4 +63,21 @@ export function createActivityStream(onMessage: (line: string) => void): EventSo
     // silently ignore — SSE may not be available
   };
   return es;
+}
+
+export async function fetchChatHistory(limit = 50): Promise<ChatMessage[]> {
+  return safeFetch<ChatMessage[]>(`${BASE}/chat/history?limit=${limit}`, []);
+}
+
+export async function clearChatHistory(): Promise<void> {
+  try {
+    await fetch(`${BASE}/chat/history`, { method: 'DELETE' });
+  } catch {
+    // ignore
+  }
+}
+
+export function createChatWebSocket(): WebSocket {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return new WebSocket(`${protocol}//${window.location.host}/api/chat/ws`);
 }

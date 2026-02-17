@@ -7,6 +7,7 @@ import AgentPanel from './components/AgentPanel';
 import ProjectPanel from './components/ProjectPanel';
 import ActivityPanel from './components/ActivityPanel';
 import MetricsPanel from './components/MetricsPanel';
+import ChatPanel from './components/ChatPanel';
 
 import {
   fetchAgents,
@@ -222,6 +223,9 @@ export default function App() {
             loading={loadingMetrics}
           />
         );
+
+      case 'chat':
+        return <ChatPanel />;
 
       default:
         return (

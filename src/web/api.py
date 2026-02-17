@@ -5,11 +5,14 @@ tasks, activity stream, token metrics, agents, and model settings.
 """
 
 import os
+import json
+import shutil
 import asyncio
 import yaml
 from typing import AsyncGenerator
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 
@@ -52,7 +55,7 @@ _allowed_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_methods=["GET"],
+    allow_methods=["GET", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -562,6 +565,182 @@ def settings_models() -> list[dict]:
         })
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# CEO Chat (WebSocket + REST)
+# ---------------------------------------------------------------------------
+
+CHAT_LOG_PATH = os.path.join(DATA_DIR, "chat_messages.json")
+_chat_lock = asyncio.Lock()
+
+
+def _load_chat_messages() -> list[dict]:
+    """Load chat messages from disk."""
+    if not os.path.exists(CHAT_LOG_PATH):
+        return []
+    try:
+        with open(CHAT_LOG_PATH) as f:
+            data = json.load(f)
+        return data.get("messages", [])
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_chat_messages(messages: list[dict]) -> None:
+    """Persist chat messages to disk."""
+    os.makedirs(os.path.dirname(CHAT_LOG_PATH), exist_ok=True)
+    with open(CHAT_LOG_PATH, "w") as f:
+        json.dump({"messages": messages}, f, indent=2)
+
+
+def _append_chat_message(role: str, content: str) -> dict:
+    """Append a message and return it."""
+    msg = {
+        "role": role,
+        "content": content,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    messages = _load_chat_messages()
+    messages.append(msg)
+    # Keep last 200 messages
+    if len(messages) > 200:
+        messages = messages[-200:]
+    _save_chat_messages(messages)
+    return msg
+
+
+def _build_context_prompt(user_message: str, history_limit: int = 8) -> str:
+    """Build a prompt that includes recent conversation context."""
+    messages = _load_chat_messages()
+    recent = messages[-history_limit:] if len(messages) > history_limit else messages
+
+    if not recent:
+        return user_message
+
+    parts: list[str] = []
+    parts.append("Recent conversation context:")
+    for msg in recent:
+        speaker = "Idan" if msg["role"] == "user" else "You (Marcus, CEO)"
+        parts.append(f"{speaker}: {msg['content']}")
+    parts.append("")
+    parts.append(f"Idan says now: {user_message}")
+    parts.append("")
+    parts.append("Respond to Idan's latest message. You have full access to your MCP tools for company operations.")
+    return "\n".join(parts)
+
+
+@app.get("/api/chat/history", summary="Get CEO chat message history")
+def chat_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
+    """Return recent chat messages."""
+    messages = _load_chat_messages()
+    return messages[-limit:]
+
+
+@app.delete("/api/chat/history", summary="Clear chat history")
+def clear_chat_history() -> dict:
+    """Clear the chat log."""
+    _save_chat_messages([])
+    return {"status": "cleared"}
+
+
+@app.websocket("/api/chat/ws")
+async def chat_websocket(websocket: WebSocket) -> None:
+    """WebSocket endpoint for real-time CEO chat.
+
+    Client sends: {"message": "text"}
+    Server sends:
+      {"type": "user_ack", "message": {...}}
+      {"type": "chunk", "content": "partial text"}
+      {"type": "done", "content": "full response"}
+      {"type": "error", "content": "error description"}
+    """
+    await websocket.accept()
+
+    # Check if claude CLI is available
+    claude_path = shutil.which("claude")
+    if not claude_path:
+        await websocket.send_json({
+            "type": "error",
+            "content": "Claude CLI not found in PATH. Install it with: npm install -g @anthropic-ai/claude-code",
+        })
+        await websocket.close()
+        return
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "content": "Invalid JSON."})
+                continue
+
+            user_message = (data.get("message") or "").strip()
+            if not user_message:
+                await websocket.send_json({"type": "error", "content": "Empty message."})
+                continue
+
+            # Store user message
+            async with _chat_lock:
+                user_msg = _append_chat_message("user", user_message)
+            await websocket.send_json({"type": "user_ack", "message": user_msg})
+
+            # Build prompt with conversation context
+            prompt = _build_context_prompt(user_message)
+
+            # Spawn claude --agent ceo -p "prompt"
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    claude_path, "--agent", "ceo", "-p", prompt,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=PROJECT_ROOT,
+                )
+            except OSError as exc:
+                await websocket.send_json({
+                    "type": "error",
+                    "content": f"Failed to start CEO agent: {exc}",
+                })
+                continue
+
+            # Stream stdout chunks back to the client
+            response_parts: list[str] = []
+            assert process.stdout is not None
+            while True:
+                chunk = await process.stdout.read(512)
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                response_parts.append(text)
+                await websocket.send_json({"type": "chunk", "content": text})
+
+            await process.wait()
+
+            full_response = "".join(response_parts).strip()
+
+            # Check for errors
+            if process.returncode != 0 and not full_response:
+                assert process.stderr is not None
+                stderr_text = (await process.stderr.read()).decode("utf-8", errors="replace").strip()
+                error_msg = stderr_text or f"CEO agent exited with code {process.returncode}"
+                await websocket.send_json({"type": "error", "content": error_msg})
+                continue
+
+            # Store CEO response
+            async with _chat_lock:
+                _append_chat_message("ceo", full_response)
+
+            await websocket.send_json({"type": "done", "content": full_response})
+
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        # Connection lost or unexpected error — close gracefully
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
