@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastmcp import FastMCP
 
 from src.validators import validate_agent_name, validate_model
-from src.utils import atomic_yaml_write, FileLock
+from src.utils import atomic_yaml_write, FileLock, emit_activity
 
 CORE_TEAM = {
     "cto": {"role": "Chief Technology Officer", "status": "permanent", "model": "opus"},
@@ -144,6 +144,7 @@ def register_company_tools(mcp: FastMCP, data_dir: str) -> None:
             })
             _save_hiring_log(log)
 
+        emit_activity(data_dir, "ceo", "UPDATED", f"Hired agent '{name}' as {role}")
         return (
             f"Agent '{name}' hired as {role}.\n"
             f"IMPORTANT: Create .claude/agents/{name}.md with the agent definition "
@@ -166,6 +167,7 @@ def register_company_tools(mcp: FastMCP, data_dir: str) -> None:
                 if h["name"] == name:
                     h["status"] = "inactive"
                     _save_hiring_log(log)
+                    emit_activity(data_dir, "ceo", "UPDATED", f"Fired agent '{name}'")
                     return f"Agent '{name}' deactivated."
 
         return f"Error: Agent '{name}' not found in hiring log."

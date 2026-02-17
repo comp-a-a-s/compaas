@@ -300,6 +300,62 @@ def token_metrics(
     }
 
 
+@app.get("/api/metrics/budgets", summary="Token budget status from token_budgets.yaml")
+def token_budgets(
+    project_id: str = Query(default="", description="Filter by project ID"),
+    agent_name: str = Query(default="", description="Filter by agent name"),
+) -> list[dict]:
+    """Return current token budgets with usage status."""
+    budgets_path = os.path.join(DATA_DIR, "token_budgets.yaml")
+    token_usage_path = os.path.join(DATA_DIR, "token_usage.yaml")
+
+    if not os.path.exists(budgets_path):
+        return []
+
+    with open(budgets_path) as f:
+        budgets_data = yaml.safe_load(f) or {"budgets": []}
+    budgets = budgets_data.get("budgets", [])
+
+    # Load usage for calculations
+    records: list[dict] = []
+    if os.path.exists(token_usage_path):
+        with open(token_usage_path) as f:
+            usage_data = yaml.safe_load(f) or {"records": []}
+        records = usage_data.get("records", [])
+
+    # Filter budgets
+    if project_id:
+        budgets = [b for b in budgets if b.get("project_id", "") == project_id]
+    if agent_name:
+        budgets = [b for b in budgets if b.get("agent_name", "") == agent_name]
+
+    result: list[dict] = []
+    for b in budgets:
+        b_project = b.get("project_id", "")
+        b_agent = b.get("agent_name", "")
+        b_limit = b.get("token_limit", 0)
+
+        # Sum matching usage
+        filtered = records
+        if b_project:
+            filtered = [r for r in filtered if r.get("project_id") == b_project]
+        if b_agent:
+            filtered = [r for r in filtered if r.get("agent_name") == b_agent]
+        used = sum(r.get("estimated_total_tokens", 0) for r in filtered)
+
+        result.append({
+            "project_id": b_project,
+            "agent_name": b_agent,
+            "token_limit": b_limit,
+            "used": used,
+            "remaining": max(0, b_limit - used),
+            "usage_percent": round((used / b_limit) * 100, 1) if b_limit > 0 else 0,
+            "status": "OK" if used <= b_limit else "OVER BUDGET",
+        })
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Agents
 # ---------------------------------------------------------------------------
@@ -336,6 +392,120 @@ def list_agents() -> list[dict]:
             })
 
     return agents
+
+
+@app.get("/api/agents/{agent_id}", summary="Get detailed info for a single agent")
+def get_agent_detail(agent_id: str) -> dict:
+    """Return detailed agent info including assigned tasks and recent activity."""
+    # Look up in registry
+    info = AGENT_REGISTRY.get(agent_id)
+    if not info:
+        # Check hiring log
+        hiring_log_path = os.path.join(DATA_DIR, "hiring_log.yaml")
+        if os.path.exists(hiring_log_path):
+            with open(hiring_log_path) as f:
+                log = yaml.safe_load(f) or {"hired": []}
+            for h in log.get("hired", []):
+                if h["name"] == agent_id:
+                    info = {
+                        "name": h["name"], "role": h["role"],
+                        "model": h.get("model", "sonnet"),
+                        "status": h.get("status", "active"),
+                        "team": "hired",
+                    }
+                    break
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    # Find tasks assigned to this agent across all projects
+    assigned_tasks: list[dict] = []
+    projects = state_manager.list_projects()
+    for proj in projects:
+        tasks = task_board.get_board(proj["id"], filter_assignee=agent_id)
+        for t in tasks:
+            assigned_tasks.append({**t, "project_id": proj["id"], "project_name": proj["name"]})
+
+    # Parse agent .md file for description/tools
+    agent_def: dict = {}
+    agents_dir = os.path.join(PROJECT_ROOT, ".claude", "agents")
+    md_path = os.path.join(agents_dir, f"{agent_id}.md")
+    if os.path.exists(md_path):
+        agent_def = _parse_frontmatter(md_path)
+
+    # Recent activity for this agent
+    activity: list[dict] = []
+    activity_log_path = os.path.join(DATA_DIR, "activity.log")
+    if os.path.exists(activity_log_path):
+        import json as _json
+        with open(activity_log_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    evt = _json.loads(line)
+                    if evt.get("agent") == agent_id:
+                        activity.append(evt)
+                except (ValueError, KeyError):
+                    continue
+        activity = activity[-50:]  # Last 50 events
+
+    return {
+        "id": agent_id,
+        "name": info.get("name", agent_id),
+        "role": info.get("role", ""),
+        "model": info.get("model", "sonnet"),
+        "status": info.get("status", ""),
+        "team": info.get("team", ""),
+        "description": agent_def.get("description", ""),
+        "tools": agent_def.get("tools", ""),
+        "assigned_tasks": assigned_tasks,
+        "recent_activity": activity,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Project decisions
+# ---------------------------------------------------------------------------
+
+@app.get("/api/projects/{project_id}/decisions", summary="Get decisions for a project")
+def get_project_decisions(project_id: str) -> list[dict]:
+    """Return the decision log for a project."""
+    try:
+        validate_safe_id(project_id, "project_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
+    from src.validators import safe_path_join
+    decisions_path = safe_path_join(DATA_DIR, "projects", project_id, "decisions.yaml")
+    if not os.path.exists(decisions_path):
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+    with open(decisions_path) as f:
+        data = yaml.safe_load(f) or {"decisions": []}
+    return data.get("decisions", [])
+
+
+# ---------------------------------------------------------------------------
+# Recent activity (non-SSE)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/activity/recent", summary="Get recent activity events")
+def recent_activity(limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
+    """Return the most recent activity events as JSON (non-streaming)."""
+    import json as _json
+    activity_log_path = os.path.join(DATA_DIR, "activity.log")
+    if not os.path.exists(activity_log_path):
+        return []
+    events: list[dict] = []
+    with open(activity_log_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(_json.loads(line))
+            except (ValueError, KeyError):
+                continue
+    return events[-limit:]
 
 
 # ---------------------------------------------------------------------------

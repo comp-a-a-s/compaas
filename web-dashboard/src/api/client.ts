@@ -1,18 +1,24 @@
-import type { Agent, Project, Task, TokenReport } from '../types';
+import type { Agent, Project, Task, Decision, ActivityEvent, TokenReport, Budget } from '../types';
 
 const BASE = '/api';
 
 async function safeFetch<T>(url: string, fallback: T): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    console.warn(`API ${url} returned ${res.status}`);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return fallback;
+    const data: T = await res.json();
+    return data;
+  } catch {
     return fallback;
   }
-  return res.json();
 }
 
-export async function fetchOrgChart(): Promise<Agent[]> {
+export async function fetchAgents(): Promise<Agent[]> {
   return safeFetch<Agent[]>(`${BASE}/agents`, []);
+}
+
+export async function fetchAgentDetail(id: string): Promise<Agent | null> {
+  return safeFetch<Agent | null>(`${BASE}/agents/${encodeURIComponent(id)}`, null);
 }
 
 export async function fetchProjects(): Promise<Project[]> {
@@ -20,20 +26,41 @@ export async function fetchProjects(): Promise<Project[]> {
 }
 
 export async function fetchProjectDetail(id: string): Promise<{ project: Project; tasks: Task[] }> {
-  const res = await fetch(`${BASE}/projects/${encodeURIComponent(id)}`);
-  if (!res.ok) return { project: {} as Project, tasks: [] };
-  return res.json();
+  const fallback = { project: { id, name: '', status: '' }, tasks: [] };
+  return safeFetch(`${BASE}/projects/${encodeURIComponent(id)}`, fallback);
+}
+
+export async function fetchProjectDecisions(id: string): Promise<Decision[]> {
+  return safeFetch<Decision[]>(`${BASE}/projects/${encodeURIComponent(id)}/decisions`, []);
+}
+
+export async function fetchTaskBoard(id: string): Promise<Task[]> {
+  return safeFetch<Task[]>(`${BASE}/tasks/${encodeURIComponent(id)}`, []);
 }
 
 export async function fetchTokenReport(): Promise<TokenReport | null> {
   return safeFetch<TokenReport | null>(`${BASE}/metrics/tokens`, null);
 }
 
+export async function fetchBudgets(): Promise<Budget[]> {
+  return safeFetch<Budget[]>(`${BASE}/metrics/budgets`, []);
+}
+
+export async function fetchRecentActivity(limit = 50): Promise<ActivityEvent[]> {
+  return safeFetch<ActivityEvent[]>(`${BASE}/activity/recent?limit=${limit}`, []);
+}
+
+export async function fetchOrgChart(): Promise<Agent[]> {
+  return safeFetch<Agent[]>(`${BASE}/org-chart`, []);
+}
+
 export function createActivityStream(onMessage: (line: string) => void): EventSource {
   const es = new EventSource(`${BASE}/activity/stream`);
-  es.onmessage = (e) => onMessage(e.data);
+  es.onmessage = (evt) => {
+    onMessage(evt.data);
+  };
   es.onerror = () => {
-    // SSE reconnects automatically; suppress console noise
+    // silently ignore — SSE may not be available
   };
   return es;
 }

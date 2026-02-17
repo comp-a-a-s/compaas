@@ -7,35 +7,91 @@ interface LayoutProps {
 }
 
 const NAV_ITEMS = [
-  { id: 'overview', label: 'Overview', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-  { id: 'projects', label: 'Projects', icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' },
-  { id: 'agents', label: 'Agents', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
-  { id: 'tokens', label: 'Tokens', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+  {
+    id: 'overview',
+    label: 'Overview',
+    iconPath: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6',
+  },
+  {
+    id: 'agents',
+    label: 'Agents',
+    iconPath: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z',
+  },
+  {
+    id: 'projects',
+    label: 'Projects',
+    iconPath: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z',
+  },
+  {
+    id: 'activity',
+    label: 'Activity',
+    iconPath: 'M13 10V3L4 14h7v7l9-11h-7z',
+  },
+  {
+    id: 'metrics',
+    label: 'Metrics',
+    iconPath: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z',
+  },
 ];
 
+const PAGE_LABELS: Record<string, string> = {
+  overview: 'Overview',
+  agents: 'Agents',
+  projects: 'Projects',
+  activity: 'Activity',
+  metrics: 'Metrics',
+};
+
 export default function Layout({ activeTab, onTabChange, children }: LayoutProps) {
+  const today = new Date().toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
   return (
-    <div className="flex h-screen bg-gray-900 text-gray-100 overflow-hidden">
+    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: '#1e1e2e', color: '#cdd6f4' }}>
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-950 border-r border-gray-800 flex flex-col flex-shrink-0">
+      <aside
+        className="flex flex-col flex-shrink-0 w-56"
+        style={{ backgroundColor: '#11111b', borderRight: '1px solid #45475a' }}
+      >
         {/* Logo */}
-        <div className="px-6 py-5 border-b border-gray-800">
+        <div className="px-4 py-5 flex-shrink-0" style={{ borderBottom: '1px solid #313244' }}>
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-violet-600 flex items-center justify-center flex-shrink-0">
-              <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 14a6 6 0 110-12 6 6 0 010 12z" />
-                <path d="M10 6a1 1 0 011 1v3l2 1a1 1 0 01-1 2l-2.5-1.25A1 1 0 019 11V7a1 1 0 011-1z" />
+            {/* Diamond/Pie icon */}
+            <div
+              className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+              style={{ backgroundColor: '#cba6f7' }}
+            >
+              <svg
+                className="w-4 h-4"
+                style={{ color: '#11111b' }}
+                fill="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path d="M12 2L2 8.5l10 13.5 10-13.5L12 2z" />
               </svg>
             </div>
             <div>
-              <h1 className="text-base font-bold text-white leading-tight">CrackPie</h1>
-              <p className="text-xs text-gray-400 leading-tight">AI Company Dashboard</p>
+              <h1 className="text-sm font-bold leading-tight" style={{ color: '#cdd6f4' }}>
+                CrackPie
+              </h1>
+              <p className="text-xs leading-tight" style={{ color: '#6c7086' }}>
+                AI Dashboard
+              </p>
             </div>
           </div>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-3 py-4 space-y-1" role="navigation" aria-label="Main navigation">
+        <nav
+          className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto"
+          role="navigation"
+          aria-label="Main navigation"
+        >
           {NAV_ITEMS.map((item) => {
             const isActive = activeTab === item.id;
             return (
@@ -43,14 +99,34 @@ export default function Layout({ activeTab, onTabChange, children }: LayoutProps
                 key={item.id}
                 onClick={() => onTabChange(item.id)}
                 aria-current={isActive ? 'page' : undefined}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 cursor-pointer ${
-                  isActive
-                    ? 'bg-violet-600 text-white'
-                    : 'text-gray-400 hover:bg-gray-800 hover:text-gray-100'
-                }`}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer text-left"
+                style={{
+                  backgroundColor: isActive ? '#313244' : 'transparent',
+                  color: isActive ? '#cba6f7' : '#a6adc8',
+                  borderLeft: isActive ? '2px solid #cba6f7' : '2px solid transparent',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#1e1e2e';
+                    (e.currentTarget as HTMLButtonElement).style.color = '#cdd6f4';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) {
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                    (e.currentTarget as HTMLButtonElement).style.color = '#a6adc8';
+                  }
+                }}
               >
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
+                <svg
+                  className="w-4 h-4 flex-shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.6}
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d={item.iconPath} />
                 </svg>
                 {item.label}
               </button>
@@ -58,34 +134,60 @@ export default function Layout({ activeTab, onTabChange, children }: LayoutProps
           })}
         </nav>
 
-        {/* Footer */}
-        <div className="px-4 py-4 border-t border-gray-800">
+        {/* Status footer */}
+        <div
+          className="px-4 py-4 flex-shrink-0"
+          style={{ borderTop: '1px solid #313244' }}
+        >
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" aria-hidden="true" />
-            <span className="text-xs text-gray-400">Live — auto-refresh 5s</span>
+            <span
+              className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse-dot"
+              style={{ backgroundColor: '#a6e3a1' }}
+              aria-hidden="true"
+            />
+            <span className="text-xs" style={{ color: '#6c7086' }}>
+              Live
+            </span>
+            <span className="text-xs ml-auto" style={{ color: '#45475a' }}>
+              5s poll
+            </span>
           </div>
         </div>
       </aside>
 
-      {/* Main content */}
+      {/* Main content area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top header */}
-        <header className="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between flex-shrink-0">
+        {/* Header bar */}
+        <header
+          className="flex items-center justify-between px-6 py-3 flex-shrink-0"
+          style={{ backgroundColor: '#181825', borderBottom: '1px solid #313244' }}
+        >
           <div>
-            <h2 className="text-lg font-semibold text-white capitalize">
-              {NAV_ITEMS.find((n) => n.id === activeTab)?.label ?? 'Dashboard'}
+            <h2 className="text-base font-semibold" style={{ color: '#cdd6f4' }}>
+              {PAGE_LABELS[activeTab] ?? 'Dashboard'}
             </h2>
-            <p className="text-xs text-gray-400 mt-0.5">AI-powered virtual software company</p>
+            <p className="text-xs" style={{ color: '#6c7086' }}>
+              CrackPie — AI Virtual Company
+            </p>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="text-xs text-gray-500 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-700">
-              {new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
-            </div>
+          <div
+            className="text-xs px-3 py-1.5 rounded-full"
+            style={{
+              color: '#a6adc8',
+              backgroundColor: '#313244',
+              border: '1px solid #45475a',
+            }}
+          >
+            {today}
           </div>
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-6" id="main-content">
+        <main
+          id="main-content"
+          className="flex-1 overflow-y-auto p-6"
+          style={{ backgroundColor: '#1e1e2e' }}
+        >
           {children}
         </main>
       </div>

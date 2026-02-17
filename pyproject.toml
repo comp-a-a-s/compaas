@@ -36,3 +36,10 @@ include = ["src*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "strict"
+
+[tool.coverage.run]
+omit = [
+    "src/tui/*",
+    "src/web/main.py",
+    "src/mcp_server/server.py",
+]

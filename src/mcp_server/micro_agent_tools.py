@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastmcp import FastMCP
 
 from src.validators import validate_agent_name, validate_model
-from src.utils import atomic_yaml_write, FileLock
+from src.utils import atomic_yaml_write, FileLock, emit_activity
 
 
 # Parent agent templates — define base expertise and tools per parent
@@ -203,6 +203,7 @@ def register_micro_agent_tools(mcp: FastMCP, data_dir: str) -> None:
             })
             _save_log(log)
 
+        emit_activity(data_dir, parent_agent, "STARTED", f"Spawned micro-agent '{name}' ({specialization})")
         return (
             f"Micro-agent '{name}' spawned successfully.\n"
             f"Parent: {parent_agent} | Model: {model} | Specialization: {specialization}\n"
@@ -275,4 +276,5 @@ def register_micro_agent_tools(mcp: FastMCP, data_dir: str) -> None:
                     break
             _save_log(log)
 
+        emit_activity(data_dir, "system", "COMPLETED", f"Micro-agent '{name}' retired")
         return f"Micro-agent '{name}' retired and agent file removed."
