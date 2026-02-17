@@ -1,4 +1,4 @@
-"""Shared utilities for the CrackPie system."""
+"""Shared utilities for the ThunderFlow system."""
 
 import os
 import fcntl

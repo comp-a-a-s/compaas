@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 interface LayoutProps {
   activeTab: string;
@@ -7,6 +7,7 @@ interface LayoutProps {
   chatOpen: boolean;
   onChatToggle: () => void;
   chatPanel?: React.ReactNode;
+  chatHasUnread?: boolean;
 }
 
 const NAV_ITEMS = [
@@ -51,13 +52,22 @@ const PAGE_LABELS: Record<string, string> = {
   settings: 'Settings',
 };
 
-export default function Layout({ activeTab, onTabChange, children, chatOpen, onChatToggle, chatPanel }: LayoutProps) {
+export default function Layout({ activeTab, onTabChange, children, chatOpen, onChatToggle, chatPanel, chatHasUnread }: LayoutProps) {
+  const [chatFullscreen, setChatFullscreen] = useState(false);
+
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
     year: 'numeric',
   });
+
+  const handleChatToggle = () => {
+    if (chatOpen) {
+      setChatFullscreen(false);
+    }
+    onChatToggle();
+  };
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ backgroundColor: '#0d1117', color: '#e6edf3' }}>
@@ -69,24 +79,26 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         {/* Logo */}
         <div className="px-4 py-5 flex-shrink-0" style={{ borderBottom: '1px solid #21262d' }}>
           <div className="flex items-center gap-3">
-            {/* Diamond/Pie icon */}
+            {/* Lightning bolt icon */}
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
               style={{ backgroundColor: '#8b8fc7' }}
             >
               <svg
                 className="w-4 h-4"
-                style={{ color: '#0d1117' }}
-                fill="currentColor"
+                stroke="currentColor"
+                fill="none"
+                strokeWidth={2}
                 viewBox="0 0 24 24"
                 aria-hidden="true"
+                style={{ color: '#0d1117' }}
               >
-                <path d="M12 2L2 8.5l10 13.5 10-13.5L12 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
             <div>
               <h1 className="text-sm font-bold leading-tight" style={{ color: '#e6edf3' }}>
-                CrackPie
+                ThunderFlow
               </h1>
               <p className="text-xs leading-tight" style={{ color: '#484f58' }}>
                 AI Dashboard
@@ -161,6 +173,40 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
               5s poll
             </span>
           </div>
+          {/* Telegram handoff button */}
+          <button
+            onClick={() => {
+              const configured = localStorage.getItem('thunderflow_telegram_configured') === 'true';
+              if (configured) {
+                alert('Session handoff to Telegram initiated. Continue the conversation in your Telegram bot.');
+              } else {
+                onTabChange('settings');
+              }
+            }}
+            title="Continue on Telegram"
+            style={{
+              marginTop: '8px',
+              width: '100%',
+              padding: '6px 8px',
+              borderRadius: '6px',
+              border: '1px solid #30363d',
+              backgroundColor: 'transparent',
+              color: '#8b949e',
+              fontSize: '11px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; e.currentTarget.style.color = '#2ca5e0'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#30363d'; e.currentTarget.style.color = '#8b949e'; }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
+            </svg>
+            Continue on Telegram
+          </button>
         </div>
       </aside>
 
@@ -176,7 +222,7 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
               {PAGE_LABELS[activeTab] ?? 'Dashboard'}
             </h2>
             <p className="text-xs" style={{ color: '#484f58' }}>
-              CrackPie — AI Virtual Company
+              ThunderFlow — AI Virtual Company
             </p>
           </div>
           <div
@@ -206,18 +252,19 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         <div
           className="fixed z-50 flex flex-col"
           style={{
-            bottom: '80px',
-            right: '24px',
-            width: '420px',
-            height: '560px',
+            bottom: chatFullscreen ? '5vh' : '80px',
+            right: chatFullscreen ? '2.5vw' : '24px',
+            width: chatFullscreen ? '95vw' : '420px',
+            height: chatFullscreen ? '90vh' : '560px',
             backgroundColor: '#161b22',
             border: '1px solid #30363d',
             borderRadius: '16px',
             boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
             overflow: 'hidden',
+            transition: 'all 0.25s ease',
           }}
         >
-          {/* Chat header with close */}
+          {/* Chat header with fullscreen + close */}
           <div
             className="flex items-center justify-between px-4 py-3 flex-shrink-0"
             style={{ borderBottom: '1px solid #21262d' }}
@@ -233,22 +280,48 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                 CEO Chat
               </span>
             </div>
-            <button
-              onClick={onChatToggle}
-              className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer"
-              style={{ color: '#484f58', backgroundColor: 'transparent' }}
-              aria-label="Close chat"
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Fullscreen toggle button */}
+              <button
+                onClick={() => setChatFullscreen(f => !f)}
+                title={chatFullscreen ? 'Restore' : 'Expand'}
+                className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer"
+                style={{ color: '#484f58', backgroundColor: 'transparent' }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                }}
+              >
+                {chatFullscreen ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 9L4 4m0 0h5m-5 0v5M15 9l5-5m0 0h-5m5 0v5M9 15l-5 5m0 0h5m-5 0v-5M15 15l5 5m0 0h-5m5 0v-5" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5h-4m4 0v-4m0 4l-5-5" />
+                  </svg>
+                )}
+              </button>
+              {/* Close button */}
+              <button
+                onClick={handleChatToggle}
+                className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer"
+                style={{ color: '#484f58', backgroundColor: 'transparent' }}
+                aria-label="Close chat"
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           </div>
           {/* Chat content */}
           <div className="flex-1 overflow-hidden">
@@ -259,9 +332,10 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
 
       {/* Floating chat toggle button */}
       <button
-        onClick={onChatToggle}
+        onClick={handleChatToggle}
         className="fixed z-50 flex items-center justify-center rounded-full shadow-lg transition-all duration-200 cursor-pointer"
         style={{
+          position: 'fixed',
           bottom: '24px',
           right: '24px',
           width: '52px',
@@ -294,6 +368,22 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
           </svg>
+        )}
+        {/* Unread badge */}
+        {chatHasUnread && !chatOpen && (
+          <span
+            style={{
+              position: 'absolute',
+              top: '-4px',
+              right: '-4px',
+              width: '12px',
+              height: '12px',
+              borderRadius: '50%',
+              backgroundColor: '#f85149',
+              border: '2px solid #0d1117',
+            }}
+            aria-label="Unread messages"
+          />
         )}
       </button>
     </div>

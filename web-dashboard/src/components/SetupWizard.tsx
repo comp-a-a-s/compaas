@@ -16,7 +16,7 @@ interface SetupWizardProps {
 
 // ---- Constants ----
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 6;
 
 const AGENT_DEFAULTS: AgentDefault[] = [
   { id: 'marcus', role: 'CEO', defaultName: 'Marcus' },
@@ -41,6 +41,41 @@ const POLL_INTERVAL_OPTIONS = [
   { label: '5 seconds', value: 5000 },
   { label: '10 seconds', value: 10000 },
   { label: '30 seconds', value: 30000 },
+];
+
+// Name templates for crew
+const NAME_TEMPLATES: Record<string, Record<string, string>> = {
+  'Classic Tech': {
+    marcus: 'Marcus', elena: 'Elena', victor: 'Victor', rachel: 'Rachel',
+    jonathan: 'Jonathan', sarah: 'Sarah', david: 'David', james: 'James',
+    priya: 'Priya', lena: 'Lena', carlos: 'Carlos', nina: 'Nina',
+    alex: 'Alex', maya: 'Maya', tom: 'Tom'
+  },
+  'Silicon Valley': {
+    marcus: 'Mark', elena: 'Susan', victor: 'Vinod', rachel: 'Emily',
+    jonathan: 'Peter', sarah: 'Marissa', david: 'Reid', james: 'Jeff',
+    priya: 'Sheryl', lena: 'Jessica', carlos: 'Larry', nina: 'Diane',
+    alex: 'Kevin', maya: 'Lisa', tom: 'Bill'
+  },
+  'Mythology': {
+    marcus: 'Zeus', elena: 'Athena', victor: 'Apollo', rachel: 'Artemis',
+    jonathan: 'Hermes', sarah: 'Hera', david: 'Hephaestus', james: 'Ares',
+    priya: 'Aphrodite', lena: 'Persephone', carlos: 'Dionysus', nina: 'Nike',
+    alex: 'Poseidon', maya: 'Demeter', tom: 'Prometheus'
+  },
+  'Avengers': {
+    marcus: 'Tony', elena: 'Pepper', victor: 'Bruce', rachel: 'Natasha',
+    jonathan: 'Nick', sarah: 'Wanda', david: 'Thor', james: 'Steve',
+    priya: 'Shuri', lena: 'Carol', carlos: 'Clint', nina: 'Hope',
+    alex: 'Scott', maya: 'Maria', tom: 'Vision'
+  },
+};
+
+// Theme options
+const THEMES = [
+  { id: 'midnight', label: 'Midnight', description: 'Deep dark — easy on the eyes', preview: ['#0d1117', '#161b22', '#e6edf3'] },
+  { id: 'twilight', label: 'Twilight', description: 'Softer dark with blue tones', preview: ['#0f1923', '#1a2332', '#d0d8e4'] },
+  { id: 'dawn', label: 'Dawn', description: 'Light mode — clean and bright', preview: ['#ffffff', '#f6f8fa', '#24292f'] },
 ];
 
 // ---- Colours (centralised for easy reference) ----
@@ -140,15 +175,15 @@ function StepWelcome() {
         }}
         aria-hidden="true"
       >
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style={{ color: C.textPrimary }}>
-          <path d="M12 2L2 8.5l10 13.5 10-13.5L12 2z" />
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: C.textPrimary }}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
       </div>
       <h2 style={{ fontSize: '22px', fontWeight: 700, color: C.textPrimary, marginBottom: '12px' }}>
-        Welcome to CrackPie
+        Welcome to ThunderFlow
       </h2>
       <p style={{ fontSize: '14px', color: C.textSecondary, lineHeight: '1.6', maxWidth: '480px', margin: '0 auto' }}>
-        CrackPie is your AI-powered virtual company dashboard. You direct a team of 15 autonomous agents
+        ThunderFlow is your AI-powered virtual company dashboard. You direct a team of 15 autonomous agents
         across engineering, product, research, and operations. This wizard takes about 2 minutes to configure
         your workspace.
       </p>
@@ -211,20 +246,75 @@ function StepTeamNames({
   agentNames: Record<string, string>;
   onAgentNameChange: (id: string, v: string) => void;
 }) {
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+
+  const applyTemplate = (templateName: string) => {
+    setSelectedTemplate(templateName);
+    const template = NAME_TEMPLATES[templateName];
+    if (template) {
+      Object.entries(template).forEach(([id, name]) => {
+        onAgentNameChange(id, name);
+      });
+    }
+  };
+
   return (
     <div>
       <h2 style={{ fontSize: '18px', fontWeight: 600, color: C.textPrimary, marginBottom: '6px' }}>
         Team Names
       </h2>
-      <p style={{ fontSize: '13px', color: C.textSecondary, marginBottom: '20px' }}>
+      <p style={{ fontSize: '13px', color: C.textSecondary, marginBottom: '16px' }}>
         Customise the display name for each agent. Pre-filled with defaults.
       </p>
+
+      {/* Template buttons */}
+      <div style={{ marginBottom: '16px' }}>
+        <p style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textMuted, marginBottom: '8px' }}>
+          Quick Templates
+        </p>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {Object.keys(NAME_TEMPLATES).map((name) => (
+            <button
+              key={name}
+              onClick={() => applyTemplate(name)}
+              style={{
+                padding: '5px 12px',
+                borderRadius: '6px',
+                border: `1px solid ${selectedTemplate === name ? C.accent : C.border}`,
+                backgroundColor: selectedTemplate === name ? 'rgba(88,166,255,0.1)' : 'transparent',
+                color: selectedTemplate === name ? C.accent : C.textSecondary,
+                fontSize: '12px',
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+              }}
+            >
+              {name}
+            </button>
+          ))}
+          <button
+            onClick={() => setSelectedTemplate(null)}
+            style={{
+              padding: '5px 12px',
+              borderRadius: '6px',
+              border: `1px solid ${selectedTemplate === null ? C.accent : C.border}`,
+              backgroundColor: selectedTemplate === null ? 'rgba(88,166,255,0.1)' : 'transparent',
+              color: selectedTemplate === null ? C.accent : C.textSecondary,
+              fontSize: '12px',
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+            }}
+          >
+            Custom
+          </button>
+        </div>
+      </div>
+
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
           gap: '12px',
-          maxHeight: '360px',
+          maxHeight: '300px',
           overflowY: 'auto',
           paddingRight: '4px',
         }}
@@ -265,7 +355,7 @@ function StepTeamNames({
               id={`agent-name-${agent.id}`}
               type="text"
               value={agentNames[agent.id] ?? agent.defaultName}
-              onChange={(e) => onAgentNameChange(agent.id, e.target.value)}
+              onChange={(e) => { setSelectedTemplate(null); onAgentNameChange(agent.id, e.target.value); }}
               style={{
                 width: '100%',
                 padding: '6px 8px',
@@ -290,22 +380,57 @@ function StepTeamNames({
 function StepPreferences({
   autoOpenBrowser,
   pollInterval,
+  theme,
   onAutoOpenChange,
   onPollIntervalChange,
+  onThemeChange,
 }: {
   autoOpenBrowser: boolean;
   pollInterval: number;
+  theme: string;
   onAutoOpenChange: (v: boolean) => void;
   onPollIntervalChange: (v: number) => void;
+  onThemeChange: (v: string) => void;
 }) {
   return (
     <div>
       <h2 style={{ fontSize: '18px', fontWeight: 600, color: C.textPrimary, marginBottom: '6px' }}>
         Preferences
       </h2>
-      <p style={{ fontSize: '13px', color: C.textSecondary, marginBottom: '24px' }}>
-        Configure runtime behaviour. These can be changed later in Settings.
+      <p style={{ fontSize: '13px', color: C.textSecondary, marginBottom: '20px' }}>
+        Configure runtime behaviour and appearance. These can be changed later in Settings.
       </p>
+
+      {/* Theme selector */}
+      <div style={{ marginBottom: '16px' }}>
+        <p style={{ fontSize: '12px', fontWeight: 600, color: C.textSecondary, marginBottom: '10px' }}>Theme</p>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          {THEMES.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => onThemeChange(t.id)}
+              style={{
+                flex: 1,
+                padding: '10px',
+                borderRadius: '8px',
+                border: `2px solid ${theme === t.id ? C.accent : C.border}`,
+                backgroundColor: C.surfaceRaised,
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'border-color 0.2s',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
+                {t.preview.map((color, i) => (
+                  <div key={i} style={{ width: '16px', height: '16px', borderRadius: '3px', backgroundColor: color, border: '1px solid rgba(255,255,255,0.1)' }} />
+                ))}
+              </div>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: theme === t.id ? C.accent : C.textPrimary }}>{t.label}</div>
+              <div style={{ fontSize: '10px', color: C.textMuted }}>{t.description}</div>
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* Auto-open browser toggle */}
       <div
@@ -313,8 +438,8 @@ function StepPreferences({
           backgroundColor: C.surfaceRaised,
           border: `1px solid ${C.border}`,
           borderRadius: '8px',
-          padding: '16px',
-          marginBottom: '12px',
+          padding: '14px',
+          marginBottom: '10px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -322,11 +447,11 @@ function StepPreferences({
         }}
       >
         <div>
-          <div style={{ fontSize: '14px', fontWeight: 500, color: C.textPrimary, marginBottom: '2px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary, marginBottom: '2px' }}>
             Auto-open browser
           </div>
-          <div style={{ fontSize: '12px', color: C.textSecondary }}>
-            Automatically open the dashboard when crackpie-web starts.
+          <div style={{ fontSize: '11px', color: C.textSecondary }}>
+            Automatically open the dashboard when thunderflow-web starts.
           </div>
         </div>
         <button
@@ -375,16 +500,16 @@ function StepPreferences({
           backgroundColor: C.surfaceRaised,
           border: `1px solid ${C.border}`,
           borderRadius: '8px',
-          padding: '16px',
+          padding: '14px',
         }}
       >
         <label
           htmlFor="poll-interval"
-          style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: C.textPrimary, marginBottom: '2px' }}
+          style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textPrimary, marginBottom: '2px' }}
         >
           Poll interval
         </label>
-        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '10px' }}>
+        <p style={{ fontSize: '11px', color: C.textSecondary, marginBottom: '10px' }}>
           How often the dashboard fetches updated data from the backend.
         </p>
         <select
@@ -392,7 +517,7 @@ function StepPreferences({
           value={pollInterval}
           onChange={(e) => onPollIntervalChange(Number(e.target.value))}
           style={{
-            padding: '8px 12px',
+            padding: '7px 12px',
             backgroundColor: C.surface,
             border: `1px solid ${C.border}`,
             borderRadius: '6px',
@@ -416,19 +541,101 @@ function StepPreferences({
   );
 }
 
+function StepTelegram({
+  telegramBotToken,
+  telegramChatId,
+  onTokenChange,
+  onChatIdChange,
+}: {
+  telegramBotToken: string;
+  telegramChatId: string;
+  onTokenChange: (v: string) => void;
+  onChatIdChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+        {/* Telegram icon */}
+        <div style={{ width: '40px', height: '40px', borderRadius: '10px', backgroundColor: '#2ca5e0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
+            <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
+          </svg>
+        </div>
+        <div>
+          <h2 style={{ fontSize: '18px', fontWeight: 600, color: C.textPrimary, marginBottom: '2px' }}>
+            Telegram Integration <span style={{ fontSize: '11px', color: C.textMuted, fontWeight: 400 }}>Optional</span>
+          </h2>
+          <p style={{ fontSize: '12px', color: C.textSecondary }}>
+            Continue conversations from your phone while away.
+          </p>
+        </div>
+      </div>
+
+      <div style={{ padding: '14px', backgroundColor: 'rgba(44,165,224,0.08)', border: '1px solid rgba(44,165,224,0.25)', borderRadius: '8px', marginBottom: '20px' }}>
+        <p style={{ fontSize: '12px', color: '#2ca5e0' }}>
+          <strong>How it works:</strong> Create a Telegram bot via @BotFather, add it to a chat, then paste the credentials here. You can then hand off sessions to Telegram with one click.
+        </p>
+      </div>
+
+      {/* Bot token input */}
+      <div style={{ marginBottom: '14px' }}>
+        <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}>
+          Bot Token
+        </label>
+        <input
+          type="password"
+          value={telegramBotToken}
+          onChange={(e) => onTokenChange(e.target.value)}
+          placeholder="1234567890:ABCdef..."
+          style={{ width: '100%', padding: '9px 12px', backgroundColor: C.surfaceRaised, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+        />
+      </div>
+
+      {/* Chat ID input */}
+      <div>
+        <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}>
+          Chat ID
+        </label>
+        <input
+          type="text"
+          value={telegramChatId}
+          onChange={(e) => onChatIdChange(e.target.value)}
+          placeholder="-1001234567890"
+          style={{ width: '100%', padding: '9px 12px', backgroundColor: C.surfaceRaised, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+        />
+      </div>
+
+      <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '12px' }}>
+        You can skip this step and configure Telegram later in Settings.
+      </p>
+    </div>
+  );
+}
+
 function StepComplete({
   userName,
   agentNames,
   autoOpenBrowser,
   pollInterval,
+  theme,
+  telegramBotToken,
+  telegramChatId,
 }: {
   userName: string;
   agentNames: Record<string, string>;
   autoOpenBrowser: boolean;
   pollInterval: number;
+  theme: string;
+  telegramBotToken: string;
+  telegramChatId: string;
 }) {
   const pollLabel = POLL_INTERVAL_OPTIONS.find((o) => o.value === pollInterval)?.label ?? `${pollInterval}ms`;
   const nameCount = Object.keys(agentNames).length;
+  const telegramConfigured = telegramBotToken && telegramChatId;
 
   return (
     <div>
@@ -451,8 +658,10 @@ function StepComplete({
         {[
           { label: 'Board Head', value: userName || '(not set)' },
           { label: 'Team size', value: `${nameCount} agents configured` },
+          { label: 'Theme', value: theme.charAt(0).toUpperCase() + theme.slice(1) },
           { label: 'Auto-open browser', value: autoOpenBrowser ? 'Enabled' : 'Disabled' },
           { label: 'Poll interval', value: pollLabel },
+          { label: 'Telegram', value: telegramConfigured ? 'Configured' : 'Not configured' },
         ].map((row, idx, arr) => (
           <div
             key={row.label}
@@ -465,7 +674,13 @@ function StepComplete({
             }}
           >
             <span style={{ fontSize: '13px', color: C.textSecondary }}>{row.label}</span>
-            <span style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary }}>{row.value}</span>
+            <span style={{
+              fontSize: '13px',
+              fontWeight: 500,
+              color: row.label === 'Telegram' && !telegramConfigured ? C.textMuted : C.textPrimary,
+            }}>
+              {row.value}
+            </span>
           </div>
         ))}
       </div>
@@ -502,6 +717,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   );
   const [autoOpenBrowser, setAutoOpenBrowser] = useState(true);
   const [pollInterval, setPollInterval] = useState(5000);
+  const [theme, setTheme] = useState('midnight');
+  const [telegramBotToken, setTelegramBotToken] = useState('');
+  const [telegramChatId, setTelegramChatId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -526,12 +744,22 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setSubmitting(true);
     setSubmitError(null);
 
+    // Save Telegram credentials if provided
+    if (telegramBotToken && telegramChatId) {
+      localStorage.setItem('thunderflow_telegram_token', telegramBotToken);
+      localStorage.setItem('thunderflow_telegram_chatid', telegramChatId);
+      localStorage.setItem('thunderflow_telegram_configured', 'true');
+    }
+
+    // Save theme preference
+    localStorage.setItem('thunderflow_theme', theme);
+
     const config: Partial<AppConfig> = {
       setup_complete: true,
       user: { name: userName.trim() },
       agents: agentNames,
       ui: {
-        theme: 'dark',
+        theme: theme,
         poll_interval_ms: pollInterval,
       },
       // host and port are set server-side; we only send the user-configurable flag
@@ -547,12 +775,12 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     if (ok) {
       onComplete();
     } else {
-      setSubmitError('Failed to save configuration. Please check that the crackpie-web server is running and try again.');
+      setSubmitError('Failed to save configuration. Please check that the thunderflow-web server is running and try again.');
       setSubmitting(false);
     }
   };
 
-  const stepLabels = ['Welcome', 'Your Name', 'Team Names', 'Preferences', 'Complete'];
+  const stepLabels = ['Welcome', 'Your Name', 'Team Names', 'Preferences', 'Telegram', 'Complete'];
 
   return (
     <div
@@ -607,11 +835,11 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 }}
                 aria-hidden="true"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style={{ color: C.textPrimary }}>
-                  <path d="M12 2L2 8.5l10 13.5 10-13.5L12 2z" />
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: C.textPrimary }}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
-              <span style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>CrackPie Setup</span>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>ThunderFlow Setup</span>
               <span
                 style={{
                   fontSize: '11px',
@@ -648,16 +876,29 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               <StepPreferences
                 autoOpenBrowser={autoOpenBrowser}
                 pollInterval={pollInterval}
+                theme={theme}
                 onAutoOpenChange={setAutoOpenBrowser}
                 onPollIntervalChange={setPollInterval}
+                onThemeChange={setTheme}
               />
             )}
             {step === 5 && (
+              <StepTelegram
+                telegramBotToken={telegramBotToken}
+                telegramChatId={telegramChatId}
+                onTokenChange={setTelegramBotToken}
+                onChatIdChange={setTelegramChatId}
+              />
+            )}
+            {step === 6 && (
               <StepComplete
                 userName={userName}
                 agentNames={agentNames}
                 autoOpenBrowser={autoOpenBrowser}
                 pollInterval={pollInterval}
+                theme={theme}
+                telegramBotToken={telegramBotToken}
+                telegramChatId={telegramChatId}
               />
             )}
 
@@ -751,9 +992,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 onMouseLeave={(e) => {
                   if (canProceed()) e.currentTarget.style.backgroundColor = C.accentDim;
                 }}
-                aria-label={step === 1 ? 'Get Started' : 'Go to next step'}
+                aria-label={step === 1 ? 'Get Started' : step === 5 ? 'Skip' : 'Go to next step'}
               >
-                {step === 1 ? 'Get Started' : 'Next'}
+                {step === 1 ? 'Get Started' : step === 5 ? 'Skip / Next' : 'Next'}
               </button>
             ) : (
               <button

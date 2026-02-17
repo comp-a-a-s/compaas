@@ -1,4 +1,4 @@
-"""Input validation, path safety, and state machine for CrackPie."""
+"""Input validation, path safety, and state machine for ThunderFlow."""
 
 import os
 import re
