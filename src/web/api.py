@@ -786,9 +786,10 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 assert process.stdout is not None
 
                 # Read with timeout - send thinking indicator periodically
+                thinking_count = 0
                 while True:
                     try:
-                        chunk = await asyncio.wait_for(process.stdout.read(512), timeout=5.0)
+                        chunk = await asyncio.wait_for(process.stdout.read(512), timeout=15.0)
                         if not chunk:
                             break
                         text = chunk.decode("utf-8", errors="replace")
@@ -796,25 +797,35 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         await websocket.send_json({"type": "chunk", "content": text})
                     except asyncio.TimeoutError:
                         # No output yet — send thinking indicator to keep connection alive
-                        await websocket.send_json({"type": "thinking"})
+                        thinking_count += 1
+                        await websocket.send_json({
+                            "type": "thinking",
+                            "content": f"Marcus is thinking... ({thinking_count * 15}s elapsed)",
+                        })
                         # Check if process is still running
                         if process.returncode is not None:
                             break
 
-                # Wait for process to finish (max 10s after stdout closes)
+                # Wait for process to finish (max 120s after stdout closes)
                 try:
-                    await asyncio.wait_for(process.wait(), timeout=10.0)
+                    await asyncio.wait_for(process.wait(), timeout=120.0)
                 except asyncio.TimeoutError:
                     process.kill()
 
                 full_response = "".join(response_parts).strip()
 
-                if not full_response and process.returncode != 0:
-                    assert process.stderr is not None
-                    stderr_text = (await process.stderr.read()).decode("utf-8", errors="replace").strip()
-                    error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
-                    await websocket.send_json({"type": "error", "content": error_msg})
-                    continue
+                if not full_response:
+                    stderr_text = ""
+                    if process.stderr:
+                        try:
+                            stderr_data = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
+                            stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
+                        except asyncio.TimeoutError:
+                            pass
+                    if process.returncode != 0:
+                        error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
+                        await websocket.send_json({"type": "error", "content": error_msg})
+                        continue
 
                 if full_response:
                     async with _chat_lock:

@@ -13,40 +13,40 @@ type ProjectTab = 'tasks' | 'decisions' | 'team' | 'info';
 // ---- Helpers ----
 function statusBadge(status: string): { bg: string; text: string } {
   const s = status.toLowerCase();
-  if (s === 'active') return { bg: '#1a2e25', text: '#3fb950' };
-  if (s === 'completed') return { bg: '#1c2940', text: '#58a6ff' };
-  if (s === 'paused') return { bg: '#2d2213', text: '#d29922' };
-  if (s === 'planning') return { bg: '#1c2233', text: '#8b8fc7' };
-  if (s === 'blocked') return { bg: '#2d1519', text: '#f85149' };
-  return { bg: '#21262d', text: '#8b949e' };
+  if (s === 'active') return { bg: '#1a2e25', text: 'var(--tf-success)' };
+  if (s === 'completed') return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
+  if (s === 'paused') return { bg: '#2d2213', text: 'var(--tf-warning)' };
+  if (s === 'planning') return { bg: '#1c2233', text: 'var(--tf-accent)' };
+  if (s === 'blocked') return { bg: '#2d1519', text: 'var(--tf-error)' };
+  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)' };
 }
 
 function typeBadge(type: string): { bg: string; text: string } {
   const t = type.toLowerCase();
-  if (t.includes('feature')) return { bg: '#1c2940', text: '#58a6ff' };
-  if (t.includes('infra')) return { bg: '#1c2940', text: '#58a6ff' };
-  if (t.includes('design')) return { bg: '#2d1519', text: '#8b8fc7' };
-  if (t.includes('research')) return { bg: '#2d2213', text: '#d29922' };
-  if (t.includes('bug') || t.includes('fix')) return { bg: '#2d1519', text: '#f85149' };
-  return { bg: '#21262d', text: '#8b949e' };
+  if (t.includes('feature')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
+  if (t.includes('infra')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
+  if (t.includes('design')) return { bg: '#2d1519', text: 'var(--tf-accent)' };
+  if (t.includes('research')) return { bg: '#2d2213', text: 'var(--tf-warning)' };
+  if (t.includes('bug') || t.includes('fix')) return { bg: '#2d1519', text: 'var(--tf-error)' };
+  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)' };
 }
 
 function taskColColor(col: string): string {
   const c = col.toLowerCase();
-  if (c === 'done') return '#3fb950';
-  if (c === 'in_progress' || c === 'in progress') return '#58a6ff';
-  if (c === 'blocked') return '#f85149';
-  if (c === 'review') return '#8b8fc7';
-  if (c === 'todo') return '#8b949e';
-  return '#484f58';
+  if (c === 'done') return 'var(--tf-success)';
+  if (c === 'in_progress' || c === 'in progress') return 'var(--tf-accent-blue)';
+  if (c === 'blocked') return 'var(--tf-error)';
+  if (c === 'review') return 'var(--tf-accent)';
+  if (c === 'todo') return 'var(--tf-text-secondary)';
+  return 'var(--tf-text-muted)';
 }
 
 function priorityBadge(priority: string): { bg: string; text: string } {
   const p = priority.toUpperCase();
-  if (p === 'P0') return { bg: '#2d1519', text: '#f85149' };
-  if (p === 'P1') return { bg: '#2d2213', text: '#d29922' };
-  if (p === 'P2') return { bg: '#2d2213', text: '#d29922' };
-  return { bg: '#21262d', text: '#484f58' };
+  if (p === 'P0') return { bg: '#2d1519', text: 'var(--tf-error)' };
+  if (p === 'P1') return { bg: '#2d2213', text: 'var(--tf-warning)' };
+  if (p === 'P2') return { bg: '#2d2213', text: 'var(--tf-warning)' };
+  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-muted)' };
 }
 
 function avatarInitial(name: string): string {
@@ -54,7 +54,7 @@ function avatarInitial(name: string): string {
 }
 
 function avatarBg(_name: string, index: number): string {
-  const colors = ['#8b8fc7', '#58a6ff', '#3fb950', '#58a6ff', '#d29922', '#d29922', '#58a6ff', '#8b8fc7'];
+  const colors = ['var(--tf-accent)', 'var(--tf-accent-blue)', 'var(--tf-success)', 'var(--tf-accent-blue)', 'var(--tf-warning)', 'var(--tf-warning)', 'var(--tf-accent-blue)', 'var(--tf-accent)'];
   return colors[index % colors.length];
 }
 
@@ -83,19 +83,19 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
       onClick={onSelect}
       className="w-full text-left rounded-xl p-4 flex flex-col gap-3 transition-all duration-200 cursor-pointer"
       style={{
-        backgroundColor: selected ? '#21262d' : '#161b22',
-        border: `1px solid ${selected ? '#58a6ff' : '#30363d'}`,
+        backgroundColor: selected ? 'var(--tf-surface-raised)' : 'var(--tf-surface)',
+        border: `1px solid ${selected ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
         outline: 'none',
       }}
       onMouseEnter={(e) => {
         if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = '#6e7681';
       }}
       onMouseLeave={(e) => {
-        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = '#30363d';
+        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
       }}
     >
       <div className="flex items-start justify-between gap-2">
-        <h3 className="text-sm font-semibold leading-tight" style={{ color: '#e6edf3' }}>
+        <h3 className="text-sm font-semibold leading-tight" style={{ color: 'var(--tf-text)' }}>
           {project.name}
         </h3>
         <span
@@ -109,7 +109,7 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
       {project.description && (
         <p
           className="text-xs leading-relaxed"
-          style={{ color: '#8b949e', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+          style={{ color: 'var(--tf-text-secondary)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
         >
           {project.description}
         </p>
@@ -124,7 +124,7 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
             {project.type}
           </span>
         )}
-        <span className="text-xs" style={{ color: '#484f58' }}>
+        <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
           {total} tasks
         </span>
       </div>
@@ -132,13 +132,13 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
       {/* Progress bar */}
       <div>
         <div className="flex justify-between text-xs mb-1">
-          <span style={{ color: '#484f58' }}>Progress</span>
-          <span style={{ color: '#3fb950' }}>{pct}%</span>
+          <span style={{ color: 'var(--tf-text-muted)' }}>Progress</span>
+          <span style={{ color: 'var(--tf-success)' }}>{pct}%</span>
         </div>
-        <div className="h-1.5 rounded-full" style={{ backgroundColor: '#21262d' }}>
+        <div className="h-1.5 rounded-full" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
           <div
             className="h-full rounded-full transition-all duration-500"
-            style={{ width: `${pct}%`, backgroundColor: '#3fb950' }}
+            style={{ width: `${pct}%`, backgroundColor: 'var(--tf-success)' }}
           />
         </div>
       </div>
@@ -175,7 +175,7 @@ function KanbanBoard({ tasks }: KanbanProps) {
 
   if (tasks.length === 0) {
     return (
-      <p className="text-xs py-4 text-center" style={{ color: '#484f58' }}>
+      <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>
         No tasks in this project
       </p>
     );
@@ -192,22 +192,22 @@ function KanbanBoard({ tasks }: KanbanProps) {
             className="flex-shrink-0 flex flex-col rounded-xl"
             style={{
               width: '220px',
-              backgroundColor: '#161b22',
-              border: '1px solid #21262d',
+              backgroundColor: 'var(--tf-surface)',
+              border: '1px solid var(--tf-surface-raised)',
               minHeight: '200px',
             }}
           >
             {/* Column header */}
             <div
               className="px-3 py-2.5 flex items-center justify-between flex-shrink-0 rounded-t-xl"
-              style={{ borderBottom: '1px solid #21262d' }}
+              style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
             >
               <span className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>
                 {KANBAN_LABELS[col]}
               </span>
               <span
                 className="text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold"
-                style={{ backgroundColor: '#21262d', color: '#8b949e' }}
+                style={{ backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-text-secondary)' }}
               >
                 {colTasks.length}
               </span>
@@ -221,10 +221,10 @@ function KanbanBoard({ tasks }: KanbanProps) {
                   <div
                     key={task.id}
                     className="rounded-lg p-3 flex flex-col gap-2"
-                    style={{ backgroundColor: '#21262d', border: '1px solid #30363d' }}
+                    style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
                   >
                     <div className="flex items-start justify-between gap-1">
-                      <p className="text-xs font-medium leading-tight" style={{ color: '#e6edf3' }}>
+                      <p className="text-xs font-medium leading-tight" style={{ color: 'var(--tf-text)' }}>
                         {task.title}
                       </p>
                       <span
@@ -239,7 +239,7 @@ function KanbanBoard({ tasks }: KanbanProps) {
                       <p
                         className="text-xs leading-relaxed"
                         style={{
-                          color: '#8b949e',
+                          color: 'var(--tf-text-secondary)',
                           display: '-webkit-box',
                           WebkitLineClamp: 2,
                           WebkitBoxOrient: 'vertical',
@@ -254,11 +254,11 @@ function KanbanBoard({ tasks }: KanbanProps) {
                       <div className="flex items-center gap-1.5">
                         <div
                           className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-                          style={{ backgroundColor: '#58a6ff', color: '#0d1117' }}
+                          style={{ backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}
                         >
                           {avatarInitial(task.assigned_to)}
                         </div>
-                        <span className="text-xs" style={{ color: '#484f58' }}>
+                        <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
                           {task.assigned_to}
                         </span>
                       </div>
@@ -308,7 +308,7 @@ function DecisionsTab({ projectId }: DecisionsTabProps) {
 
   if (decisions.length === 0) {
     return (
-      <p className="text-xs py-4" style={{ color: '#484f58' }}>
+      <p className="text-xs py-4" style={{ color: 'var(--tf-text-muted)' }}>
         No decisions recorded for this project
       </p>
     );
@@ -320,13 +320,13 @@ function DecisionsTab({ projectId }: DecisionsTabProps) {
         <div
           key={i}
           className="rounded-xl p-4 flex flex-col gap-2"
-          style={{ backgroundColor: '#21262d', border: '1px solid #30363d' }}
+          style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
         >
           <div className="flex items-start justify-between gap-3">
-            <h4 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>
+            <h4 className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>
               {d.title}
             </h4>
-            <span className="text-xs flex-shrink-0" style={{ color: '#484f58' }}>
+            <span className="text-xs flex-shrink-0" style={{ color: 'var(--tf-text-muted)' }}>
               {d.timestamp
                 ? new Date(d.timestamp).toLocaleDateString('en-US', {
                     month: 'short',
@@ -336,21 +336,21 @@ function DecisionsTab({ projectId }: DecisionsTabProps) {
             </span>
           </div>
 
-          <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
-            <span style={{ color: '#58a6ff' }}>Decision: </span>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+            <span style={{ color: 'var(--tf-accent-blue)' }}>Decision: </span>
             {d.decision}
           </p>
 
           {d.rationale && (
-            <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
-              <span style={{ color: '#58a6ff' }}>Rationale: </span>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+              <span style={{ color: 'var(--tf-accent-blue)' }}>Rationale: </span>
               {d.rationale}
             </p>
           )}
 
           {d.alternatives && (
-            <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
-              <span style={{ color: '#d29922' }}>Alternatives: </span>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+              <span style={{ color: 'var(--tf-warning)' }}>Alternatives: </span>
               {d.alternatives}
             </p>
           )}
@@ -358,11 +358,11 @@ function DecisionsTab({ projectId }: DecisionsTabProps) {
           <div className="flex items-center gap-1.5 mt-1">
             <div
               className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-              style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
+              style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
             >
               {avatarInitial(d.decided_by)}
             </div>
-            <span className="text-xs" style={{ color: '#484f58' }}>
+            <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
               {d.decided_by}
             </span>
           </div>
@@ -379,7 +379,7 @@ interface TeamTabProps {
 function TeamTab({ team }: TeamTabProps) {
   if (team.length === 0) {
     return (
-      <p className="text-xs py-4" style={{ color: '#484f58' }}>
+      <p className="text-xs py-4" style={{ color: 'var(--tf-text-muted)' }}>
         No team members assigned
       </p>
     );
@@ -391,15 +391,15 @@ function TeamTab({ team }: TeamTabProps) {
         <div
           key={member}
           className="flex flex-col items-center gap-2 rounded-xl p-4"
-          style={{ backgroundColor: '#21262d', border: '1px solid #30363d' }}
+          style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
         >
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
-            style={{ backgroundColor: avatarBg(member, i), color: '#0d1117' }}
+            style={{ backgroundColor: avatarBg(member, i), color: 'var(--tf-bg)' }}
           >
             {avatarInitial(member)}
           </div>
-          <p className="text-xs text-center font-medium" style={{ color: '#e6edf3' }}>
+          <p className="text-xs text-center font-medium" style={{ color: 'var(--tf-text)' }}>
             {member}
           </p>
         </div>
@@ -419,7 +419,7 @@ function InfoTab({ project }: InfoTabProps) {
     <div className="space-y-4">
       <div className="grid gap-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <div>
-          <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#484f58' }}>
+          <p className="text-xs uppercase tracking-widest mb-1" style={{ color: 'var(--tf-text-muted)' }}>
             Status
           </p>
           <span
@@ -432,10 +432,10 @@ function InfoTab({ project }: InfoTabProps) {
 
         {project.type && (
           <div>
-            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#484f58' }}>
+            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: 'var(--tf-text-muted)' }}>
               Type
             </p>
-            <p className="text-xs" style={{ color: '#e6edf3' }}>
+            <p className="text-xs" style={{ color: 'var(--tf-text)' }}>
               {project.type}
             </p>
           </div>
@@ -443,10 +443,10 @@ function InfoTab({ project }: InfoTabProps) {
 
         {project.created_at && (
           <div>
-            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#484f58' }}>
+            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: 'var(--tf-text-muted)' }}>
               Created
             </p>
-            <p className="text-xs" style={{ color: '#e6edf3' }}>
+            <p className="text-xs" style={{ color: 'var(--tf-text)' }}>
               {new Date(project.created_at).toLocaleDateString('en-US', {
                 month: 'long',
                 day: 'numeric',
@@ -458,10 +458,10 @@ function InfoTab({ project }: InfoTabProps) {
 
         {project.updated_at && (
           <div>
-            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#484f58' }}>
+            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: 'var(--tf-text-muted)' }}>
               Last Updated
             </p>
-            <p className="text-xs" style={{ color: '#e6edf3' }}>
+            <p className="text-xs" style={{ color: 'var(--tf-text)' }}>
               {new Date(project.updated_at).toLocaleDateString('en-US', {
                 month: 'long',
                 day: 'numeric',
@@ -474,10 +474,10 @@ function InfoTab({ project }: InfoTabProps) {
 
       {project.description && (
         <div>
-          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
+          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
             Description
           </p>
-          <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
             {project.description}
           </p>
         </div>
@@ -485,7 +485,7 @@ function InfoTab({ project }: InfoTabProps) {
 
       {project.phases && project.phases.length > 0 && (
         <div>
-          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
+          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
             Phases
           </p>
           <div className="flex flex-wrap gap-1.5">
@@ -493,7 +493,7 @@ function InfoTab({ project }: InfoTabProps) {
               <span
                 key={i}
                 className="text-xs px-2 py-0.5 rounded-full"
-                style={{ backgroundColor: '#21262d', color: '#8b8fc7', border: '1px solid #30363d' }}
+                style={{ backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-accent)', border: '1px solid var(--tf-border)' }}
               >
                 {phase}
               </span>
@@ -504,7 +504,7 @@ function InfoTab({ project }: InfoTabProps) {
 
       {project.task_counts && (
         <div>
-          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
+          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
             Task Counts
           </p>
           <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))' }}>
@@ -512,12 +512,12 @@ function InfoTab({ project }: InfoTabProps) {
               <div
                 key={status}
                 className="rounded-lg px-3 py-2 text-center"
-                style={{ backgroundColor: '#21262d' }}
+                style={{ backgroundColor: 'var(--tf-surface-raised)' }}
               >
                 <p className="text-base font-bold" style={{ color: taskColColor(status) }}>
                   {count}
                 </p>
-                <p className="text-xs capitalize" style={{ color: '#484f58' }}>
+                <p className="text-xs capitalize" style={{ color: 'var(--tf-text-muted)' }}>
                   {status.replace(/_/g, ' ')}
                 </p>
               </div>
@@ -551,15 +551,15 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
   return (
     <div
       className="rounded-xl flex flex-col h-full animate-slide-in-right overflow-hidden"
-      style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
+      style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
     >
       {/* Header */}
       <div
         className="px-5 py-4 flex items-start justify-between flex-shrink-0"
-        style={{ borderBottom: '1px solid #21262d' }}
+        style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
       >
         <div className="flex-1 min-w-0 pr-4">
-          <h3 className="text-sm font-bold truncate" style={{ color: '#e6edf3' }}>
+          <h3 className="text-sm font-bold truncate" style={{ color: 'var(--tf-text)' }}>
             {project.name}
           </h3>
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
@@ -570,7 +570,7 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
               {project.status}
             </span>
             {project.type && (
-              <span className="text-xs" style={{ color: '#484f58' }}>
+              <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
                 {project.type}
               </span>
             )}
@@ -579,10 +579,10 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
         <button
           onClick={onClose}
           className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer flex-shrink-0"
-          style={{ color: '#484f58', backgroundColor: 'transparent' }}
+          style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
           aria-label="Close project detail"
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
           }}
           onMouseLeave={(e) => {
             (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
@@ -597,7 +597,7 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
       {/* Tabs */}
       <div
         className="flex gap-1 px-4 pt-3 flex-shrink-0"
-        style={{ borderBottom: '1px solid #21262d' }}
+        style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
         role="tablist"
       >
         {tabs.map((tab) => (
@@ -608,16 +608,16 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
             onClick={() => setActiveTab(tab.id)}
             className="px-3 py-1.5 text-xs font-medium rounded-t-lg transition-all duration-200 cursor-pointer"
             style={{
-              color: activeTab === tab.id ? '#58a6ff' : '#484f58',
-              borderBottom: activeTab === tab.id ? '2px solid #58a6ff' : '2px solid transparent',
+              color: activeTab === tab.id ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+              borderBottom: activeTab === tab.id ? '2px solid var(--tf-accent-blue)' : '2px solid transparent',
               backgroundColor: 'transparent',
               outline: 'none',
             }}
             onMouseEnter={(e) => {
-              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = '#8b949e';
+              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-secondary)';
             }}
             onMouseLeave={(e) => {
-              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = '#484f58';
+              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-muted)';
             }}
           >
             {tab.label}
@@ -654,7 +654,7 @@ export default function ProjectPanel({ projects, loading, tasksByProject }: Proj
           <div
             key={i}
             className="rounded-xl p-4 space-y-2"
-            style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
+            style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
           >
             <Skeleton className="h-5 w-3/4" />
             <Skeleton className="h-3 w-1/2" />
@@ -668,7 +668,7 @@ export default function ProjectPanel({ projects, loading, tasksByProject }: Proj
   if (projects.length === 0) {
     return (
       <div className="flex items-center justify-center py-16">
-        <p className="text-sm" style={{ color: '#484f58' }}>
+        <p className="text-sm" style={{ color: 'var(--tf-text-muted)' }}>
           No projects found. Make sure the backend is running.
         </p>
       </div>

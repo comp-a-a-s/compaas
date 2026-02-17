@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import Tooltip from './Tooltip';
 
 interface LayoutProps {
   activeTab: string;
@@ -14,31 +15,37 @@ const NAV_ITEMS = [
   {
     id: 'overview',
     label: 'Overview',
+    shortcut: '1',
     iconPath: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6',
   },
   {
     id: 'agents',
     label: 'Agents',
+    shortcut: '2',
     iconPath: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z',
   },
   {
     id: 'projects',
     label: 'Projects',
+    shortcut: '3',
     iconPath: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z',
   },
   {
     id: 'activity',
     label: 'Activity',
+    shortcut: '4',
     iconPath: 'M13 10V3L4 14h7v7l9-11h-7z',
   },
   {
     id: 'metrics',
     label: 'Metrics',
+    shortcut: '5',
     iconPath: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z',
   },
   {
     id: 'settings',
     label: 'Settings',
+    shortcut: '6',
     iconPath: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z',
   },
 ];
@@ -70,19 +77,19 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
   };
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: '#0d1117', color: '#e6edf3' }}>
+    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: 'var(--tf-bg)', color: 'var(--tf-text)' }}>
       {/* Sidebar */}
       <aside
         className="flex flex-col flex-shrink-0 w-56"
-        style={{ backgroundColor: '#0d1117', borderRight: '1px solid #30363d' }}
+        style={{ backgroundColor: 'var(--tf-bg)', borderRight: '1px solid var(--tf-border)' }}
       >
         {/* Logo */}
-        <div className="px-4 py-5 flex-shrink-0" style={{ borderBottom: '1px solid #21262d' }}>
+        <div className="px-4 py-5 flex-shrink-0" style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
           <div className="flex items-center gap-3">
             {/* Lightning bolt icon */}
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-              style={{ backgroundColor: '#8b8fc7' }}
+              style={{ backgroundColor: 'var(--tf-accent)' }}
             >
               <svg
                 className="w-4 h-4"
@@ -91,16 +98,16 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                 strokeWidth={2}
                 viewBox="0 0 24 24"
                 aria-hidden="true"
-                style={{ color: '#0d1117' }}
+                style={{ color: 'var(--tf-bg)' }}
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
             <div>
-              <h1 className="text-sm font-bold leading-tight" style={{ color: '#e6edf3' }}>
+              <h1 className="text-sm font-bold leading-tight" style={{ color: 'var(--tf-text)' }}>
                 ThunderFlow
               </h1>
-              <p className="text-xs leading-tight" style={{ color: '#484f58' }}>
+              <p className="text-xs leading-tight" style={{ color: 'var(--tf-text-muted)' }}>
                 AI Dashboard
               </p>
             </div>
@@ -116,41 +123,42 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
           {NAV_ITEMS.map((item) => {
             const isActive = activeTab === item.id;
             return (
-              <button
-                key={item.id}
-                onClick={() => onTabChange(item.id)}
-                aria-current={isActive ? 'page' : undefined}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer text-left"
-                style={{
-                  backgroundColor: isActive ? '#21262d' : 'transparent',
-                  color: isActive ? '#8b8fc7' : '#8b949e',
-                  borderLeft: isActive ? '2px solid #8b8fc7' : '2px solid transparent',
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) {
-                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#0d1117';
-                    (e.currentTarget as HTMLButtonElement).style.color = '#e6edf3';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) {
-                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-                    (e.currentTarget as HTMLButtonElement).style.color = '#8b949e';
-                  }
-                }}
-              >
-                <svg
-                  className="w-4 h-4 flex-shrink-0"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.6}
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
+              <Tooltip key={item.id} content={`${item.label} (${item.shortcut})`} position="right">
+                <button
+                  onClick={() => onTabChange(item.id)}
+                  aria-current={isActive ? 'page' : undefined}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer text-left"
+                  style={{
+                    backgroundColor: isActive ? 'var(--tf-surface-raised)' : 'transparent',
+                    color: isActive ? 'var(--tf-accent)' : 'var(--tf-text-secondary)',
+                    borderLeft: isActive ? '2px solid var(--tf-accent)' : '2px solid transparent',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-bg)';
+                      (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                      (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-secondary)';
+                    }
+                  }}
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" d={item.iconPath} />
-                </svg>
-                {item.label}
-              </button>
+                  <svg
+                    className="w-4 h-4 flex-shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.6}
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d={item.iconPath} />
+                  </svg>
+                  {item.label}
+                </button>
+              </Tooltip>
             );
           })}
         </nav>
@@ -158,18 +166,18 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         {/* Status footer */}
         <div
           className="px-4 py-4 flex-shrink-0"
-          style={{ borderTop: '1px solid #21262d' }}
+          style={{ borderTop: '1px solid var(--tf-surface-raised)' }}
         >
           <div className="flex items-center gap-2">
             <span
               className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse-dot"
-              style={{ backgroundColor: '#3fb950' }}
+              style={{ backgroundColor: 'var(--tf-success)' }}
               aria-hidden="true"
             />
-            <span className="text-xs" style={{ color: '#484f58' }}>
+            <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
               Live
             </span>
-            <span className="text-xs ml-auto" style={{ color: '#30363d' }}>
+            <span className="text-xs ml-auto" style={{ color: 'var(--tf-border)' }}>
               5s poll
             </span>
           </div>
@@ -189,9 +197,9 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
               width: '100%',
               padding: '6px 8px',
               borderRadius: '6px',
-              border: '1px solid #30363d',
+              border: '1px solid var(--tf-border)',
               backgroundColor: 'transparent',
-              color: '#8b949e',
+              color: 'var(--tf-text-secondary)',
               fontSize: '11px',
               cursor: 'pointer',
               display: 'flex',
@@ -200,7 +208,7 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
               transition: 'all 0.2s',
             }}
             onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; e.currentTarget.style.color = '#2ca5e0'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#30363d'; e.currentTarget.style.color = '#8b949e'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--tf-border)'; e.currentTarget.style.color = 'var(--tf-text-secondary)'; }}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
               <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
@@ -215,22 +223,22 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         {/* Header bar */}
         <header
           className="flex items-center justify-between px-6 py-3 flex-shrink-0"
-          style={{ backgroundColor: '#161b22', borderBottom: '1px solid #21262d' }}
+          style={{ backgroundColor: 'var(--tf-surface)', borderBottom: '1px solid var(--tf-surface-raised)' }}
         >
           <div>
-            <h2 className="text-base font-semibold" style={{ color: '#e6edf3' }}>
+            <h2 className="text-base font-semibold" style={{ color: 'var(--tf-text)' }}>
               {PAGE_LABELS[activeTab] ?? 'Dashboard'}
             </h2>
-            <p className="text-xs" style={{ color: '#484f58' }}>
+            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
               ThunderFlow — AI Virtual Company
             </p>
           </div>
           <div
             className="text-xs px-3 py-1.5 rounded-full"
             style={{
-              color: '#8b949e',
-              backgroundColor: '#21262d',
-              border: '1px solid #30363d',
+              color: 'var(--tf-text-secondary)',
+              backgroundColor: 'var(--tf-surface-raised)',
+              border: '1px solid var(--tf-border)',
             }}
           >
             {today}
@@ -241,7 +249,7 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         <main
           id="main-content"
           className="flex-1 overflow-y-auto p-6"
-          style={{ backgroundColor: '#0d1117' }}
+          style={{ backgroundColor: 'var(--tf-bg)' }}
         >
           {children}
         </main>
@@ -256,8 +264,8 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
             right: chatFullscreen ? '2.5vw' : '24px',
             width: chatFullscreen ? '95vw' : '420px',
             height: chatFullscreen ? '90vh' : '560px',
-            backgroundColor: '#161b22',
-            border: '1px solid #30363d',
+            backgroundColor: 'var(--tf-surface)',
+            border: '1px solid var(--tf-border)',
             borderRadius: '16px',
             boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
             overflow: 'hidden',
@@ -267,16 +275,16 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
           {/* Chat header with fullscreen + close */}
           <div
             className="flex items-center justify-between px-4 py-3 flex-shrink-0"
-            style={{ borderBottom: '1px solid #21262d' }}
+            style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
           >
             <div className="flex items-center gap-2">
               <div
                 className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
-                style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
+                style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
               >
                 M
               </div>
-              <span className="text-sm font-semibold" style={{ color: '#e6edf3' }}>
+              <span className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>
                 CEO Chat
               </span>
             </div>
@@ -286,9 +294,9 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                 onClick={() => setChatFullscreen(f => !f)}
                 title={chatFullscreen ? 'Restore' : 'Expand'}
                 className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer"
-                style={{ color: '#484f58', backgroundColor: 'transparent' }}
+                style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
                 onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
                 }}
                 onMouseLeave={(e) => {
                   (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
@@ -308,10 +316,10 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
               <button
                 onClick={handleChatToggle}
                 className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer"
-                style={{ color: '#484f58', backgroundColor: 'transparent' }}
+                style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
                 aria-label="Close chat"
                 onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
                 }}
                 onMouseLeave={(e) => {
                   (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
@@ -330,62 +338,64 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         </div>
       )}
 
-      {/* Floating chat toggle button */}
-      <button
-        onClick={handleChatToggle}
-        className="fixed z-50 flex items-center justify-center rounded-full shadow-lg transition-all duration-200 cursor-pointer"
-        style={{
-          position: 'fixed',
-          bottom: '24px',
-          right: '24px',
-          width: '52px',
-          height: '52px',
-          backgroundColor: chatOpen ? '#21262d' : '#8b8fc7',
-          color: chatOpen ? '#8b949e' : '#0d1117',
-          border: `1px solid ${chatOpen ? '#30363d' : '#8b8fc7'}`,
-        }}
-        aria-label={chatOpen ? 'Close CEO Chat' : 'Open CEO Chat'}
-        onMouseEnter={(e) => {
-          if (!chatOpen) {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#7b7fbf';
-          } else {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#30363d';
-          }
-        }}
-        onMouseLeave={(e) => {
-          if (!chatOpen) {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#8b8fc7';
-          } else {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
-          }
-        }}
-      >
-        {chatOpen ? (
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
-        ) : (
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-          </svg>
-        )}
-        {/* Unread badge */}
-        {chatHasUnread && !chatOpen && (
-          <span
-            style={{
-              position: 'absolute',
-              top: '-4px',
-              right: '-4px',
-              width: '12px',
-              height: '12px',
-              borderRadius: '50%',
-              backgroundColor: '#f85149',
-              border: '2px solid #0d1117',
-            }}
-            aria-label="Unread messages"
-          />
-        )}
-      </button>
+      {/* Floating chat toggle button — hidden when chat is fullscreen */}
+      {!(chatOpen && chatFullscreen) && (
+        <button
+          onClick={handleChatToggle}
+          className="fixed z-50 flex items-center justify-center rounded-full shadow-lg transition-all duration-200 cursor-pointer"
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            width: '52px',
+            height: '52px',
+            backgroundColor: chatOpen ? 'var(--tf-surface-raised)' : 'var(--tf-accent)',
+            color: chatOpen ? 'var(--tf-text-secondary)' : 'var(--tf-bg)',
+            border: `1px solid ${chatOpen ? 'var(--tf-border)' : 'var(--tf-accent)'}`,
+          }}
+          aria-label={chatOpen ? 'Close CEO Chat' : 'Open CEO Chat'}
+          onMouseEnter={(e) => {
+            if (!chatOpen) {
+              (e.currentTarget as HTMLButtonElement).style.opacity = '0.85';
+            } else {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-border)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!chatOpen) {
+              (e.currentTarget as HTMLButtonElement).style.opacity = '1';
+            } else {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
+            }
+          }}
+        >
+          {chatOpen ? (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          ) : (
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+          )}
+          {/* Unread badge */}
+          {chatHasUnread && !chatOpen && (
+            <span
+              style={{
+                position: 'absolute',
+                top: '-4px',
+                right: '-4px',
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--tf-error)',
+                border: '2px solid var(--tf-bg)',
+              }}
+              aria-label="Unread messages"
+            />
+          )}
+        </button>
+      )}
     </div>
   );
 }

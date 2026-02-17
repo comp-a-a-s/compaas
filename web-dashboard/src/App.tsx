@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import './App.css';
 
 import Layout from './components/Layout';
@@ -10,6 +10,9 @@ import MetricsPanel from './components/MetricsPanel';
 import ChatPanel from './components/ChatPanel';
 import SetupWizard from './components/SetupWizard';
 import SettingsPanel from './components/SettingsPanel';
+
+import { useThemeInit } from './hooks/useTheme';
+import { useKeyboardShortcuts, useShortcutsPanel, ShortcutsModal } from './hooks/useKeyboardShortcuts';
 
 import {
   fetchAgents,
@@ -53,6 +56,8 @@ function parseActivityLine(line: string): ActivityEvent | null {
 }
 
 export default function App() {
+  useThemeInit();
+
   const [activeTab, setActiveTab] = useState<string>('overview');
 
   // Config / setup state
@@ -63,6 +68,9 @@ export default function App() {
   // Floating chat state
   const [chatOpen, setChatOpen] = useState(false);
   const [chatHasUnread, setChatHasUnread] = useState(false);
+
+  // Shortcuts panel
+  const { visible: shortcutsVisible, hide: hideShortcuts } = useShortcutsPanel();
 
   // Data state
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -211,20 +219,37 @@ export default function App() {
     };
   }, [showWizard]);
 
+  // ---- Keyboard shortcuts ----
+  const shortcuts = useMemo(() => ({
+    '1': () => setActiveTab('overview'),
+    '2': () => setActiveTab('agents'),
+    '3': () => setActiveTab('projects'),
+    '4': () => setActiveTab('activity'),
+    '5': () => setActiveTab('metrics'),
+    '6': () => setActiveTab('settings'),
+    'c': () => setChatOpen((prev) => {
+      const next = !prev;
+      if (next) setChatHasUnread(false);
+      return next;
+    }),
+  }), []);
+
+  useKeyboardShortcuts(shortcuts);
+
   // ---- Loading / wizard screens ----
 
   if (configLoading) {
     return (
       <div
         className="flex items-center justify-center h-screen"
-        style={{ backgroundColor: '#0d1117', color: '#484f58' }}
+        style={{ backgroundColor: 'var(--tf-bg)', color: 'var(--tf-text-muted)' }}
       >
         <div className="text-center">
           <div
             className="w-10 h-10 rounded-lg flex items-center justify-center mx-auto mb-3"
-            style={{ backgroundColor: '#8b8fc7' }}
+            style={{ backgroundColor: 'var(--tf-accent)' }}
           >
-            <svg className="w-5 h-5" style={{ color: '#0d1117' }} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <svg className="w-5 h-5" style={{ color: 'var(--tf-bg)' }} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
@@ -289,7 +314,7 @@ export default function App() {
         );
 
       case 'settings':
-        return <SettingsPanel />;
+        return <SettingsPanel onConfigUpdated={() => { loadAgents(); }} />;
 
       default:
         return (
@@ -307,29 +332,32 @@ export default function App() {
   };
 
   return (
-    <Layout
-      activeTab={activeTab}
-      onTabChange={setActiveTab}
-      chatOpen={chatOpen}
-      onChatToggle={() => {
-        setChatOpen((prev) => {
-          const next = !prev;
-          if (next) setChatHasUnread(false);
-          return next;
-        });
-      }}
-      chatHasUnread={chatHasUnread}
-      chatPanel={
-        <ChatPanel
-          floating
-          chatOpen={chatOpen}
-          onNewCeoMessage={() => {
-            if (!chatOpen) setChatHasUnread(true);
-          }}
-        />
-      }
-    >
-      {renderContent()}
-    </Layout>
+    <>
+      <Layout
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        chatOpen={chatOpen}
+        onChatToggle={() => {
+          setChatOpen((prev) => {
+            const next = !prev;
+            if (next) setChatHasUnread(false);
+            return next;
+          });
+        }}
+        chatHasUnread={chatHasUnread}
+        chatPanel={
+          <ChatPanel
+            floating
+            chatOpen={chatOpen}
+            onNewCeoMessage={() => {
+              if (!chatOpen) setChatHasUnread(true);
+            }}
+          />
+        }
+      >
+        {renderContent()}
+      </Layout>
+      {shortcutsVisible && <ShortcutsModal onClose={hideShortcuts} />}
+    </>
   );
 }
