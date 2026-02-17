@@ -5,6 +5,12 @@ export interface Agent {
   model: string;
   status: string;
   team?: string;
+  expertise?: string;
+  hired_at?: string;
+  description?: string;
+  tools?: string;
+  assigned_tasks?: TaskWithProject[];
+  recent_activity?: ActivityEvent[];
 }
 
 export interface Project {
@@ -14,7 +20,9 @@ export interface Project {
   description?: string;
   type?: string;
   created_at?: string;
-  progress?: { done: number; total: number; percentage: number };
+  updated_at?: string;
+  phases?: string[];
+  team?: string[];
   task_counts?: Record<string, number>;
   total_tasks?: number;
 }
@@ -27,6 +35,30 @@ export interface Task {
   priority: string;
   status: string;
   depends_on?: string[];
+  created_at?: string;
+  updated_at?: string;
+  notes?: { text: string; at: string }[];
+}
+
+export interface TaskWithProject extends Task {
+  project_id: string;
+  project_name: string;
+}
+
+export interface Decision {
+  title: string;
+  decision: string;
+  rationale: string;
+  decided_by: string;
+  alternatives?: string;
+  timestamp: string;
+}
+
+export interface ActivityEvent {
+  timestamp: string;
+  agent: string;
+  action: string;
+  detail: string;
 }
 
 export interface TokenReport {
@@ -34,4 +66,27 @@ export interface TokenReport {
   grand_total_tokens: number;
   by_agent: Record<string, { model: string; total_tokens: number; task_count: number }>;
   by_model: Record<string, { total_tokens: number; task_count: number }>;
+  records: TokenRecord[];
+}
+
+export interface TokenRecord {
+  agent_name: string;
+  model: string;
+  task_description: string;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
+  estimated_total_tokens: number;
+  project_id?: string;
+  task_id?: string;
+  logged_at: string;
+}
+
+export interface Budget {
+  project_id: string;
+  agent_name: string;
+  token_limit: number;
+  used: number;
+  remaining: number;
+  usage_percent: number;
+  status: string;
 }

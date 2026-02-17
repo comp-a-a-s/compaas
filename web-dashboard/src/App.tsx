@@ -2,26 +2,50 @@ import { useState, useEffect, useCallback } from 'react';
 import './App.css';
 
 import Layout from './components/Layout';
-import OrgChart from './components/OrgChart';
-import ProjectList from './components/ProjectList';
-import TaskBoard from './components/TaskBoard';
-import ActivityFeed, { parseEvent } from './components/ActivityFeed';
-import type { ActivityEvent } from './components/ActivityFeed';
-import TokenMetrics from './components/TokenMetrics';
+import Overview from './components/Overview';
+import AgentPanel from './components/AgentPanel';
+import ProjectPanel from './components/ProjectPanel';
+import ActivityPanel from './components/ActivityPanel';
+import MetricsPanel from './components/MetricsPanel';
 
-import { fetchOrgChart, fetchProjects, fetchProjectDetail, fetchTokenReport, createActivityStream } from './api/client';
-import type { Agent, Project, Task, TokenReport } from './types';
+import {
+  fetchAgents,
+  fetchProjects,
+  fetchProjectDetail,
+  fetchTokenReport,
+  fetchBudgets,
+  fetchRecentActivity,
+  createActivityStream,
+} from './api/client';
 
-const MAX_EVENTS = 100;
+import type { Agent, Project, Task, ActivityEvent, TokenReport, Budget } from './types';
+
+const MAX_EVENTS = 200;
 const POLL_INTERVAL_MS = 5000;
 
-function SectionCard({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
-  return (
-    <section className={`bg-gray-900 rounded-2xl border border-gray-800 p-5 ${className}`}>
-      <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-4">{title}</h2>
-      {children}
-    </section>
-  );
+function parseActivityLine(line: string): ActivityEvent | null {
+  if (!line || !line.trim()) return null;
+  try {
+    const parsed = JSON.parse(line) as ActivityEvent;
+    return parsed;
+  } catch {
+    // Try to parse as a simple text event: "timestamp | agent | action | detail"
+    const parts = line.split('|').map((s) => s.trim());
+    if (parts.length >= 3) {
+      return {
+        timestamp: parts[0] || new Date().toISOString(),
+        agent: parts[1] || 'System',
+        action: parts[2] || 'EVENT',
+        detail: parts[3] || line,
+      };
+    }
+    return {
+      timestamp: new Date().toISOString(),
+      agent: 'System',
+      action: 'EVENT',
+      detail: line,
+    };
+  }
 }
 
 export default function App() {
@@ -30,25 +54,26 @@ export default function App() {
   // Data state
   const [agents, setAgents] = useState<Agent[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [tasksByProject, setTasksByProject] = useState<Record<string, Task[]>>({});
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [tokenReport, setTokenReport] = useState<TokenReport | null>(null);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
 
-  // Loading state
+  // Loading states
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingTasks, setLoadingTasks] = useState(true);
-  const [loadingTokens, setLoadingTokens] = useState(true);
+  const [loadingMetrics, setLoadingMetrics] = useState(true);
 
-  // Event ID counter
-  const [eventIdCounter, setEventIdCounter] = useState(0);
+  // ---- Data loaders ----
 
   const loadAgents = useCallback(async () => {
     try {
-      const data = await fetchOrgChart();
-      setAgents(Array.isArray(data) ? data : []);
+      const data = await fetchAgents();
+      if (Array.isArray(data)) setAgents(data);
     } catch {
-      // Backend may not be running — keep previous state silently
+      // backend may not be running — keep previous state
     } finally {
       setLoadingAgents(false);
     }
@@ -56,20 +81,25 @@ export default function App() {
 
   const loadProjects = useCallback(async () => {
     try {
-      const data = await fetchProjects();
-      const list = Array.isArray(data) ? data : [];
+      const projectList = await fetchProjects();
+      const list = Array.isArray(projectList) ? projectList : [];
       setProjects(list);
-      // Load tasks for all projects
+
+      // Fetch tasks for each project in parallel
       setLoadingTasks(true);
-      const taskResults = await Promise.allSettled(
-        list.map((p) => fetchProjectDetail(p.id))
+      const results = await Promise.allSettled(
+        list.map((p) => fetchProjectDetail(p.id).then((r) => ({ id: p.id, tasks: r.tasks ?? [] })))
       );
+
+      const byProject: Record<string, Task[]> = {};
       const merged: Task[] = [];
-      taskResults.forEach((r) => {
-        if (r.status === 'fulfilled' && r.value?.tasks) {
-          merged.push(...r.value.tasks);
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          byProject[result.value.id] = result.value.tasks;
+          merged.push(...result.value.tasks);
         }
-      });
+      }
+      setTasksByProject(byProject);
       setAllTasks(merged);
     } catch {
       // keep previous
@@ -79,47 +109,60 @@ export default function App() {
     }
   }, []);
 
-  const loadTokens = useCallback(async () => {
+  const loadMetrics = useCallback(async () => {
     try {
-      const data = await fetchTokenReport();
-      setTokenReport(data);
+      const [report, budgetList] = await Promise.allSettled([
+        fetchTokenReport(),
+        fetchBudgets(),
+      ]);
+      if (report.status === 'fulfilled') setTokenReport(report.value);
+      if (budgetList.status === 'fulfilled') setBudgets(budgetList.value);
     } catch {
       // endpoint may not exist
     } finally {
-      setLoadingTokens(false);
+      setLoadingMetrics(false);
     }
   }, []);
 
-  // Initial load + polling
+  // ---- Initial load + polling ----
   useEffect(() => {
     loadAgents();
     loadProjects();
-    loadTokens();
+    loadMetrics();
+
+    // Also seed recent activity
+    fetchRecentActivity(50).then((events) => {
+      if (Array.isArray(events) && events.length > 0) {
+        setActivityEvents((prev) => {
+          const merged = [...events, ...prev];
+          return merged.slice(0, MAX_EVENTS);
+        });
+      }
+    }).catch(() => {
+      // no recent activity endpoint
+    });
 
     const interval = setInterval(() => {
       loadAgents();
       loadProjects();
-      loadTokens();
+      loadMetrics();
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [loadAgents, loadProjects, loadTokens]);
+  }, [loadAgents, loadProjects, loadMetrics]);
 
-  // SSE activity stream
+  // ---- SSE activity stream ----
   useEffect(() => {
     let es: EventSource | null = null;
-    let counter = 0;
 
     try {
       es = createActivityStream((line: string) => {
-        if (!line.trim()) return;
-        counter += 1;
-        const event = parseEvent(line, counter);
+        const event = parseActivityLine(line);
+        if (!event) return;
         setActivityEvents((prev) => {
-          const next = [...prev, event];
-          return next.length > MAX_EVENTS ? next.slice(next.length - MAX_EVENTS) : next;
+          const next = [event, ...prev];
+          return next.length > MAX_EVENTS ? next.slice(0, MAX_EVENTS) : next;
         });
-        setEventIdCounter(counter);
       });
     } catch {
       // SSE not available
@@ -130,88 +173,68 @@ export default function App() {
     };
   }, []);
 
-  // Suppress unused warning for eventIdCounter
-  void eventIdCounter;
-
-  const renderOverview = () => (
-    <div className="space-y-6">
-      {/* Stats row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { label: 'Agents', value: loadingAgents ? '—' : agents.length.toString(), color: 'text-violet-400' },
-          { label: 'Projects', value: loadingProjects ? '—' : projects.length.toString(), color: 'text-blue-400' },
-          { label: 'Tasks', value: loadingTasks ? '—' : allTasks.length.toString(), color: 'text-green-400' },
-          { label: 'Live Events', value: activityEvents.length.toString(), color: 'text-orange-400' },
-        ].map((stat) => (
-          <div key={stat.label} className="bg-gray-800 border border-gray-700 rounded-xl p-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">{stat.label}</p>
-            <p className={`text-3xl font-bold ${stat.color}`}>{stat.value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Org Chart */}
-      <SectionCard title="Organization — AI Agents">
-        <OrgChart agents={agents} loading={loadingAgents} />
-      </SectionCard>
-
-      {/* Projects + Tasks */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <SectionCard title="Projects">
-          <ProjectList projects={projects} loading={loadingProjects} />
-        </SectionCard>
-        <SectionCard title="Task Board">
-          <TaskBoard tasks={allTasks} loading={loadingTasks} />
-        </SectionCard>
-      </div>
-
-      {/* Activity Feed */}
-      <SectionCard title="Live Activity Feed">
-        <ActivityFeed events={activityEvents} />
-      </SectionCard>
-
-      {/* Token Metrics */}
-      <SectionCard title="Token Metrics">
-        <TokenMetrics report={tokenReport} loading={loadingTokens} />
-      </SectionCard>
-    </div>
-  );
-
-  const renderProjects = () => (
-    <div className="space-y-6">
-      <SectionCard title="All Projects">
-        <ProjectList projects={projects} loading={loadingProjects} />
-      </SectionCard>
-      <SectionCard title="Task Board — All Projects">
-        <TaskBoard tasks={allTasks} loading={loadingTasks} />
-      </SectionCard>
-    </div>
-  );
-
-  const renderAgents = () => (
-    <SectionCard title="Organization Chart">
-      <OrgChart agents={agents} loading={loadingAgents} />
-    </SectionCard>
-  );
-
-  const renderTokens = () => (
-    <div className="space-y-6">
-      <SectionCard title="Token Usage Report">
-        <TokenMetrics report={tokenReport} loading={loadingTokens} />
-      </SectionCard>
-      <SectionCard title="Live Activity Feed">
-        <ActivityFeed events={activityEvents} />
-      </SectionCard>
-    </div>
-  );
+  // ---- Render ----
 
   const renderContent = () => {
     switch (activeTab) {
-      case 'overview': return renderOverview();
-      case 'projects': return renderProjects();
-      case 'agents': return renderAgents();
-      case 'tokens': return renderTokens();
-      default: return renderOverview();
+      case 'overview':
+        return (
+          <Overview
+            agents={agents}
+            projects={projects}
+            tasks={allTasks}
+            events={activityEvents}
+            loadingAgents={loadingAgents}
+            loadingProjects={loadingProjects}
+            loadingTasks={loadingTasks}
+          />
+        );
+
+      case 'agents':
+        return (
+          <AgentPanel
+            agents={agents}
+            loading={loadingAgents}
+          />
+        );
+
+      case 'projects':
+        return (
+          <ProjectPanel
+            projects={projects}
+            loading={loadingProjects}
+            tasksByProject={tasksByProject}
+          />
+        );
+
+      case 'activity':
+        return (
+          <ActivityPanel
+            events={activityEvents}
+          />
+        );
+
+      case 'metrics':
+        return (
+          <MetricsPanel
+            tokenReport={tokenReport}
+            budgets={budgets}
+            loading={loadingMetrics}
+          />
+        );
+
+      default:
+        return (
+          <Overview
+            agents={agents}
+            projects={projects}
+            tasks={allTasks}
+            events={activityEvents}
+            loadingAgents={loadingAgents}
+            loadingProjects={loadingProjects}
+            loadingTasks={loadingTasks}
+          />
+        );
     }
   };
 
