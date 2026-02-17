@@ -55,7 +55,7 @@ _allowed_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_methods=["GET", "DELETE"],
+    allow_methods=["GET", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -360,6 +360,44 @@ def token_budgets(
 
 
 # ---------------------------------------------------------------------------
+# Agent overrides (persistent name / status customization)
+# ---------------------------------------------------------------------------
+
+AGENT_OVERRIDES_PATH = os.path.join(DATA_DIR, "agent_overrides.yaml")
+
+VALID_AGENT_STATUSES = {"permanent", "active", "available", "busy", "inactive", "on_demand"}
+
+
+def _load_agent_overrides() -> dict[str, dict]:
+    """Load agent overrides from disk."""
+    if not os.path.exists(AGENT_OVERRIDES_PATH):
+        return {}
+    try:
+        with open(AGENT_OVERRIDES_PATH) as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("overrides", {})
+    except (yaml.YAMLError, OSError):
+        return {}
+
+
+def _save_agent_overrides(overrides: dict[str, dict]) -> None:
+    """Persist agent overrides to disk."""
+    os.makedirs(os.path.dirname(AGENT_OVERRIDES_PATH), exist_ok=True)
+    with open(AGENT_OVERRIDES_PATH, "w") as f:
+        yaml.dump({"overrides": overrides}, f, default_flow_style=False)
+
+
+def _apply_overrides(agent_id: str, agent: dict) -> dict:
+    """Apply any saved overrides to an agent dict."""
+    overrides = _load_agent_overrides()
+    if agent_id in overrides:
+        for key in ("name", "status"):
+            if key in overrides[agent_id]:
+                agent[key] = overrides[agent_id][key]
+    return agent
+
+
+# ---------------------------------------------------------------------------
 # Agents
 # ---------------------------------------------------------------------------
 
@@ -369,14 +407,15 @@ def list_agents() -> list[dict]:
     agents: list[dict] = []
 
     for agent_id, info in AGENT_REGISTRY.items():
-        agents.append({
+        entry = {
             "id": agent_id,
             "name": info["name"],
             "role": info["role"],
             "model": info["model"],
             "status": info["status"],
             "team": info["team"],
-        })
+        }
+        agents.append(_apply_overrides(agent_id, entry))
 
     # Dynamically hired agents from hiring log.
     hiring_log_path = os.path.join(DATA_DIR, "hiring_log.yaml")
@@ -384,7 +423,7 @@ def list_agents() -> list[dict]:
         with open(hiring_log_path) as f:
             log = yaml.safe_load(f) or {"hired": []}
         for h in log.get("hired", []):
-            agents.append({
+            entry = {
                 "id": h["name"],
                 "role": h["role"],
                 "model": h.get("model", "sonnet"),
@@ -392,7 +431,8 @@ def list_agents() -> list[dict]:
                 "team": "hired",
                 "expertise": h.get("expertise", ""),
                 "hired_at": h.get("hired_at", ""),
-            })
+            }
+            agents.append(_apply_overrides(h["name"], entry))
 
     return agents
 
@@ -453,7 +493,7 @@ def get_agent_detail(agent_id: str) -> dict:
                     continue
         activity = activity[-50:]  # Last 50 events
 
-    return {
+    result = {
         "id": agent_id,
         "name": info.get("name", agent_id),
         "role": info.get("role", ""),
@@ -465,6 +505,61 @@ def get_agent_detail(agent_id: str) -> dict:
         "assigned_tasks": assigned_tasks,
         "recent_activity": activity,
     }
+    return _apply_overrides(agent_id, result)
+
+
+@app.patch("/api/agents/{agent_id}", summary="Update agent name or status")
+def update_agent(agent_id: str, updates: dict) -> dict:
+    """Update an agent's display name and/or status.
+
+    Accepts JSON body with optional fields: ``name``, ``status``.
+    Changes are persisted in agent_overrides.yaml.
+    """
+    # Verify the agent exists
+    info = AGENT_REGISTRY.get(agent_id)
+    if not info:
+        hiring_log_path = os.path.join(DATA_DIR, "hiring_log.yaml")
+        if os.path.exists(hiring_log_path):
+            with open(hiring_log_path) as f:
+                log = yaml.safe_load(f) or {"hired": []}
+            for h in log.get("hired", []):
+                if h["name"] == agent_id:
+                    info = h
+                    break
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    new_name = updates.get("name")
+    new_status = updates.get("status")
+
+    if new_name is None and new_status is None:
+        raise HTTPException(status_code=400, detail="Provide at least 'name' or 'status' to update.")
+
+    if new_name is not None:
+        new_name = str(new_name).strip()
+        if not new_name or len(new_name) > 50:
+            raise HTTPException(status_code=400, detail="Name must be 1-50 characters.")
+
+    if new_status is not None:
+        new_status = str(new_status).strip().lower()
+        if new_status not in VALID_AGENT_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status '{new_status}'. Valid: {', '.join(sorted(VALID_AGENT_STATUSES))}",
+            )
+
+    overrides = _load_agent_overrides()
+    if agent_id not in overrides:
+        overrides[agent_id] = {}
+
+    if new_name is not None:
+        overrides[agent_id]["name"] = new_name
+    if new_status is not None:
+        overrides[agent_id]["status"] = new_status
+
+    _save_agent_overrides(overrides)
+
+    return {"id": agent_id, "updated": {k: v for k, v in [("name", new_name), ("status", new_status)] if v is not None}}
 
 
 # ---------------------------------------------------------------------------

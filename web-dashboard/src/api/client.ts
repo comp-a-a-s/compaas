@@ -21,6 +21,19 @@ export async function fetchAgentDetail(id: string): Promise<Agent | null> {
   return safeFetch<Agent | null>(`${BASE}/agents/${encodeURIComponent(id)}`, null);
 }
 
+export async function updateAgent(id: string, updates: { name?: string; status?: string }): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/agents/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchProjects(): Promise<Project[]> {
   return safeFetch<Project[]>(`${BASE}/projects`, []);
 }

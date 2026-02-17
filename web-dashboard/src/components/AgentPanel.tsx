@@ -1,10 +1,13 @@
-import { useState, useEffect } from 'react';
-import { fetchAgentDetail } from '../api/client';
+import { useState, useEffect, useRef } from 'react';
+import { fetchAgentDetail, updateAgent } from '../api/client';
 import type { Agent, ActivityEvent, TaskWithProject } from '../types';
+
+const AGENT_STATUSES = ['permanent', 'active', 'available', 'busy', 'inactive', 'on_demand'] as const;
 
 interface AgentPanelProps {
   agents: Agent[];
   loading: boolean;
+  onAgentUpdated?: () => void;
 }
 
 // ---- Helpers ----
@@ -153,12 +156,65 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
 interface DetailPanelProps {
   agent: Agent;
   onClose: () => void;
+  onAgentUpdated?: () => void;
 }
-function DetailPanel({ agent, onClose }: DetailPanelProps) {
+function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
   const badge = modelBadge(agent.model);
   const color = avatarColor(agent.model);
   const status = statusStyle(agent.status);
   const initial = agent.name.charAt(0).toUpperCase();
+
+  // Inline name editing
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState(agent.name);
+  const [savingName, setSavingName] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  // Status editing
+  const [editingStatus, setEditingStatus] = useState(false);
+  const [savingStatus, setSavingStatus] = useState(false);
+
+  // Sync nameValue when agent changes
+  useEffect(() => {
+    setNameValue(agent.name);
+    setEditingName(false);
+    setEditingStatus(false);
+  }, [agent.id, agent.name]);
+
+  // Focus input when editing starts
+  useEffect(() => {
+    if (editingName) nameInputRef.current?.focus();
+  }, [editingName]);
+
+  const handleNameSave = async () => {
+    const trimmed = nameValue.trim();
+    if (!trimmed || trimmed === agent.name) {
+      setEditingName(false);
+      setNameValue(agent.name);
+      return;
+    }
+    setSavingName(true);
+    const ok = await updateAgent(agent.id, { name: trimmed });
+    setSavingName(false);
+    if (ok) {
+      setEditingName(false);
+      onAgentUpdated?.();
+    }
+  };
+
+  const handleStatusChange = async (newStatus: string) => {
+    if (newStatus === agent.status) {
+      setEditingStatus(false);
+      return;
+    }
+    setSavingStatus(true);
+    const ok = await updateAgent(agent.id, { status: newStatus });
+    setSavingStatus(false);
+    if (ok) {
+      setEditingStatus(false);
+      onAgentUpdated?.();
+    }
+  };
 
   // Parse tools from comma-separated string
   const tools: string[] = agent.tools
@@ -186,9 +242,67 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
             {initial}
           </div>
           <div>
-            <h3 className="text-sm font-bold" style={{ color: '#cdd6f4' }}>
-              {agent.name}
-            </h3>
+            {/* Editable name */}
+            {editingName ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  ref={nameInputRef}
+                  type="text"
+                  value={nameValue}
+                  onChange={(e) => setNameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleNameSave();
+                    if (e.key === 'Escape') { setEditingName(false); setNameValue(agent.name); }
+                  }}
+                  disabled={savingName}
+                  maxLength={50}
+                  className="text-sm font-bold rounded px-1.5 py-0.5 outline-none"
+                  style={{
+                    backgroundColor: '#313244',
+                    color: '#cdd6f4',
+                    border: '1px solid #cba6f7',
+                    width: '140px',
+                  }}
+                />
+                <button
+                  onClick={handleNameSave}
+                  disabled={savingName}
+                  className="w-5 h-5 flex items-center justify-center rounded cursor-pointer"
+                  style={{ color: '#a6e3a1' }}
+                  title="Save"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => { setEditingName(false); setNameValue(agent.name); }}
+                  className="w-5 h-5 flex items-center justify-center rounded cursor-pointer"
+                  style={{ color: '#f38ba8' }}
+                  title="Cancel"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 group">
+                <h3 className="text-sm font-bold" style={{ color: '#cdd6f4' }}>
+                  {agent.name}
+                </h3>
+                <button
+                  onClick={() => setEditingName(true)}
+                  className="w-5 h-5 flex items-center justify-center rounded opacity-40 hover:opacity-100 transition-opacity cursor-pointer"
+                  style={{ color: '#6c7086' }}
+                  title="Edit name"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                </button>
+              </div>
+            )}
             <p className="text-xs" style={{ color: '#a6adc8' }}>
               {agent.role}
             </p>
@@ -199,10 +313,52 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
               >
                 {badge.label}
               </span>
-              <span className="flex items-center gap-1 text-xs" style={{ color: status.dot }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: status.dot }} />
-                {status.label}
-              </span>
+
+              {/* Editable status */}
+              {editingStatus ? (
+                <div className="flex items-center gap-1">
+                  <select
+                    value={agent.status}
+                    onChange={(e) => handleStatusChange(e.target.value)}
+                    disabled={savingStatus}
+                    className="text-xs rounded px-1.5 py-0.5 cursor-pointer outline-none"
+                    style={{
+                      backgroundColor: '#313244',
+                      color: '#cdd6f4',
+                      border: '1px solid #cba6f7',
+                    }}
+                  >
+                    {AGENT_STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {s === 'on_demand' ? 'On-demand' : s.charAt(0).toUpperCase() + s.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setEditingStatus(false)}
+                    className="w-4 h-4 flex items-center justify-center rounded cursor-pointer"
+                    style={{ color: '#6c7086' }}
+                    title="Cancel"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setEditingStatus(true)}
+                  className="flex items-center gap-1 text-xs cursor-pointer transition-opacity hover:opacity-80"
+                  style={{ color: status.dot, background: 'none', border: 'none', padding: 0 }}
+                  title="Click to change status"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: status.dot }} />
+                  {status.label}
+                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ opacity: 0.5 }}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -394,7 +550,7 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
 }
 
 // ---- Main AgentPanel ----
-export default function AgentPanel({ agents, loading }: AgentPanelProps) {
+export default function AgentPanel({ agents, loading, onAgentUpdated }: AgentPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailedAgent, setDetailedAgent] = useState<Agent | null>(null);
 
@@ -475,7 +631,7 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
       {/* Detail panel */}
       {selectedAgent && (
         <div className="flex-1 overflow-hidden" style={{ minWidth: 0 }}>
-          <DetailPanel agent={selectedAgent} onClose={() => setSelectedId(null)} />
+          <DetailPanel agent={selectedAgent} onClose={() => setSelectedId(null)} onAgentUpdated={onAgentUpdated} />
         </div>
       )}
     </div>
