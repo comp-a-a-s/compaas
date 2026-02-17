@@ -1,4 +1,4 @@
-"""CrackPie Web Dashboard — entry point."""
+"""ThunderFlow Web Dashboard — entry point."""
 import os
 import subprocess
 import sys
@@ -22,29 +22,29 @@ def _ensure_frontend_built() -> None:
     node_modules = os.path.join(web_dir, "node_modules")
     try:
         if not os.path.isdir(node_modules):
-            print("[CrackPie] Installing frontend dependencies...")
+            print("[ThunderFlow] Installing frontend dependencies...")
             subprocess.run(["npm", "install"], cwd=web_dir, check=True)
 
-        print("[CrackPie] Building frontend...")
+        print("[ThunderFlow] Building frontend...")
         subprocess.run(["npm", "run", "build"], cwd=web_dir, check=True)
-        print("[CrackPie] Frontend built successfully.")
+        print("[ThunderFlow] Frontend built successfully.")
     except FileNotFoundError:
-        print("[CrackPie] Warning: npm not found. Install Node.js to build the frontend.", file=sys.stderr)
-        print("[CrackPie]   Then run: cd web-dashboard && npm install && npm run build", file=sys.stderr)
+        print("[ThunderFlow] Warning: npm not found. Install Node.js to build the frontend.", file=sys.stderr)
+        print("[ThunderFlow]   Then run: cd web-dashboard && npm install && npm run build", file=sys.stderr)
     except subprocess.CalledProcessError as exc:
-        print(f"[CrackPie] Warning: Frontend build failed (exit code {exc.returncode}).", file=sys.stderr)
+        print(f"[ThunderFlow] Warning: Frontend build failed (exit code {exc.returncode}).", file=sys.stderr)
 
 
 def main():
-    host = os.environ.get("CRACKPIE_API_HOST", "127.0.0.1")
-    port = int(os.environ.get("CRACKPIE_API_PORT", "8420"))
-    debug = os.environ.get("CRACKPIE_DEBUG", "").lower() == "true"
+    host = os.environ.get("THUNDERFLOW_API_HOST", os.environ.get("CRACKPIE_API_HOST", "127.0.0.1"))
+    port = int(os.environ.get("THUNDERFLOW_API_PORT", os.environ.get("CRACKPIE_API_PORT", "8420")))
+    debug = os.environ.get("THUNDERFLOW_DEBUG", os.environ.get("CRACKPIE_DEBUG", "")).lower() == "true"
 
     # Build frontend if dist is missing
     _ensure_frontend_built()
 
-    # Auto-open browser after a short delay (set CRACKPIE_NO_BROWSER=true to disable)
-    if os.environ.get("CRACKPIE_NO_BROWSER", "").lower() != "true":
+    # Auto-open browser after a short delay (set THUNDERFLOW_NO_BROWSER=true to disable)
+    if os.environ.get("THUNDERFLOW_NO_BROWSER", os.environ.get("CRACKPIE_NO_BROWSER", "")).lower() != "true":
         url = f"http://{host}:{port}"
         threading.Timer(1.5, webbrowser.open, args=[url]).start()
 

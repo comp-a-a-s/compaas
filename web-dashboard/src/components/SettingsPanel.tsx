@@ -421,6 +421,185 @@ function PollIntervalControl({ value: initialValue, onSave }: PollIntervalContro
   );
 }
 
+// ---- Theme selector ----
+
+const THEME_OPTIONS = [
+  { id: 'midnight', label: 'Midnight', desc: 'Deep dark', colors: ['#0d1117', '#161b22', '#e6edf3'] },
+  { id: 'twilight', label: 'Twilight', desc: 'Softer dark', colors: ['#0f1923', '#1a2332', '#d0d8e4'] },
+  { id: 'dawn', label: 'Dawn', desc: 'Light mode', colors: ['#ffffff', '#f6f8fa', '#24292f'] },
+];
+
+function ThemeSelector() {
+  const [selected, setSelected] = useState(localStorage.getItem('thunderflow_theme') ?? 'midnight');
+  return (
+    <div style={{ padding: '16px', display: 'flex', gap: '12px' }}>
+      {THEME_OPTIONS.map(t => (
+        <button
+          key={t.id}
+          onClick={() => { setSelected(t.id); localStorage.setItem('thunderflow_theme', t.id); }}
+          style={{
+            flex: 1,
+            padding: '12px',
+            borderRadius: '8px',
+            border: `2px solid ${selected === t.id ? C.accent : C.border}`,
+            backgroundColor: C.surfaceRaised,
+            cursor: 'pointer',
+            textAlign: 'left',
+            transition: 'border-color 0.2s',
+          }}
+        >
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+            {t.colors.map((c, i) => (
+              <div key={i} style={{ width: '20px', height: '20px', borderRadius: '4px', backgroundColor: c, border: '1px solid rgba(255,255,255,0.1)' }} />
+            ))}
+          </div>
+          <div style={{ fontSize: '12px', fontWeight: 600, color: selected === t.id ? C.accent : C.textPrimary }}>{t.label}</div>
+          <div style={{ fontSize: '11px', color: C.textMuted }}>{t.desc}</div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---- Telegram configured badge ----
+
+function TelegramConfiguredBadge() {
+  const isConfigured = localStorage.getItem('thunderflow_telegram_configured') === 'true';
+  return (
+    <span
+      style={{
+        marginLeft: 'auto',
+        fontSize: '11px',
+        fontWeight: 500,
+        color: isConfigured ? '#3fb950' : '#484f58',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+      }}
+    >
+      {isConfigured ? (
+        <>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="#3fb950" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Configured
+        </>
+      ) : (
+        'Not configured'
+      )}
+    </span>
+  );
+}
+
+// ---- Telegram settings fields ----
+
+function TelegramSettingsFields() {
+  const [token, setToken] = useState(localStorage.getItem('thunderflow_telegram_token') ?? '');
+  const [chatId, setChatId] = useState(localStorage.getItem('thunderflow_telegram_chatid') ?? '');
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = () => {
+    localStorage.setItem('thunderflow_telegram_token', token);
+    localStorage.setItem('thunderflow_telegram_chatid', chatId);
+    if (token && chatId) {
+      localStorage.setItem('thunderflow_telegram_configured', 'true');
+    } else {
+      localStorage.setItem('thunderflow_telegram_configured', 'false');
+    }
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div>
+        <label
+          htmlFor="telegram-token"
+          style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
+        >
+          Bot Token
+        </label>
+        <input
+          id="telegram-token"
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="1234567890:ABCdef..."
+          style={{
+            width: '100%',
+            padding: '7px 10px',
+            backgroundColor: C.surfaceRaised,
+            border: `1px solid ${C.border}`,
+            borderRadius: '5px',
+            color: C.textPrimary,
+            fontSize: '13px',
+            outline: 'none',
+            boxSizing: 'border-box',
+          }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+        />
+      </div>
+      <div>
+        <label
+          htmlFor="telegram-chatid"
+          style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
+        >
+          Chat ID
+        </label>
+        <input
+          id="telegram-chatid"
+          type="text"
+          value={chatId}
+          onChange={(e) => setChatId(e.target.value)}
+          placeholder="-1001234567890"
+          style={{
+            width: '100%',
+            padding: '7px 10px',
+            backgroundColor: C.surfaceRaised,
+            border: `1px solid ${C.border}`,
+            borderRadius: '5px',
+            color: C.textPrimary,
+            fontSize: '13px',
+            outline: 'none',
+            boxSizing: 'border-box',
+          }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+        />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <button
+          onClick={handleSave}
+          style={{
+            padding: '7px 16px',
+            borderRadius: '5px',
+            border: '1px solid #2ca5e0',
+            backgroundColor: 'rgba(44,165,224,0.12)',
+            color: '#2ca5e0',
+            fontSize: '12px',
+            fontWeight: 500,
+            cursor: 'pointer',
+            transition: 'background-color 0.2s',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(44,165,224,0.22)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'rgba(44,165,224,0.12)'; }}
+        >
+          Save Telegram Settings
+        </button>
+        {saved && (
+          <span style={{ fontSize: '11px', color: C.success, display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke={C.success} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Saved
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- Server settings section ----
 
 interface ServerSettingsProps {
@@ -546,8 +725,8 @@ function ServerSettings({ server, configFilePath }: ServerSettingsProps) {
                   `Open ${filePath} in a text editor`,
                   'Edit the desired server settings under the server: key',
                   'Save the file',
-                  'Stop crackpie-web (Ctrl+C)',
-                  'Run crackpie-web again',
+                  'Stop thunderflow-web (Ctrl+C)',
+                  'Run thunderflow-web again',
                 ].map((step, i) => (
                   <li
                     key={i}
@@ -703,7 +882,7 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
             <circle cx="7" cy="7" r="6" stroke={C.error} strokeWidth="1.5" />
             <path d="M7 4v3m0 2.5v.5" stroke={C.error} strokeWidth="1.5" strokeLinecap="round" />
           </svg>
-          Failed to load configuration. Check that the crackpie-web server is running.
+          Failed to load configuration. Check that the thunderflow-web server is running.
           <button
             onClick={loadConfig}
             style={{
@@ -767,6 +946,38 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
                 value={config.ui?.poll_interval_ms ?? 5000}
                 onSave={handlePollIntervalSave}
               />
+            </Card>
+          </section>
+
+          {/* ---- Appearance ---- */}
+          <section aria-labelledby="section-appearance">
+            <SectionTitle>
+              <span id="section-appearance">Appearance</span>
+            </SectionTitle>
+            <Card>
+              <ThemeSelector />
+            </Card>
+          </section>
+
+          {/* ---- Telegram Integration ---- */}
+          <section aria-labelledby="section-telegram">
+            <SectionTitle><span id="section-telegram">Telegram Integration</span></SectionTitle>
+            <Card>
+              <div style={{ padding: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+                  <div style={{ width: '32px', height: '32px', borderRadius: '8px', backgroundColor: '#2ca5e0', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
+                      <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <p style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary }}>Telegram Bot</p>
+                    <p style={{ fontSize: '12px', color: C.textSecondary }}>Continue sessions from your phone</p>
+                  </div>
+                  <TelegramConfiguredBadge />
+                </div>
+                <TelegramSettingsFields />
+              </div>
             </Card>
           </section>
 

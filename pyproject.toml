@@ -1,7 +1,7 @@
 [project]
-name = "crackpie"
-version = "0.2.0"
-description = "Virtual Company - Multi-Agent AI Orchestration System"
+name = "thunderflow"
+version = "0.3.0"
+description = "ThunderFlow — Business as a Service, AI Virtual Company Orchestration"
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.0,<3.0",
@@ -23,6 +23,8 @@ dev = [
 ]
 
 [project.scripts]
+thunderflow-tui = "src.tui.main:main"
+thunderflow-web = "src.web.main:main"
 crackpie-tui = "src.tui.main:main"
 crackpie-web = "src.web.main:main"
 

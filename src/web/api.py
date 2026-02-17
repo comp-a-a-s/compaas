@@ -1,4 +1,4 @@
-"""CrackPie Web Dashboard API.
+"""ThunderFlow Web Dashboard API.
 
 FastAPI application exposing live company state — org chart, projects,
 tasks, activity stream, token metrics, agents, and model settings.
@@ -39,13 +39,13 @@ task_board = TaskBoard(DATA_DIR)
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="CrackPie Dashboard API",
-    description="Live data API for the CrackPie virtual company web dashboard.",
+    title="ThunderFlow Dashboard API",
+    description="Live data API for the ThunderFlow virtual company web dashboard.",
     version="0.1.0",
 )
 
 # CORS — restrict to known origins
-_cors_origins_env = os.environ.get("CRACKPIE_CORS_ORIGINS", "")
+_cors_origins_env = os.environ.get("THUNDERFLOW_CORS_ORIGINS", os.environ.get("CRACKPIE_CORS_ORIGINS", ""))
 _allowed_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()] if _cors_origins_env else [
     "http://localhost:3000",
     "http://localhost:5173",

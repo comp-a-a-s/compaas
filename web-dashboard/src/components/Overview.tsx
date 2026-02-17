@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Agent, Project, Task, ActivityEvent } from '../types';
 
 interface OverviewProps {
@@ -54,20 +55,61 @@ function modelColor(model: string): string {
 // ---- Org hierarchy node ----
 interface OrgNodeProps {
   agent: Agent;
+  onAgentClick?: (agent: Agent) => void;
 }
-function OrgNode({ agent }: OrgNodeProps) {
+function OrgNode({ agent, onAgentClick }: OrgNodeProps) {
   const color = modelColor(agent.model);
   const initial = agent.name.charAt(0).toUpperCase();
+  const isActive = agent.status === 'active' || agent.status === 'permanent' ||
+    (agent.recent_activity && agent.recent_activity.length > 0);
+
   return (
     <div
-      className="flex flex-col items-center gap-1 px-3 py-2 rounded-xl cursor-default"
-      style={{ backgroundColor: '#21262d', border: '1px solid #30363d', minWidth: '96px' }}
+      className="flex flex-col items-center gap-1 px-3 py-2 rounded-xl"
+      style={{
+        backgroundColor: '#21262d',
+        border: '1px solid #30363d',
+        minWidth: '96px',
+        cursor: onAgentClick ? 'pointer' : 'default',
+        transition: 'border-color 0.15s',
+      }}
+      onClick={() => onAgentClick?.(agent)}
+      onMouseEnter={(e) => {
+        if (onAgentClick) {
+          (e.currentTarget as HTMLDivElement).style.borderColor = '#8b8fc7';
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (onAgentClick) {
+          (e.currentTarget as HTMLDivElement).style.borderColor = '#30363d';
+        }
+      }}
+      role={onAgentClick ? 'button' : undefined}
+      tabIndex={onAgentClick ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (onAgentClick && (e.key === 'Enter' || e.key === ' ')) {
+          onAgentClick(agent);
+        }
+      }}
     >
-      <div
-        className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-        style={{ backgroundColor: color, color: '#0d1117' }}
-      >
-        {initial}
+      {/* Avatar with optional pulse ring */}
+      <div style={{ position: 'relative' }}>
+        {isActive && (
+          <div style={{
+            position: 'absolute',
+            inset: '-3px',
+            borderRadius: '50%',
+            border: '2px solid #3fb950',
+            opacity: 0.6,
+            animation: 'pulse-ring 2s ease-out infinite',
+          }} />
+        )}
+        <div
+          className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+          style={{ backgroundColor: color, color: '#0d1117', position: 'relative' }}
+        >
+          {initial}
+        </div>
       </div>
       <p className="text-xs font-medium text-center leading-tight" style={{ color: '#e6edf3' }}>
         {agent.name}
@@ -97,12 +139,109 @@ function HLine({ count }: { count: number }) {
   );
 }
 
+// ---- Agent detail modal ----
+interface AgentDetailModalProps {
+  agent: Agent;
+  onClose: () => void;
+}
+function AgentDetailModal({ agent, onClose }: AgentDetailModalProps) {
+  const color = modelColor(agent.model);
+  const initial = agent.name.charAt(0).toUpperCase();
+  const recentActivity = agent.recent_activity ?? [];
+
+  return (
+    <div
+      style={{
+        marginTop: '16px',
+        backgroundColor: '#161b22',
+        border: '1px solid #30363d',
+        borderRadius: '10px',
+        padding: '16px',
+        animation: 'slide-up 0.2s ease-out both',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div
+            style={{
+              width: '36px', height: '36px', borderRadius: '50%',
+              backgroundColor: color, color: '#0d1117',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '14px', fontWeight: 700,
+            }}
+          >
+            {initial}
+          </div>
+          <div>
+            <p style={{ fontSize: '14px', fontWeight: 600, color: '#e6edf3' }}>{agent.name}</p>
+            <p style={{ fontSize: '12px', color: '#8b949e' }}>{agent.role}</p>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          style={{
+            width: '28px', height: '28px', borderRadius: '6px',
+            border: 'none', backgroundColor: 'transparent', color: '#484f58',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d'; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+          aria-label="Close agent detail"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
+        <div style={{ fontSize: '11px', color: '#484f58' }}>
+          Model: <span style={{ color: '#8b949e' }}>{agent.model}</span>
+        </div>
+        <div style={{ fontSize: '11px', color: '#484f58' }}>
+          Status: <span style={{ color: agent.status === 'active' || agent.status === 'permanent' ? '#3fb950' : '#8b949e' }}>{agent.status}</span>
+        </div>
+        {agent.team && (
+          <div style={{ fontSize: '11px', color: '#484f58' }}>
+            Team: <span style={{ color: '#8b949e' }}>{agent.team}</span>
+          </div>
+        )}
+        {agent.hired_at && (
+          <div style={{ fontSize: '11px', color: '#484f58' }}>
+            Hired: <span style={{ color: '#8b949e' }}>{new Date(agent.hired_at).toLocaleDateString()}</span>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <p style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#484f58', marginBottom: '6px' }}>
+          Recent Activity
+        </p>
+        {recentActivity.length === 0 ? (
+          <p style={{ fontSize: '12px', color: '#484f58' }}>No recent activity</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {recentActivity.slice(0, 3).map((evt, i) => (
+              <div key={i} style={{ fontSize: '12px', color: '#8b949e', padding: '4px 8px', backgroundColor: '#21262d', borderRadius: '4px' }}>
+                <span style={{ color: '#58a6ff', marginRight: '6px' }}>{evt.action}</span>
+                {evt.detail}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- Org chart ----
 interface OrgChartProps {
   agents: Agent[];
   loading: boolean;
 }
 function OrgChart({ agents, loading }: OrgChartProps) {
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+
   if (loading) {
     return (
       <div className="space-y-2 py-4">
@@ -121,51 +260,58 @@ function OrgChart({ agents, loading }: OrgChartProps) {
     );
   }
 
-  // Classify agents by role keywords
-  const findByRole = (keyword: string) =>
-    agents.filter((a) => a.role.toLowerCase().includes(keyword.toLowerCase()));
-
-  const boardHead = agents.filter(
-    (a) =>
-      a.role.toLowerCase().includes('board') ||
-      a.role.toLowerCase().includes('chairman') ||
-      a.role.toLowerCase().includes('idan')
+  // Use team field as primary classifier
+  const boardHead = agents.filter(a =>
+    a.role.toLowerCase().includes('board') ||
+    a.role.toLowerCase().includes('chairman') ||
+    a.name.toLowerCase() === 'idan'
   );
-  const ceo = agents.filter(
-    (a) =>
-      a.role.toLowerCase().includes('ceo') ||
+  const ceo = agents.filter(a =>
+    !boardHead.includes(a) && (
+      a.role.toLowerCase() === 'ceo' ||
       a.role.toLowerCase().includes('chief executive')
+    )
   );
-  const leadership = agents.filter(
-    (a) =>
-      !boardHead.includes(a) &&
-      !ceo.includes(a) &&
-      (a.role.toLowerCase().includes('chief') ||
-        a.role.toLowerCase().includes('cto') ||
-        a.role.toLowerCase().includes('coo') ||
-        a.role.toLowerCase().includes('vp') ||
-        a.role.toLowerCase().includes('head of') ||
-        a.role.toLowerCase().includes('lead') ||
-        a.team?.toLowerCase() === 'leadership')
+  const leadership = agents.filter(a =>
+    !boardHead.includes(a) && !ceo.includes(a) && (
+      a.team?.toLowerCase() === 'leadership' || (
+        !a.team && (
+          a.role.toLowerCase().startsWith('chief') ||
+          a.role.toLowerCase().startsWith('vp ') ||
+          a.role.toLowerCase().startsWith('vice president')
+        )
+      )
+    )
   );
-  const engineering = findByRole('engineer').filter(
-    (a) => !leadership.includes(a)
+  const engineering = agents.filter(a =>
+    !boardHead.includes(a) && !ceo.includes(a) && !leadership.includes(a) && (
+      a.team?.toLowerCase() === 'engineering' || (
+        !a.team && (
+          a.role.toLowerCase().includes('engineer') ||
+          a.role.toLowerCase().includes('devops') ||
+          a.role.toLowerCase().includes('qa')
+        )
+      )
+    )
   );
-  const onDemand = agents.filter(
-    (a) =>
-      !boardHead.includes(a) &&
-      !ceo.includes(a) &&
-      !leadership.includes(a) &&
-      !engineering.includes(a) &&
-      (a.status === 'on_demand' || a.status === 'available')
+  const design = agents.filter(a =>
+    !boardHead.includes(a) && !ceo.includes(a) && !leadership.includes(a) && !engineering.includes(a) && (
+      a.team?.toLowerCase() === 'design' || (
+        !a.team && a.role.toLowerCase().includes('design')
+      )
+    )
   );
-  const others = agents.filter(
-    (a) =>
-      !boardHead.includes(a) &&
-      !ceo.includes(a) &&
-      !leadership.includes(a) &&
-      !engineering.includes(a) &&
-      !onDemand.includes(a)
+  const onDemand = agents.filter(a =>
+    !boardHead.includes(a) && !ceo.includes(a) && !leadership.includes(a) &&
+    !engineering.includes(a) && !design.includes(a) && (
+      a.team?.toLowerCase() === 'on-demand' ||
+      a.status === 'on_demand' ||
+      (a.team?.toLowerCase() === 'on_demand')
+    )
+  );
+  const others = agents.filter(a =>
+    !boardHead.includes(a) && !ceo.includes(a) && !leadership.includes(a) &&
+    !engineering.includes(a) && !design.includes(a) && !onDemand.includes(a)
   );
 
   type OrgRow = { label: string; agents: Agent[] };
@@ -174,6 +320,7 @@ function OrgChart({ agents, loading }: OrgChartProps) {
   if (ceo.length > 0) rows.push({ label: 'Executive', agents: ceo });
   if (leadership.length > 0) rows.push({ label: 'Leadership', agents: leadership });
   if (engineering.length > 0) rows.push({ label: 'Engineering', agents: engineering });
+  if (design.length > 0) rows.push({ label: 'Design', agents: design });
   if (onDemand.length > 0) rows.push({ label: 'On-demand', agents: onDemand });
   if (others.length > 0) rows.push({ label: 'Other', agents: others });
 
@@ -182,41 +329,55 @@ function OrgChart({ agents, loading }: OrgChartProps) {
     rows.push({ label: 'All', agents });
   }
 
+  const handleAgentClick = (agent: Agent) => {
+    setSelectedAgent(prev => prev?.id === agent.id ? null : agent);
+  };
+
   return (
-    <div className="space-y-2 overflow-x-auto py-2">
-      {rows.map((row, ri) => (
-        <div key={row.label}>
-          {ri > 0 && (
-            <div className="flex flex-col items-center">
-              <VConnector />
-              <HLine count={row.agents.length} />
-              <div className="flex gap-2 justify-center mt-0">
+    <div>
+      <div className="space-y-2 overflow-x-auto py-2">
+        {rows.map((row, ri) => (
+          <div key={row.label}>
+            {ri > 0 && (
+              <div className="flex flex-col items-center">
+                <VConnector />
+                <HLine count={row.agents.length} />
+                <div className="flex gap-2 justify-center mt-0">
+                  {row.agents.map((a) => (
+                    <div key={a.id} className="flex flex-col items-center">
+                      <VConnector />
+                      <OrgNode agent={a} onAgentClick={handleAgentClick} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {ri === 0 && (
+              <div className="flex gap-2 justify-center">
                 {row.agents.map((a) => (
-                  <div key={a.id} className="flex flex-col items-center">
-                    <VConnector />
-                    <OrgNode agent={a} />
-                  </div>
+                  <OrgNode key={a.id} agent={a} onAgentClick={handleAgentClick} />
                 ))}
               </div>
+            )}
+            <div className="flex justify-center mt-1">
+              <span
+                className="text-xs px-2 py-0.5 rounded-full"
+                style={{ color: '#484f58', backgroundColor: '#0d1117' }}
+              >
+                {row.label}
+              </span>
             </div>
-          )}
-          {ri === 0 && (
-            <div className="flex gap-2 justify-center">
-              {row.agents.map((a) => (
-                <OrgNode key={a.id} agent={a} />
-              ))}
-            </div>
-          )}
-          <div className="flex justify-center mt-1">
-            <span
-              className="text-xs px-2 py-0.5 rounded-full"
-              style={{ color: '#484f58', backgroundColor: '#0d1117' }}
-            >
-              {row.label}
-            </span>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
+
+      {/* Agent detail panel */}
+      {selectedAgent && (
+        <AgentDetailModal
+          agent={selectedAgent}
+          onClose={() => setSelectedAgent(null)}
+        />
+      )}
     </div>
   );
 }

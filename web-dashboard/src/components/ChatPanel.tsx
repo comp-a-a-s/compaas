@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { ChatMessage } from '../types';
 import { fetchChatHistory, clearChatHistory, createChatWebSocket } from '../api/client';
 
@@ -14,6 +14,98 @@ function formatTime(ts: string): string {
   } catch {
     return ts;
   }
+}
+
+// ---- Markdown renderer ----
+
+function renderInlineMarkdown(text: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  let remaining = text;
+  let key = 0;
+  while (remaining.length > 0) {
+    const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
+    const italicMatch = remaining.match(/\*(.+?)\*/);
+    const codeMatch = remaining.match(/`(.+?)`/);
+    const matches = [
+      boldMatch ? { index: boldMatch.index!, match: boldMatch, type: 'bold' } : null,
+      italicMatch ? { index: italicMatch.index!, match: italicMatch, type: 'italic' } : null,
+      codeMatch ? { index: codeMatch.index!, match: codeMatch, type: 'code' } : null,
+    ].filter(Boolean) as { index: number; match: RegExpMatchArray; type: string }[];
+    matches.sort((a, b) => a.index - b.index);
+    if (matches.length === 0) {
+      parts.push(<span key={key++}>{remaining}</span>);
+      break;
+    }
+    const first = matches[0];
+    if (first.index > 0) {
+      parts.push(<span key={key++}>{remaining.slice(0, first.index)}</span>);
+    }
+    if (first.type === 'bold') {
+      parts.push(<strong key={key++} style={{ fontWeight: 700, color: '#e6edf3' }}>{first.match[1]}</strong>);
+    } else if (first.type === 'italic') {
+      parts.push(<em key={key++} style={{ fontStyle: 'italic' }}>{first.match[1]}</em>);
+    } else {
+      parts.push(<code key={key++} style={{ backgroundColor: '#21262d', border: '1px solid #30363d', borderRadius: '3px', padding: '0 4px', fontSize: '11px', fontFamily: 'ui-monospace, monospace' }}>{first.match[1]}</code>);
+    }
+    remaining = remaining.slice(first.index + first.match[0].length);
+  }
+  return <>{parts}</>;
+}
+
+function renderMarkdown(text: string): React.ReactNode {
+  const lines = text.split('\n');
+  const result: React.ReactNode[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    // H3
+    if (line.startsWith('### ')) {
+      result.push(<h3 key={i} style={{ color: '#e6edf3', fontSize: '13px', fontWeight: 700, margin: '8px 0 4px' }}>{line.slice(4)}</h3>);
+    }
+    // H2
+    else if (line.startsWith('## ')) {
+      result.push(<h2 key={i} style={{ color: '#e6edf3', fontSize: '14px', fontWeight: 700, margin: '8px 0 4px' }}>{line.slice(3)}</h2>);
+    }
+    // H1
+    else if (line.startsWith('# ')) {
+      result.push(<h1 key={i} style={{ color: '#e6edf3', fontSize: '15px', fontWeight: 700, margin: '8px 0 4px' }}>{line.slice(2)}</h1>);
+    }
+    // Bullet list
+    else if (line.startsWith('- ') || line.startsWith('* ')) {
+      result.push(<div key={i} style={{ display: 'flex', gap: '6px', margin: '2px 0' }}>
+        <span style={{ color: '#58a6ff', flexShrink: 0 }}>•</span>
+        <span style={{ color: '#e6edf3' }}>{renderInlineMarkdown(line.slice(2))}</span>
+      </div>);
+    }
+    // Numbered list
+    else if (/^\d+\. /.test(line)) {
+      const num = line.match(/^(\d+)\. /)?.[1] ?? '';
+      result.push(<div key={i} style={{ display: 'flex', gap: '6px', margin: '2px 0' }}>
+        <span style={{ color: '#58a6ff', flexShrink: 0, minWidth: '16px' }}>{num}.</span>
+        <span style={{ color: '#e6edf3' }}>{renderInlineMarkdown(line.replace(/^\d+\. /, ''))}</span>
+      </div>);
+    }
+    // Code block
+    else if (line.startsWith('```')) {
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith('```')) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      result.push(<pre key={i} style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', padding: '10px 12px', margin: '6px 0', fontSize: '11px', color: '#e6edf3', overflowX: 'auto', fontFamily: 'ui-monospace, monospace' }}><code>{codeLines.join('\n')}</code></pre>);
+    }
+    // Empty line -> spacer
+    else if (line.trim() === '') {
+      result.push(<div key={i} style={{ height: '6px' }} />);
+    }
+    // Normal paragraph
+    else {
+      result.push(<p key={i} style={{ color: '#e6edf3', fontSize: '13px', lineHeight: '1.6', margin: '2px 0' }}>{renderInlineMarkdown(line)}</p>);
+    }
+    i++;
+  }
+  return <>{result}</>;
 }
 
 // ---- Message bubble ----
@@ -78,13 +170,22 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
           )}
         </div>
 
-        {/* Message content */}
-        <p
-          className="text-sm leading-relaxed whitespace-pre-wrap break-words"
-          style={{ color: '#e6edf3' }}
-        >
-          {message.content || (isStreaming ? '' : '(empty response)')}
-        </p>
+        {/* Message content — rendered as markdown for CEO messages */}
+        {isUser ? (
+          <p
+            className="text-sm leading-relaxed whitespace-pre-wrap break-words"
+            style={{ color: '#e6edf3' }}
+          >
+            {message.content || (isStreaming ? '' : '(empty response)')}
+          </p>
+        ) : (
+          <div className="text-sm leading-relaxed break-words">
+            {message.content
+              ? renderMarkdown(message.content)
+              : (isStreaming ? null : <span style={{ color: '#484f58' }}>(empty response)</span>)
+            }
+          </div>
+        )}
       </div>
 
       {/* User avatar */}
@@ -169,19 +270,29 @@ function StatusBadge({ status }: { status: ConnectionStatus }) {
 
 interface ChatPanelProps {
   floating?: boolean;
+  chatOpen?: boolean;
+  onNewCeoMessage?: () => void;
 }
 
-export default function ChatPanel({ floating = false }: ChatPanelProps) {
+export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isWaiting, setIsWaiting] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
+  const [showThinking, setShowThinking] = useState(false);
+  const [thinkingContent, setThinkingContent] = useState('');
 
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chatOpenRef = useRef(chatOpen);
+
+  // Keep a ref of chatOpen to avoid stale closures in ws handlers
+  useEffect(() => {
+    chatOpenRef.current = chatOpen;
+  }, [chatOpen]);
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -225,7 +336,7 @@ export default function ChatPanel({ floating = false }: ChatPanelProps) {
               break;
 
             case 'thinking':
-              // Keep-alive from backend while CEO agent is processing — no action needed
+              setThinkingContent((prev) => prev + (data.content || '💭 '));
               break;
 
             case 'chunk':
@@ -240,7 +351,12 @@ export default function ChatPanel({ floating = false }: ChatPanelProps) {
               };
               setMessages((prev) => [...prev, ceoMessage]);
               setStreamingContent('');
+              setThinkingContent('');
               setIsWaiting(false);
+              // Notify parent if chat is not open
+              if (!chatOpenRef.current) {
+                onNewCeoMessage?.();
+              }
               break;
             }
 
@@ -254,6 +370,7 @@ export default function ChatPanel({ floating = false }: ChatPanelProps) {
                 },
               ]);
               setStreamingContent('');
+              setThinkingContent('');
               setIsWaiting(false);
               break;
           }
@@ -275,7 +392,7 @@ export default function ChatPanel({ floating = false }: ChatPanelProps) {
     } catch {
       setConnectionStatus('error');
     }
-  }, []);
+  }, [onNewCeoMessage]);
 
   useEffect(() => {
     connectWebSocket();
@@ -307,6 +424,7 @@ export default function ChatPanel({ floating = false }: ChatPanelProps) {
     setInput('');
     setIsWaiting(true);
     setStreamingContent('');
+    setThinkingContent('');
 
     ws.send(JSON.stringify({ message: text }));
   }, [input, isWaiting, connectWebSocket]);
@@ -324,6 +442,7 @@ export default function ChatPanel({ floating = false }: ChatPanelProps) {
     await clearChatHistory();
     setMessages([]);
     setStreamingContent('');
+    setThinkingContent('');
   };
 
   const hasMessages = messages.length > 0 || streamingContent;
@@ -377,21 +496,39 @@ export default function ChatPanel({ floating = false }: ChatPanelProps) {
         </div>
       )}
 
-      {/* Floating header: status + clear */}
+      {/* Floating header: status + thinking toggle + clear */}
       {floating && (
         <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid #21262d' }}>
           <StatusBadge status={connectionStatus} />
-          {messages.length > 0 && (
+          <div className="flex items-center gap-2">
+            {/* Thinking toggle */}
             <button
-              onClick={handleClear}
-              className="text-xs px-2 py-0.5 rounded transition-colors duration-200 cursor-pointer"
-              style={{ color: '#484f58', background: 'none', border: 'none' }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#f85149'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#484f58'; }}
+              onClick={() => setShowThinking(t => !t)}
+              title={showThinking ? 'Hide thinking' : 'Show thinking'}
+              style={{
+                padding: '2px 8px',
+                borderRadius: '4px',
+                border: '1px solid #30363d',
+                backgroundColor: showThinking ? '#21262d' : 'transparent',
+                color: '#484f58',
+                fontSize: '10px',
+                cursor: 'pointer',
+              }}
             >
-              Clear
+              {showThinking ? '◎ thinking' : '○ thinking'}
             </button>
-          )}
+            {messages.length > 0 && (
+              <button
+                onClick={handleClear}
+                className="text-xs px-2 py-0.5 rounded transition-colors duration-200 cursor-pointer"
+                style={{ color: '#484f58', background: 'none', border: 'none' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#f85149'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#484f58'; }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -416,43 +553,59 @@ export default function ChatPanel({ floating = false }: ChatPanelProps) {
 
             {/* Streaming response */}
             {streamingContent && (
-              <MessageBubble
-                message={{
-                  role: 'ceo',
-                  content: streamingContent,
-                  timestamp: new Date().toISOString(),
-                }}
-                isStreaming
-              />
+              <>
+                {/* Thinking display */}
+                {showThinking && thinkingContent && (
+                  <div style={{ padding: '8px 12px', backgroundColor: '#0d1117', borderRadius: '8px', marginBottom: '4px', borderLeft: '2px solid #30363d' }}>
+                    <p style={{ color: '#484f58', fontSize: '11px', fontStyle: 'italic' }}>{thinkingContent}</p>
+                  </div>
+                )}
+                <MessageBubble
+                  message={{
+                    role: 'ceo',
+                    content: streamingContent,
+                    timestamp: new Date().toISOString(),
+                  }}
+                  isStreaming
+                />
+              </>
             )}
 
             {/* Waiting indicator (before first chunk arrives) */}
             {isWaiting && !streamingContent && (
-              <div className="flex justify-start mb-3">
-                <div
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2"
-                  style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
-                >
-                  M
-                </div>
-                <div
-                  className="rounded-2xl px-4 py-3"
-                  style={{ backgroundColor: '#21262d', borderBottomLeftRadius: '4px' }}
-                >
-                  <div className="flex gap-1.5">
-                    {[0, 1, 2].map((i) => (
-                      <span
-                        key={i}
-                        className="w-2 h-2 rounded-full animate-pulse-dot"
-                        style={{
-                          backgroundColor: '#8b8fc7',
-                          animationDelay: `${i * 0.3}s`,
-                        }}
-                      />
-                    ))}
+              <>
+                {/* Thinking display during wait */}
+                {showThinking && thinkingContent && (
+                  <div style={{ padding: '8px 12px', backgroundColor: '#0d1117', borderRadius: '8px', marginBottom: '4px', borderLeft: '2px solid #30363d' }}>
+                    <p style={{ color: '#484f58', fontSize: '11px', fontStyle: 'italic' }}>{thinkingContent}</p>
+                  </div>
+                )}
+                <div className="flex justify-start mb-3">
+                  <div
+                    className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2"
+                    style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
+                  >
+                    M
+                  </div>
+                  <div
+                    className="rounded-2xl px-4 py-3"
+                    style={{ backgroundColor: '#21262d', borderBottomLeftRadius: '4px' }}
+                  >
+                    <div className="flex gap-1.5">
+                      {[0, 1, 2].map((i) => (
+                        <span
+                          key={i}
+                          className="w-2 h-2 rounded-full animate-pulse-dot"
+                          style={{
+                            backgroundColor: '#8b8fc7',
+                            animationDelay: `${i * 0.3}s`,
+                          }}
+                        />
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
+              </>
             )}
 
             <div ref={messagesEndRef} className="h-1" />

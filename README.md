@@ -1,11 +1,11 @@
-# CrackPie
+# ThunderFlow
 
-A multi-agent AI orchestration system that simulates a virtual software company powered by Claude Code agents. 15 specialized agents (CEO, CTO, engineers, designers, QA, and more) collaborate through an MCP server to manage projects, track tasks, and build software.
+**ThunderFlow** is a Business as a Service (BaaS) platform powered by autonomous AI agents. A virtual software company of 15 specialized agents — CEO, CTO, engineers, designers, researchers, and more — collaborate through an MCP server to manage projects, track tasks, and build software on your behalf.
 
 ## Architecture
 
 ```
-Board Head (Idan)
+Board Head (You)
        |
    CEO (Marcus) ──── MCP Server (20+ tools)
        |                    |
@@ -119,16 +119,23 @@ The CEO will delegate to specialized agents (CTO, engineers, designers, etc.) an
 ### Web Dashboard
 
 ```bash
-crackpie-web
+thunderflow-web
 # Opens at http://localhost:8420
 ```
 
-Features: org chart, project list with progress, task boards, real-time activity feed (SSE), token metrics.
+Features:
+- Org chart with team hierarchy
+- Project list with progress tracking
+- Task boards per project
+- Real-time activity feed (SSE)
+- Token usage metrics
+- CEO Chat — talk directly to Marcus from the dashboard
+- Telegram integration — hand off sessions to your phone
 
 ### TUI Dashboard
 
 ```bash
-crackpie-tui
+thunderflow-tui
 ```
 
 A terminal-based dashboard with org chart, project summary, task board, and activity feed. Refreshes every 3 seconds. Press `r` to force refresh, `q` to quit.
@@ -197,12 +204,14 @@ A terminal-based dashboard with org chart, project summary, task board, and acti
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | (required) | Your Anthropic API key |
-| `CRACKPIE_DATA_DIR` | `./company_data` | Company state directory |
+| `THUNDERFLOW_DATA_DIR` | `./company_data` | Company state directory |
 | `PROJECTS_OUTPUT_DIR` | `~/projects` | Where generated project code is written |
-| `CRACKPIE_API_HOST` | `127.0.0.1` | Web dashboard host |
-| `CRACKPIE_API_PORT` | `8420` | Web dashboard port |
-| `CRACKPIE_CORS_ORIGINS` | `localhost:3000,5173,8420` | Allowed CORS origins (comma-separated) |
-| `CRACKPIE_DEBUG` | `false` | Enable debug mode (hot-reload) |
+| `THUNDERFLOW_API_HOST` | `127.0.0.1` | Web dashboard host |
+| `THUNDERFLOW_API_PORT` | `8420` | Web dashboard port |
+| `THUNDERFLOW_CORS_ORIGINS` | `localhost:3000,5173,8420` | Allowed CORS origins |
+| `THUNDERFLOW_DEBUG` | `false` | Enable debug mode (hot-reload) |
+
+> **Note:** The old `CRACKPIE_*` environment variables are still supported for backwards compatibility.
 
 ### Agent Customization
 
@@ -218,6 +227,23 @@ model: sonnet
 
 Your role description here...
 ```
+
+### Telegram Integration
+
+ThunderFlow supports handing off sessions to Telegram so you can continue directing your AI company from your phone.
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram
+2. Copy the bot token
+3. Get your chat ID (send a message to your bot, then call `https://api.telegram.org/bot<TOKEN>/getUpdates`)
+4. Enter the credentials in Settings → Telegram Integration
+5. Click "Continue on Telegram" in the sidebar to hand off the current session
+
+### Themes
+
+Choose from 3 built-in themes in Settings → Appearance:
+- **Midnight** — Deep dark, easy on the eyes (default)
+- **Twilight** — Softer dark with blue tones
+- **Dawn** — Light mode, clean and bright
 
 ## Development
 
@@ -237,7 +263,7 @@ pytest tests/test_validators.py -v
 ### Project Structure
 
 ```
-crackpie/
+thunderflow/
 ├── .claude/agents/          # 15 agent definitions (Markdown)
 ├── src/
 │   ├── agents.py            # Centralized agent registry
@@ -257,15 +283,15 @@ crackpie/
 
 ## Troubleshooting
 
-**"Claude Code CLI not found"** - Install with: `npm install -g @anthropic-ai/claude-code`
+**"Claude Code CLI not found"** — Install with: `npm install -g @anthropic-ai/claude-code`
 
-**"ANTHROPIC_API_KEY not set"** - Add your key to `.env`: `ANTHROPIC_API_KEY=sk-ant-...`
+**"ANTHROPIC_API_KEY not set"** — Add your key to `.env`: `ANTHROPIC_API_KEY=sk-ant-...`
 
-**Web dashboard not loading** - Ensure Node.js 18+ is installed and run `cd web-dashboard && npm install && npm run build`
+**Web dashboard not loading** — Ensure Node.js 18+ is installed and run `cd web-dashboard && npm install && npm run build`
 
-**Tests failing** - Run `pip install -e ".[dev]"` to ensure all dev dependencies are installed
+**Tests failing** — Run `pip install -e ".[dev]"` to ensure all dev dependencies are installed
 
-**Port 8420 in use** - Set a different port: `CRACKPIE_API_PORT=9000 crackpie-web`
+**Port 8420 in use** — Set a different port: `THUNDERFLOW_API_PORT=9000 thunderflow-web`
 
 ## License
 

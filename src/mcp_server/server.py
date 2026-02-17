@@ -1,5 +1,5 @@
 """
-CrackPie MCP Server.
+ThunderFlow MCP Server.
 
 Provides tools for project management, task tracking, memory, company operations,
 token metrics, and micro-agent lifecycle management.
@@ -38,7 +38,7 @@ def create_server(scope: str = "all", data_dir: str | None = None) -> FastMCP:
     effective_dir = data_dir or DATA_DIR
     os.makedirs(effective_dir, exist_ok=True)
 
-    mcp = FastMCP(f"crackpie-{scope}")
+    mcp = FastMCP(f"thunderflow-{scope}")
 
     registrars = {
         "project": register_project_tools,
@@ -62,7 +62,7 @@ def create_server(scope: str = "all", data_dir: str | None = None) -> FastMCP:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CrackPie MCP Server")
+    parser = argparse.ArgumentParser(description="ThunderFlow MCP Server")
     parser.add_argument("--scope", default="all", choices=VALID_SCOPES, help="Tool scope to expose")
     args = parser.parse_args()
 
