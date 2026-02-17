@@ -26,9 +26,9 @@ function StatCard({ label, value, color, loading }: StatCardProps) {
   return (
     <div
       className="rounded-xl p-4 flex flex-col gap-1 animate-slide-up"
-      style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+      style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
     >
-      <p className="text-xs uppercase tracking-widest" style={{ color: '#6c7086' }}>
+      <p className="text-xs uppercase tracking-widest" style={{ color: '#484f58' }}>
         {label}
       </p>
       {loading ? (
@@ -45,10 +45,10 @@ function StatCard({ label, value, color, loading }: StatCardProps) {
 // ---- Model color helper ----
 function modelColor(model: string): string {
   const m = model.toLowerCase();
-  if (m.includes('opus')) return '#cba6f7';
-  if (m.includes('sonnet')) return '#89b4fa';
-  if (m.includes('haiku')) return '#a6e3a1';
-  return '#a6adc8';
+  if (m.includes('opus')) return '#8b8fc7';
+  if (m.includes('sonnet')) return '#58a6ff';
+  if (m.includes('haiku')) return '#3fb950';
+  return '#8b949e';
 }
 
 // ---- Org hierarchy node ----
@@ -61,18 +61,18 @@ function OrgNode({ agent }: OrgNodeProps) {
   return (
     <div
       className="flex flex-col items-center gap-1 px-3 py-2 rounded-xl cursor-default"
-      style={{ backgroundColor: '#313244', border: '1px solid #45475a', minWidth: '96px' }}
+      style={{ backgroundColor: '#21262d', border: '1px solid #30363d', minWidth: '96px' }}
     >
       <div
         className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-        style={{ backgroundColor: color, color: '#11111b' }}
+        style={{ backgroundColor: color, color: '#0d1117' }}
       >
         {initial}
       </div>
-      <p className="text-xs font-medium text-center leading-tight" style={{ color: '#cdd6f4' }}>
+      <p className="text-xs font-medium text-center leading-tight" style={{ color: '#e6edf3' }}>
         {agent.name}
       </p>
-      <p className="text-xs text-center leading-tight" style={{ color: '#6c7086' }}>
+      <p className="text-xs text-center leading-tight" style={{ color: '#484f58' }}>
         {agent.role}
       </p>
     </div>
@@ -83,7 +83,7 @@ function OrgNode({ agent }: OrgNodeProps) {
 function VConnector() {
   return (
     <div className="flex justify-center">
-      <div className="w-px h-4" style={{ backgroundColor: '#45475a' }} />
+      <div className="w-px h-4" style={{ backgroundColor: '#30363d' }} />
     </div>
   );
 }
@@ -92,7 +92,7 @@ function HLine({ count }: { count: number }) {
   if (count <= 1) return null;
   return (
     <div className="flex justify-center">
-      <div className="h-px" style={{ backgroundColor: '#45475a', width: `${(count - 1) * 120}px`, maxWidth: '100%' }} />
+      <div className="h-px" style={{ backgroundColor: '#30363d', width: `${(count - 1) * 120}px`, maxWidth: '100%' }} />
     </div>
   );
 }
@@ -115,7 +115,7 @@ function OrgChart({ agents, loading }: OrgChartProps) {
 
   if (agents.length === 0) {
     return (
-      <p className="text-sm py-4 text-center" style={{ color: '#6c7086' }}>
+      <p className="text-sm py-4 text-center" style={{ color: '#484f58' }}>
         No agents found
       </p>
     );
@@ -210,7 +210,7 @@ function OrgChart({ agents, loading }: OrgChartProps) {
           <div className="flex justify-center mt-1">
             <span
               className="text-xs px-2 py-0.5 rounded-full"
-              style={{ color: '#6c7086', backgroundColor: '#1e1e2e' }}
+              style={{ color: '#484f58', backgroundColor: '#0d1117' }}
             >
               {row.label}
             </span>
@@ -233,30 +233,30 @@ function ProjectProgress({ project }: ProjectProgressProps) {
 
   const statusColor =
     project.status === 'active'
-      ? '#a6e3a1'
+      ? '#3fb950'
       : project.status === 'completed'
-      ? '#89b4fa'
+      ? '#58a6ff'
       : project.status === 'paused'
-      ? '#f9e2af'
-      : '#a6adc8';
+      ? '#d29922'
+      : '#8b949e';
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium truncate" style={{ color: '#cdd6f4', maxWidth: '160px' }}>
+        <span className="text-xs font-medium truncate" style={{ color: '#e6edf3', maxWidth: '160px' }}>
           {project.name}
         </span>
         <span className="text-xs flex-shrink-0 ml-2" style={{ color: statusColor }}>
           {pct}%
         </span>
       </div>
-      <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: '#313244' }}>
+      <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: '#21262d' }}>
         <div
           className="h-full rounded-full transition-all duration-500"
           style={{ width: `${pct}%`, backgroundColor: statusColor }}
         />
       </div>
-      <p className="text-xs" style={{ color: '#6c7086' }}>
+      <p className="text-xs" style={{ color: '#484f58' }}>
         {done}/{total} tasks · {project.status}
       </p>
     </div>
@@ -269,13 +269,13 @@ interface ActivityRowProps {
 }
 function actionBadgeStyle(action: string): { bg: string; text: string } {
   const a = action.toUpperCase();
-  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1e3a5f', text: '#89b4fa' };
-  if (a.includes('COMPLETED') || a.includes('DONE') || a.includes('FINISH')) return { bg: '#1a3a2a', text: '#a6e3a1' };
-  if (a.includes('BLOCKED') || a.includes('ERROR') || a.includes('FAIL')) return { bg: '#3a1a1e', text: '#f38ba8' };
-  if (a.includes('ASSIGNED') || a.includes('ASSIGN')) return { bg: '#2a1e3a', text: '#cba6f7' };
-  if (a.includes('UPDATED') || a.includes('UPDATE')) return { bg: '#3a3010', text: '#f9e2af' };
-  if (a.includes('CREATED') || a.includes('CREATE')) return { bg: '#103a35', text: '#94e2d5' };
-  return { bg: '#313244', text: '#a6adc8' };
+  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1c2940', text: '#58a6ff' };
+  if (a.includes('COMPLETED') || a.includes('DONE') || a.includes('FINISH')) return { bg: '#1a2e25', text: '#3fb950' };
+  if (a.includes('BLOCKED') || a.includes('ERROR') || a.includes('FAIL')) return { bg: '#2d1519', text: '#f85149' };
+  if (a.includes('ASSIGNED') || a.includes('ASSIGN')) return { bg: '#1c2233', text: '#8b8fc7' };
+  if (a.includes('UPDATED') || a.includes('UPDATE')) return { bg: '#2d2213', text: '#d29922' };
+  if (a.includes('CREATED') || a.includes('CREATE')) return { bg: '#1c2940', text: '#58a6ff' };
+  return { bg: '#21262d', text: '#8b949e' };
 }
 
 function ActivityRow({ event }: ActivityRowProps) {
@@ -284,16 +284,16 @@ function ActivityRow({ event }: ActivityRowProps) {
   const agentColor = modelColor('');
 
   return (
-    <div className="flex items-start gap-3 py-2" style={{ borderBottom: '1px solid #1e1e2e' }}>
+    <div className="flex items-start gap-3 py-2" style={{ borderBottom: '1px solid #0d1117' }}>
       <div
         className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5"
-        style={{ backgroundColor: agentColor, color: '#11111b' }}
+        style={{ backgroundColor: agentColor, color: '#0d1117' }}
       >
         {initial}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-semibold" style={{ color: '#cdd6f4' }}>
+          <span className="text-xs font-semibold" style={{ color: '#e6edf3' }}>
             {event.agent || 'System'}
           </span>
           <span
@@ -302,7 +302,7 @@ function ActivityRow({ event }: ActivityRowProps) {
           >
             {event.action}
           </span>
-          <span className="text-xs ml-auto flex-shrink-0" style={{ color: '#6c7086' }}>
+          <span className="text-xs ml-auto flex-shrink-0" style={{ color: '#484f58' }}>
             {event.timestamp
               ? new Date(event.timestamp).toLocaleTimeString('en-US', {
                   hour: '2-digit',
@@ -311,7 +311,7 @@ function ActivityRow({ event }: ActivityRowProps) {
               : ''}
           </span>
         </div>
-        <p className="text-xs mt-0.5 truncate" style={{ color: '#a6adc8' }}>
+        <p className="text-xs mt-0.5 truncate" style={{ color: '#8b949e' }}>
           {event.detail}
         </p>
       </div>
@@ -322,12 +322,12 @@ function ActivityRow({ event }: ActivityRowProps) {
 // ---- Task status summary ----
 function taskStatusColor(status: string): string {
   const s = status.toLowerCase();
-  if (s === 'done' || s === 'completed') return '#a6e3a1';
-  if (s === 'in_progress' || s === 'in progress') return '#89b4fa';
-  if (s === 'blocked') return '#f38ba8';
-  if (s === 'review') return '#cba6f7';
-  if (s === 'todo') return '#a6adc8';
-  return '#6c7086';
+  if (s === 'done' || s === 'completed') return '#3fb950';
+  if (s === 'in_progress' || s === 'in progress') return '#58a6ff';
+  if (s === 'blocked') return '#f85149';
+  if (s === 'review') return '#8b8fc7';
+  if (s === 'todo') return '#8b949e';
+  return '#484f58';
 }
 
 // ---- Main Overview component ----
@@ -355,25 +355,25 @@ export default function Overview({
         <StatCard
           label="Agents"
           value={agents.length.toString()}
-          color="#cba6f7"
+          color="#8b8fc7"
           loading={loadingAgents}
         />
         <StatCard
           label="Projects"
           value={projects.length.toString()}
-          color="#89b4fa"
+          color="#58a6ff"
           loading={loadingProjects}
         />
         <StatCard
           label="Tasks"
           value={tasks.length.toString()}
-          color="#a6e3a1"
+          color="#3fb950"
           loading={loadingTasks}
         />
         <StatCard
           label="Live Events"
           value={events.length.toString()}
-          color="#f9e2af"
+          color="#d29922"
           loading={false}
         />
       </div>
@@ -383,9 +383,9 @@ export default function Overview({
         {/* Org hierarchy */}
         <div
           className="rounded-xl p-5"
-          style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+          style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
         >
-          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#6c7086' }}>
+          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#484f58' }}>
             Organization Hierarchy
           </h3>
           <OrgChart agents={agents} loading={loadingAgents} />
@@ -394,9 +394,9 @@ export default function Overview({
         {/* Recent Activity */}
         <div
           className="rounded-xl p-5 flex flex-col"
-          style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+          style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
         >
-          <h3 className="text-xs font-semibold uppercase tracking-widest mb-3 flex-shrink-0" style={{ color: '#6c7086' }}>
+          <h3 className="text-xs font-semibold uppercase tracking-widest mb-3 flex-shrink-0" style={{ color: '#484f58' }}>
             Recent Activity
           </h3>
           <div className="flex-1 overflow-y-auto" style={{ maxHeight: '280px' }}>
@@ -407,11 +407,11 @@ export default function Overview({
                     <span
                       key={i}
                       className="w-2 h-2 rounded-full animate-pulse-dot"
-                      style={{ backgroundColor: '#45475a', animationDelay: `${i * 0.2}s` }}
+                      style={{ backgroundColor: '#30363d', animationDelay: `${i * 0.2}s` }}
                     />
                   ))}
                 </div>
-                <p className="text-xs" style={{ color: '#6c7086' }}>
+                <p className="text-xs" style={{ color: '#484f58' }}>
                   Waiting for events...
                 </p>
               </div>
@@ -429,9 +429,9 @@ export default function Overview({
         {/* Task status summary */}
         <div
           className="rounded-xl p-5"
-          style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+          style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
         >
-          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#6c7086' }}>
+          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#484f58' }}>
             Task Status Summary
           </h3>
           {loadingTasks ? (
@@ -441,7 +441,7 @@ export default function Overview({
               ))}
             </div>
           ) : Object.keys(statusCounts).length === 0 ? (
-            <p className="text-xs" style={{ color: '#6c7086' }}>
+            <p className="text-xs" style={{ color: '#484f58' }}>
               No tasks loaded
             </p>
           ) : (
@@ -454,14 +454,14 @@ export default function Overview({
                   return (
                     <div key={status} className="flex flex-col gap-1">
                       <div className="flex justify-between">
-                        <span className="text-xs capitalize" style={{ color: '#cdd6f4' }}>
+                        <span className="text-xs capitalize" style={{ color: '#e6edf3' }}>
                           {status.replace(/_/g, ' ')}
                         </span>
                         <span className="text-xs" style={{ color }}>
                           {count} ({pct}%)
                         </span>
                       </div>
-                      <div className="h-1.5 rounded-full" style={{ backgroundColor: '#313244' }}>
+                      <div className="h-1.5 rounded-full" style={{ backgroundColor: '#21262d' }}>
                         <div
                           className="h-full rounded-full"
                           style={{ width: `${pct}%`, backgroundColor: color }}
@@ -477,9 +477,9 @@ export default function Overview({
         {/* Project progress */}
         <div
           className="rounded-xl p-5"
-          style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+          style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
         >
-          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#6c7086' }}>
+          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#484f58' }}>
             Project Progress
           </h3>
           {loadingProjects ? (
@@ -489,7 +489,7 @@ export default function Overview({
               ))}
             </div>
           ) : projects.length === 0 ? (
-            <p className="text-xs" style={{ color: '#6c7086' }}>
+            <p className="text-xs" style={{ color: '#484f58' }}>
               No projects found
             </p>
           ) : (

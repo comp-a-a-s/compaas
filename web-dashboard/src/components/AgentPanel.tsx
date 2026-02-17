@@ -1,67 +1,64 @@
-import { useState, useEffect, useRef } from 'react';
-import { fetchAgentDetail, updateAgent } from '../api/client';
+import { useState, useEffect } from 'react';
+import { fetchAgentDetail } from '../api/client';
 import type { Agent, ActivityEvent, TaskWithProject } from '../types';
-
-const AGENT_STATUSES = ['permanent', 'active', 'available', 'busy', 'inactive', 'on_demand'] as const;
 
 interface AgentPanelProps {
   agents: Agent[];
   loading: boolean;
-  onAgentUpdated?: () => void;
 }
 
 // ---- Helpers ----
 function modelBadge(model: string): { bg: string; text: string; label: string } {
   const m = model.toLowerCase();
-  if (m.includes('opus')) return { bg: '#2a1e3a', text: '#cba6f7', label: 'Opus' };
-  if (m.includes('sonnet')) return { bg: '#1e3050', text: '#89b4fa', label: 'Sonnet' };
-  if (m.includes('haiku')) return { bg: '#1a3020', text: '#a6e3a1', label: 'Haiku' };
-  return { bg: '#313244', text: '#a6adc8', label: model };
+  if (m.includes('opus')) return { bg: '#1c2233', text: '#8b8fc7', label: 'Opus' };
+  if (m.includes('sonnet')) return { bg: '#1c2940', text: '#58a6ff', label: 'Sonnet' };
+  if (m.includes('haiku')) return { bg: '#1a2e25', text: '#3fb950', label: 'Haiku' };
+  return { bg: '#21262d', text: '#8b949e', label: model };
 }
 
 function avatarColor(model: string): string {
   const m = model.toLowerCase();
-  if (m.includes('opus')) return '#cba6f7';
-  if (m.includes('sonnet')) return '#89b4fa';
-  if (m.includes('haiku')) return '#a6e3a1';
-  return '#a6adc8';
+  if (m.includes('opus')) return '#8b8fc7';
+  if (m.includes('sonnet')) return '#58a6ff';
+  if (m.includes('haiku')) return '#3fb950';
+  return '#8b949e';
 }
 
 function statusStyle(status: string): { dot: string; label: string } {
   const s = status.toLowerCase();
-  if (s === 'permanent' || s === 'active') return { dot: '#a6e3a1', label: 'Active' };
-  if (s === 'available') return { dot: '#f9e2af', label: 'Available' };
-  if (s === 'on_demand') return { dot: '#89b4fa', label: 'On-demand' };
-  if (s === 'busy') return { dot: '#fab387', label: 'Busy' };
-  return { dot: '#6c7086', label: status };
+  if (s === 'permanent' || s === 'active') return { dot: '#3fb950', label: 'Active' };
+  if (s === 'available') return { dot: '#d29922', label: 'Available' };
+  if (s === 'on_demand') return { dot: '#58a6ff', label: 'On-demand' };
+  if (s === 'busy') return { dot: '#d29922', label: 'Busy' };
+  return { dot: '#484f58', label: status };
 }
 
 function priorityBadge(priority: string): { bg: string; text: string } {
   const p = priority.toUpperCase();
-  if (p === 'P0') return { bg: '#3a1a1e', text: '#f38ba8' };
-  if (p === 'P1') return { bg: '#3a2510', text: '#fab387' };
-  if (p === 'P2') return { bg: '#3a3010', text: '#f9e2af' };
-  return { bg: '#313244', text: '#6c7086' };
+  if (p === 'P0') return { bg: '#2d1519', text: '#f85149' };
+  if (p === 'P1') return { bg: '#2d2213', text: '#d29922' };
+  if (p === 'P2') return { bg: '#2d2213', text: '#d29922' };
+  return { bg: '#21262d', text: '#484f58' };
 }
 
 function taskStatusColor(status: string): string {
   const s = status.toLowerCase();
-  if (s === 'done' || s === 'completed') return '#a6e3a1';
-  if (s === 'in_progress' || s === 'in progress') return '#89b4fa';
-  if (s === 'blocked') return '#f38ba8';
-  if (s === 'review') return '#cba6f7';
-  return '#a6adc8';
+  if (s === 'done' || s === 'completed') return '#3fb950';
+  if (s === 'in_progress' || s === 'in progress') return '#58a6ff';
+  if (s === 'blocked') return '#f85149';
+  if (s === 'review') return '#8b8fc7';
+  return '#8b949e';
 }
 
 function actionBadgeStyle(action: string): { bg: string; text: string } {
   const a = action.toUpperCase();
-  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1e3a5f', text: '#89b4fa' };
-  if (a.includes('COMPLETED') || a.includes('DONE')) return { bg: '#1a3a2a', text: '#a6e3a1' };
-  if (a.includes('BLOCKED') || a.includes('ERROR')) return { bg: '#3a1a1e', text: '#f38ba8' };
-  if (a.includes('ASSIGNED')) return { bg: '#2a1e3a', text: '#cba6f7' };
-  if (a.includes('UPDATED')) return { bg: '#3a3010', text: '#f9e2af' };
-  if (a.includes('CREATED')) return { bg: '#103a35', text: '#94e2d5' };
-  return { bg: '#313244', text: '#a6adc8' };
+  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1c2940', text: '#58a6ff' };
+  if (a.includes('COMPLETED') || a.includes('DONE')) return { bg: '#1a2e25', text: '#3fb950' };
+  if (a.includes('BLOCKED') || a.includes('ERROR')) return { bg: '#2d1519', text: '#f85149' };
+  if (a.includes('ASSIGNED')) return { bg: '#1c2233', text: '#8b8fc7' };
+  if (a.includes('UPDATED')) return { bg: '#2d2213', text: '#d29922' };
+  if (a.includes('CREATED')) return { bg: '#1c2940', text: '#58a6ff' };
+  return { bg: '#21262d', text: '#8b949e' };
 }
 
 // ---- Skeleton ----
@@ -86,18 +83,18 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
       onClick={onSelect}
       className="w-full text-left rounded-xl p-4 flex flex-col gap-3 transition-all duration-200 cursor-pointer"
       style={{
-        backgroundColor: selected ? '#313244' : '#181825',
-        border: `1px solid ${selected ? '#cba6f7' : '#45475a'}`,
+        backgroundColor: selected ? '#21262d' : '#161b22',
+        border: `1px solid ${selected ? '#8b8fc7' : '#30363d'}`,
         outline: 'none',
       }}
       onMouseEnter={(e) => {
         if (!selected) {
-          (e.currentTarget as HTMLButtonElement).style.borderColor = '#7f849c';
+          (e.currentTarget as HTMLButtonElement).style.borderColor = '#6e7681';
         }
       }}
       onMouseLeave={(e) => {
         if (!selected) {
-          (e.currentTarget as HTMLButtonElement).style.borderColor = '#45475a';
+          (e.currentTarget as HTMLButtonElement).style.borderColor = '#30363d';
         }
       }}
     >
@@ -105,7 +102,7 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
       <div className="flex items-start justify-between">
         <div
           className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
-          style={{ backgroundColor: color, color: '#11111b' }}
+          style={{ backgroundColor: color, color: '#0d1117' }}
         >
           {initial}
         </div>
@@ -123,10 +120,10 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
 
       {/* Name + role */}
       <div>
-        <p className="text-sm font-semibold leading-tight" style={{ color: '#cdd6f4' }}>
+        <p className="text-sm font-semibold leading-tight" style={{ color: '#e6edf3' }}>
           {agent.name}
         </p>
-        <p className="text-xs mt-0.5 leading-tight" style={{ color: '#a6adc8' }}>
+        <p className="text-xs mt-0.5 leading-tight" style={{ color: '#8b949e' }}>
           {agent.role}
         </p>
       </div>
@@ -142,7 +139,7 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
         {agent.team && (
           <span
             className="text-xs px-2 py-0.5 rounded-full"
-            style={{ backgroundColor: '#1e1e2e', color: '#6c7086', border: '1px solid #45475a' }}
+            style={{ backgroundColor: '#0d1117', color: '#484f58', border: '1px solid #30363d' }}
           >
             {agent.team}
           </span>
@@ -156,65 +153,12 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
 interface DetailPanelProps {
   agent: Agent;
   onClose: () => void;
-  onAgentUpdated?: () => void;
 }
-function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
+function DetailPanel({ agent, onClose }: DetailPanelProps) {
   const badge = modelBadge(agent.model);
   const color = avatarColor(agent.model);
   const status = statusStyle(agent.status);
   const initial = agent.name.charAt(0).toUpperCase();
-
-  // Inline name editing
-  const [editingName, setEditingName] = useState(false);
-  const [nameValue, setNameValue] = useState(agent.name);
-  const [savingName, setSavingName] = useState(false);
-  const nameInputRef = useRef<HTMLInputElement>(null);
-
-  // Status editing
-  const [editingStatus, setEditingStatus] = useState(false);
-  const [savingStatus, setSavingStatus] = useState(false);
-
-  // Sync nameValue when agent changes
-  useEffect(() => {
-    setNameValue(agent.name);
-    setEditingName(false);
-    setEditingStatus(false);
-  }, [agent.id, agent.name]);
-
-  // Focus input when editing starts
-  useEffect(() => {
-    if (editingName) nameInputRef.current?.focus();
-  }, [editingName]);
-
-  const handleNameSave = async () => {
-    const trimmed = nameValue.trim();
-    if (!trimmed || trimmed === agent.name) {
-      setEditingName(false);
-      setNameValue(agent.name);
-      return;
-    }
-    setSavingName(true);
-    const ok = await updateAgent(agent.id, { name: trimmed });
-    setSavingName(false);
-    if (ok) {
-      setEditingName(false);
-      onAgentUpdated?.();
-    }
-  };
-
-  const handleStatusChange = async (newStatus: string) => {
-    if (newStatus === agent.status) {
-      setEditingStatus(false);
-      return;
-    }
-    setSavingStatus(true);
-    const ok = await updateAgent(agent.id, { status: newStatus });
-    setSavingStatus(false);
-    if (ok) {
-      setEditingStatus(false);
-      onAgentUpdated?.();
-    }
-  };
 
   // Parse tools from comma-separated string
   const tools: string[] = agent.tools
@@ -227,83 +171,25 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
   return (
     <div
       className="rounded-xl flex flex-col h-full animate-slide-in-right overflow-hidden"
-      style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+      style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
     >
       {/* Header */}
       <div
         className="px-5 py-4 flex items-start justify-between flex-shrink-0"
-        style={{ borderBottom: '1px solid #313244' }}
+        style={{ borderBottom: '1px solid #21262d' }}
       >
         <div className="flex items-center gap-3">
           <div
             className="w-12 h-12 rounded-full flex items-center justify-center text-base font-bold flex-shrink-0"
-            style={{ backgroundColor: color, color: '#11111b' }}
+            style={{ backgroundColor: color, color: '#0d1117' }}
           >
             {initial}
           </div>
           <div>
-            {/* Editable name */}
-            {editingName ? (
-              <div className="flex items-center gap-1.5">
-                <input
-                  ref={nameInputRef}
-                  type="text"
-                  value={nameValue}
-                  onChange={(e) => setNameValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleNameSave();
-                    if (e.key === 'Escape') { setEditingName(false); setNameValue(agent.name); }
-                  }}
-                  disabled={savingName}
-                  maxLength={50}
-                  className="text-sm font-bold rounded px-1.5 py-0.5 outline-none"
-                  style={{
-                    backgroundColor: '#313244',
-                    color: '#cdd6f4',
-                    border: '1px solid #cba6f7',
-                    width: '140px',
-                  }}
-                />
-                <button
-                  onClick={handleNameSave}
-                  disabled={savingName}
-                  className="w-5 h-5 flex items-center justify-center rounded cursor-pointer"
-                  style={{ color: '#a6e3a1' }}
-                  title="Save"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => { setEditingName(false); setNameValue(agent.name); }}
-                  className="w-5 h-5 flex items-center justify-center rounded cursor-pointer"
-                  style={{ color: '#f38ba8' }}
-                  title="Cancel"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 group">
-                <h3 className="text-sm font-bold" style={{ color: '#cdd6f4' }}>
-                  {agent.name}
-                </h3>
-                <button
-                  onClick={() => setEditingName(true)}
-                  className="w-5 h-5 flex items-center justify-center rounded opacity-40 hover:opacity-100 transition-opacity cursor-pointer"
-                  style={{ color: '#6c7086' }}
-                  title="Edit name"
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                  </svg>
-                </button>
-              </div>
-            )}
-            <p className="text-xs" style={{ color: '#a6adc8' }}>
+            <h3 className="text-sm font-bold" style={{ color: '#e6edf3' }}>
+              {agent.name}
+            </h3>
+            <p className="text-xs" style={{ color: '#8b949e' }}>
               {agent.role}
             </p>
             <div className="flex items-center gap-2 mt-1.5">
@@ -313,62 +199,20 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
               >
                 {badge.label}
               </span>
-
-              {/* Editable status */}
-              {editingStatus ? (
-                <div className="flex items-center gap-1">
-                  <select
-                    value={agent.status}
-                    onChange={(e) => handleStatusChange(e.target.value)}
-                    disabled={savingStatus}
-                    className="text-xs rounded px-1.5 py-0.5 cursor-pointer outline-none"
-                    style={{
-                      backgroundColor: '#313244',
-                      color: '#cdd6f4',
-                      border: '1px solid #cba6f7',
-                    }}
-                  >
-                    {AGENT_STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {s === 'on_demand' ? 'On-demand' : s.charAt(0).toUpperCase() + s.slice(1)}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => setEditingStatus(false)}
-                    className="w-4 h-4 flex items-center justify-center rounded cursor-pointer"
-                    style={{ color: '#6c7086' }}
-                    title="Cancel"
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setEditingStatus(true)}
-                  className="flex items-center gap-1 text-xs cursor-pointer transition-opacity hover:opacity-80"
-                  style={{ color: status.dot, background: 'none', border: 'none', padding: 0 }}
-                  title="Click to change status"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: status.dot }} />
-                  {status.label}
-                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ opacity: 0.5 }}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                  </svg>
-                </button>
-              )}
+              <span className="flex items-center gap-1 text-xs" style={{ color: status.dot }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: status.dot }} />
+                {status.label}
+              </span>
             </div>
           </div>
         </div>
         <button
           onClick={onClose}
           className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer"
-          style={{ color: '#6c7086', backgroundColor: 'transparent' }}
+          style={{ color: '#484f58', backgroundColor: 'transparent' }}
           aria-label="Close detail panel"
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#313244';
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
           }}
           onMouseLeave={(e) => {
             (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
@@ -385,10 +229,10 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
         {/* Description */}
         {agent.description && (
           <section aria-label="Agent description">
-            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#6c7086' }}>
+            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
               Description
             </h4>
-            <p className="text-xs leading-relaxed" style={{ color: '#a6adc8' }}>
+            <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
               {agent.description}
             </p>
           </section>
@@ -396,10 +240,10 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
 
         {/* Model info */}
         <section aria-label="Model info">
-          <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#6c7086' }}>
+          <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
             Model
           </h4>
-          <p className="text-xs" style={{ color: '#cdd6f4' }}>
+          <p className="text-xs" style={{ color: '#e6edf3' }}>
             {agent.model}
           </p>
         </section>
@@ -407,10 +251,10 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
         {/* Expertise */}
         {agent.expertise && (
           <section aria-label="Agent expertise">
-            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#6c7086' }}>
+            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
               Expertise
             </h4>
-            <p className="text-xs leading-relaxed" style={{ color: '#a6adc8' }}>
+            <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
               {agent.expertise}
             </p>
           </section>
@@ -419,7 +263,7 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
         {/* Tools */}
         {tools.length > 0 && (
           <section aria-label="Agent tools">
-            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#6c7086' }}>
+            <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
               Tools
             </h4>
             <div className="flex flex-wrap gap-1.5">
@@ -427,7 +271,7 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
                 <span
                   key={tool}
                   className="text-xs px-2 py-0.5 rounded-full"
-                  style={{ backgroundColor: '#313244', color: '#94e2d5', border: '1px solid #45475a' }}
+                  style={{ backgroundColor: '#21262d', color: '#58a6ff', border: '1px solid #30363d' }}
                 >
                   {tool}
                 </span>
@@ -438,28 +282,28 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
 
         {/* Assigned Tasks */}
         <section aria-label="Assigned tasks">
-          <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#6c7086' }}>
+          <h4 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
             Assigned Tasks ({assignedTasks.length})
           </h4>
           {assignedTasks.length === 0 ? (
-            <p className="text-xs" style={{ color: '#6c7086' }}>
+            <p className="text-xs" style={{ color: '#484f58' }}>
               No tasks assigned
             </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr style={{ borderBottom: '1px solid #313244' }}>
-                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: '#6c7086' }}>
+                  <tr style={{ borderBottom: '1px solid #21262d' }}>
+                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: '#484f58' }}>
                       Task
                     </th>
-                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: '#6c7086' }}>
+                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: '#484f58' }}>
                       Project
                     </th>
-                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: '#6c7086' }}>
+                    <th className="text-left py-1.5 pr-3 font-medium" style={{ color: '#484f58' }}>
                       Priority
                     </th>
-                    <th className="text-left py-1.5 font-medium" style={{ color: '#6c7086' }}>
+                    <th className="text-left py-1.5 font-medium" style={{ color: '#484f58' }}>
                       Status
                     </th>
                   </tr>
@@ -469,11 +313,11 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
                     const pri = priorityBadge(task.priority);
                     const statusColor = taskStatusColor(task.status);
                     return (
-                      <tr key={task.id} style={{ borderBottom: '1px solid #1e1e2e' }}>
-                        <td className="py-1.5 pr-3" style={{ color: '#cdd6f4', maxWidth: '140px' }}>
+                      <tr key={task.id} style={{ borderBottom: '1px solid #0d1117' }}>
+                        <td className="py-1.5 pr-3" style={{ color: '#e6edf3', maxWidth: '140px' }}>
                           <span className="truncate block">{task.title}</span>
                         </td>
-                        <td className="py-1.5 pr-3" style={{ color: '#a6adc8' }}>
+                        <td className="py-1.5 pr-3" style={{ color: '#8b949e' }}>
                           {task.project_name}
                         </td>
                         <td className="py-1.5 pr-3">
@@ -498,11 +342,11 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
 
         {/* Recent Activity timeline */}
         <section aria-label="Recent activity">
-          <h4 className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: '#6c7086' }}>
+          <h4 className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: '#484f58' }}>
             Recent Activity ({recentActivity.length})
           </h4>
           {recentActivity.length === 0 ? (
-            <p className="text-xs" style={{ color: '#6c7086' }}>
+            <p className="text-xs" style={{ color: '#484f58' }}>
               No recent activity
             </p>
           ) : (
@@ -513,7 +357,7 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
                   <div
                     key={i}
                     className="flex gap-3 rounded-lg px-3 py-2.5"
-                    style={{ backgroundColor: '#313244' }}
+                    style={{ backgroundColor: '#21262d' }}
                   >
                     <div className="flex flex-col items-center">
                       <span
@@ -524,11 +368,11 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs leading-relaxed" style={{ color: '#a6adc8' }}>
+                      <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
                         {evt.detail}
                       </p>
                       {evt.timestamp && (
-                        <p className="text-xs mt-0.5" style={{ color: '#6c7086' }}>
+                        <p className="text-xs mt-0.5" style={{ color: '#484f58' }}>
                           {new Date(evt.timestamp).toLocaleString('en-US', {
                             month: 'short',
                             day: 'numeric',
@@ -550,7 +394,7 @@ function DetailPanel({ agent, onClose, onAgentUpdated }: DetailPanelProps) {
 }
 
 // ---- Main AgentPanel ----
-export default function AgentPanel({ agents, loading, onAgentUpdated }: AgentPanelProps) {
+export default function AgentPanel({ agents, loading }: AgentPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailedAgent, setDetailedAgent] = useState<Agent | null>(null);
 
@@ -581,7 +425,7 @@ export default function AgentPanel({ agents, loading, onAgentUpdated }: AgentPan
           <div
             key={i}
             className="rounded-xl p-4 space-y-3"
-            style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+            style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
           >
             <Skeleton className="w-10 h-10 rounded-full" />
             <Skeleton className="h-4 w-3/4" />
@@ -595,7 +439,7 @@ export default function AgentPanel({ agents, loading, onAgentUpdated }: AgentPan
   if (agents.length === 0) {
     return (
       <div className="flex items-center justify-center py-16">
-        <p className="text-sm" style={{ color: '#6c7086' }}>
+        <p className="text-sm" style={{ color: '#484f58' }}>
           No agents found. Make sure the backend is running.
         </p>
       </div>
@@ -631,7 +475,7 @@ export default function AgentPanel({ agents, loading, onAgentUpdated }: AgentPan
       {/* Detail panel */}
       {selectedAgent && (
         <div className="flex-1 overflow-hidden" style={{ minWidth: 0 }}>
-          <DetailPanel agent={selectedAgent} onClose={() => setSelectedId(null)} onAgentUpdated={onAgentUpdated} />
+          <DetailPanel agent={selectedAgent} onClose={() => setSelectedId(null)} />
         </div>
       )}
     </div>

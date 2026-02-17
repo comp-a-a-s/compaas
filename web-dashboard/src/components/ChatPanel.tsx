@@ -34,7 +34,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
       {!isUser && (
         <div
           className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2 mt-1"
-          style={{ backgroundColor: '#cba6f7', color: '#11111b' }}
+          style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
           title="Marcus (CEO)"
         >
           M
@@ -44,7 +44,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
       <div
         className="max-w-[75%] rounded-2xl px-4 py-2.5"
         style={{
-          backgroundColor: isUser ? '#1e3a5f' : '#313244',
+          backgroundColor: isUser ? '#1c2940' : '#21262d',
           borderBottomRightRadius: isUser ? '4px' : undefined,
           borderBottomLeftRadius: !isUser ? '4px' : undefined,
         }}
@@ -53,12 +53,12 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         <div className="flex items-center gap-2 mb-1">
           <span
             className="text-xs font-semibold"
-            style={{ color: isUser ? '#89b4fa' : '#cba6f7' }}
+            style={{ color: isUser ? '#58a6ff' : '#8b8fc7' }}
           >
             {isUser ? 'You' : 'Marcus (CEO)'}
           </span>
           {message.timestamp && (
-            <span className="text-xs" style={{ color: '#45475a' }}>
+            <span className="text-xs" style={{ color: '#30363d' }}>
               {formatTime(message.timestamp)}
             </span>
           )}
@@ -69,7 +69,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
                   key={i}
                   className="w-1.5 h-1.5 rounded-full animate-pulse-dot"
                   style={{
-                    backgroundColor: '#cba6f7',
+                    backgroundColor: '#8b8fc7',
                     animationDelay: `${i * 0.2}s`,
                   }}
                 />
@@ -81,7 +81,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         {/* Message content */}
         <p
           className="text-sm leading-relaxed whitespace-pre-wrap break-words"
-          style={{ color: '#cdd6f4' }}
+          style={{ color: '#e6edf3' }}
         >
           {message.content || (isStreaming ? '' : '(empty response)')}
         </p>
@@ -91,7 +91,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
       {isUser && (
         <div
           className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ml-2 mt-1"
-          style={{ backgroundColor: '#89b4fa', color: '#11111b' }}
+          style={{ backgroundColor: '#58a6ff', color: '#0d1117' }}
           title="You (Idan)"
         >
           I
@@ -108,11 +108,11 @@ function EmptyState() {
     <div className="flex flex-col items-center justify-center flex-1 gap-4 py-20">
       <div
         className="w-16 h-16 rounded-2xl flex items-center justify-center"
-        style={{ backgroundColor: '#313244' }}
+        style={{ backgroundColor: '#21262d' }}
       >
         <svg
           className="w-8 h-8"
-          style={{ color: '#cba6f7' }}
+          style={{ color: '#8b8fc7' }}
           fill="none"
           stroke="currentColor"
           strokeWidth={1.5}
@@ -126,10 +126,10 @@ function EmptyState() {
         </svg>
       </div>
       <div className="text-center">
-        <p className="text-sm font-medium" style={{ color: '#cdd6f4' }}>
+        <p className="text-sm font-medium" style={{ color: '#e6edf3' }}>
           Chat with Marcus, the CEO
         </p>
-        <p className="text-xs mt-1" style={{ color: '#6c7086' }}>
+        <p className="text-xs mt-1" style={{ color: '#484f58' }}>
           Send a message to start a conversation. Marcus has full access
           to company tools and can manage projects, tasks, and team operations.
         </p>
@@ -144,10 +144,10 @@ type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
 function StatusBadge({ status }: { status: ConnectionStatus }) {
   const config: Record<ConnectionStatus, { color: string; label: string }> = {
-    connecting: { color: '#f9e2af', label: 'Connecting...' },
-    connected: { color: '#a6e3a1', label: 'Connected' },
-    disconnected: { color: '#6c7086', label: 'Disconnected' },
-    error: { color: '#f38ba8', label: 'Error' },
+    connecting: { color: '#d29922', label: 'Connecting...' },
+    connected: { color: '#3fb950', label: 'Connected' },
+    disconnected: { color: '#484f58', label: 'Disconnected' },
+    error: { color: '#f85149', label: 'Error' },
   };
 
   const { color, label } = config[status];
@@ -167,7 +167,11 @@ function StatusBadge({ status }: { status: ConnectionStatus }) {
 
 // ---- Main ChatPanel ----
 
-export default function ChatPanel() {
+interface ChatPanelProps {
+  floating?: boolean;
+}
+
+export default function ChatPanel({ floating = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isWaiting, setIsWaiting] = useState(false);
@@ -218,6 +222,10 @@ export default function ChatPanel() {
           switch (data.type) {
             case 'user_ack':
               // User message acknowledged — already added optimistically
+              break;
+
+            case 'thinking':
+              // Keep-alive from backend while CEO agent is processing — no action needed
               break;
 
             case 'chunk':
@@ -321,58 +329,78 @@ export default function ChatPanel() {
   const hasMessages = messages.length > 0 || streamingContent;
 
   return (
-    <div className="flex flex-col animate-fade-in" style={{ height: '100%', minHeight: '600px' }}>
-      {/* Header bar */}
-      <div className="flex items-center justify-between pb-4 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <div
-            className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
-            style={{ backgroundColor: '#cba6f7', color: '#11111b' }}
-          >
-            M
+    <div className="flex flex-col" style={{ height: '100%', minHeight: floating ? undefined : '600px' }}>
+      {/* Header bar — hidden in floating mode (parent provides header) */}
+      {!floating && (
+        <div className="flex items-center justify-between pb-4 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div
+              className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
+              style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
+            >
+              M
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>
+                Marcus — CEO Chat
+              </h3>
+              <p className="text-xs" style={{ color: '#484f58' }}>
+                AI Virtual Company Orchestrator
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-sm font-semibold" style={{ color: '#cdd6f4' }}>
-              Marcus — CEO Chat
-            </h3>
-            <p className="text-xs" style={{ color: '#6c7086' }}>
-              AI Virtual Company Orchestrator
-            </p>
+
+          <div className="flex items-center gap-3">
+            <StatusBadge status={connectionStatus} />
+            {messages.length > 0 && (
+              <button
+                onClick={handleClear}
+                className="text-xs px-2 py-1 rounded-lg transition-colors duration-200 cursor-pointer"
+                style={{
+                  backgroundColor: '#21262d',
+                  color: '#484f58',
+                  border: '1px solid #30363d',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.color = '#f85149';
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = '#f85149';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.color = '#484f58';
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = '#30363d';
+                }}
+              >
+                Clear
+              </button>
+            )}
           </div>
         </div>
+      )}
 
-        <div className="flex items-center gap-3">
+      {/* Floating header: status + clear */}
+      {floating && (
+        <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid #21262d' }}>
           <StatusBadge status={connectionStatus} />
           {messages.length > 0 && (
             <button
               onClick={handleClear}
-              className="text-xs px-2 py-1 rounded-lg transition-colors duration-200 cursor-pointer"
-              style={{
-                backgroundColor: '#313244',
-                color: '#6c7086',
-                border: '1px solid #45475a',
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.color = '#f38ba8';
-                (e.currentTarget as HTMLButtonElement).style.borderColor = '#f38ba8';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.color = '#6c7086';
-                (e.currentTarget as HTMLButtonElement).style.borderColor = '#45475a';
-              }}
+              className="text-xs px-2 py-0.5 rounded transition-colors duration-200 cursor-pointer"
+              style={{ color: '#484f58', background: 'none', border: 'none' }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#f85149'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#484f58'; }}
             >
               Clear
             </button>
           )}
         </div>
-      </div>
+      )}
 
       {/* Messages area */}
       <div
-        className="flex-1 overflow-y-auto rounded-xl px-4 py-4"
-        style={{
-          backgroundColor: '#181825',
-          border: '1px solid #45475a',
+        className={`flex-1 overflow-y-auto ${floating ? 'px-3 py-3' : 'rounded-xl px-4 py-4'}`}
+        style={floating ? { backgroundColor: '#0d1117' } : {
+          backgroundColor: '#161b22',
+          border: '1px solid #30363d',
         }}
       >
         {!hasMessages ? (
@@ -403,13 +431,13 @@ export default function ChatPanel() {
               <div className="flex justify-start mb-3">
                 <div
                   className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2"
-                  style={{ backgroundColor: '#cba6f7', color: '#11111b' }}
+                  style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
                 >
                   M
                 </div>
                 <div
                   className="rounded-2xl px-4 py-3"
-                  style={{ backgroundColor: '#313244', borderBottomLeftRadius: '4px' }}
+                  style={{ backgroundColor: '#21262d', borderBottomLeftRadius: '4px' }}
                 >
                   <div className="flex gap-1.5">
                     {[0, 1, 2].map((i) => (
@@ -417,7 +445,7 @@ export default function ChatPanel() {
                         key={i}
                         className="w-2 h-2 rounded-full animate-pulse-dot"
                         style={{
-                          backgroundColor: '#cba6f7',
+                          backgroundColor: '#8b8fc7',
                           animationDelay: `${i * 0.3}s`,
                         }}
                       />
@@ -434,13 +462,14 @@ export default function ChatPanel() {
 
       {/* Input area */}
       <div
-        className="flex items-end gap-3 mt-3 flex-shrink-0"
+        className={`flex items-end gap-2 flex-shrink-0 ${floating ? 'px-3 py-2' : 'mt-3'}`}
+        style={floating ? { borderTop: '1px solid #21262d' } : undefined}
       >
         <div
           className="flex-1 rounded-xl overflow-hidden"
           style={{
-            backgroundColor: '#181825',
-            border: '1px solid #45475a',
+            backgroundColor: '#161b22',
+            border: '1px solid #30363d',
           }}
         >
           <textarea
@@ -454,7 +483,7 @@ export default function ChatPanel() {
             className="w-full resize-none px-4 py-3 text-sm outline-none"
             style={{
               backgroundColor: 'transparent',
-              color: '#cdd6f4',
+              color: '#e6edf3',
               maxHeight: '120px',
               minHeight: '44px',
             }}
@@ -471,8 +500,8 @@ export default function ChatPanel() {
           disabled={isWaiting || !input.trim()}
           className="flex items-center justify-center w-11 h-11 rounded-xl transition-all duration-200 flex-shrink-0"
           style={{
-            backgroundColor: isWaiting || !input.trim() ? '#313244' : '#cba6f7',
-            color: isWaiting || !input.trim() ? '#45475a' : '#11111b',
+            backgroundColor: isWaiting || !input.trim() ? '#21262d' : '#8b8fc7',
+            color: isWaiting || !input.trim() ? '#30363d' : '#0d1117',
             cursor: isWaiting || !input.trim() ? 'not-allowed' : 'pointer',
           }}
           title="Send message (Enter)"
@@ -493,9 +522,11 @@ export default function ChatPanel() {
         </button>
       </div>
 
-      <p className="text-xs mt-2 text-center" style={{ color: '#45475a' }}>
-        Press Enter to send, Shift+Enter for newline
-      </p>
+      {!floating && (
+        <p className="text-xs mt-2 text-center" style={{ color: '#30363d' }}>
+          Press Enter to send, Shift+Enter for newline
+        </p>
+      )}
     </div>
   );
 }

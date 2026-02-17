@@ -13,40 +13,40 @@ type ProjectTab = 'tasks' | 'decisions' | 'team' | 'info';
 // ---- Helpers ----
 function statusBadge(status: string): { bg: string; text: string } {
   const s = status.toLowerCase();
-  if (s === 'active') return { bg: '#1a3020', text: '#a6e3a1' };
-  if (s === 'completed') return { bg: '#1e3050', text: '#89b4fa' };
-  if (s === 'paused') return { bg: '#3a3010', text: '#f9e2af' };
-  if (s === 'planning') return { bg: '#2a1e3a', text: '#cba6f7' };
-  if (s === 'blocked') return { bg: '#3a1a1e', text: '#f38ba8' };
-  return { bg: '#313244', text: '#a6adc8' };
+  if (s === 'active') return { bg: '#1a2e25', text: '#3fb950' };
+  if (s === 'completed') return { bg: '#1c2940', text: '#58a6ff' };
+  if (s === 'paused') return { bg: '#2d2213', text: '#d29922' };
+  if (s === 'planning') return { bg: '#1c2233', text: '#8b8fc7' };
+  if (s === 'blocked') return { bg: '#2d1519', text: '#f85149' };
+  return { bg: '#21262d', text: '#8b949e' };
 }
 
 function typeBadge(type: string): { bg: string; text: string } {
   const t = type.toLowerCase();
-  if (t.includes('feature')) return { bg: '#103a35', text: '#94e2d5' };
-  if (t.includes('infra')) return { bg: '#1e3050', text: '#89b4fa' };
-  if (t.includes('design')) return { bg: '#3a1030', text: '#f5c2e7' };
-  if (t.includes('research')) return { bg: '#2a2a10', text: '#f9e2af' };
-  if (t.includes('bug') || t.includes('fix')) return { bg: '#3a1a1e', text: '#f38ba8' };
-  return { bg: '#313244', text: '#a6adc8' };
+  if (t.includes('feature')) return { bg: '#1c2940', text: '#58a6ff' };
+  if (t.includes('infra')) return { bg: '#1c2940', text: '#58a6ff' };
+  if (t.includes('design')) return { bg: '#2d1519', text: '#8b8fc7' };
+  if (t.includes('research')) return { bg: '#2d2213', text: '#d29922' };
+  if (t.includes('bug') || t.includes('fix')) return { bg: '#2d1519', text: '#f85149' };
+  return { bg: '#21262d', text: '#8b949e' };
 }
 
 function taskColColor(col: string): string {
   const c = col.toLowerCase();
-  if (c === 'done') return '#a6e3a1';
-  if (c === 'in_progress' || c === 'in progress') return '#89b4fa';
-  if (c === 'blocked') return '#f38ba8';
-  if (c === 'review') return '#cba6f7';
-  if (c === 'todo') return '#a6adc8';
-  return '#6c7086';
+  if (c === 'done') return '#3fb950';
+  if (c === 'in_progress' || c === 'in progress') return '#58a6ff';
+  if (c === 'blocked') return '#f85149';
+  if (c === 'review') return '#8b8fc7';
+  if (c === 'todo') return '#8b949e';
+  return '#484f58';
 }
 
 function priorityBadge(priority: string): { bg: string; text: string } {
   const p = priority.toUpperCase();
-  if (p === 'P0') return { bg: '#3a1a1e', text: '#f38ba8' };
-  if (p === 'P1') return { bg: '#3a2510', text: '#fab387' };
-  if (p === 'P2') return { bg: '#3a3010', text: '#f9e2af' };
-  return { bg: '#313244', text: '#6c7086' };
+  if (p === 'P0') return { bg: '#2d1519', text: '#f85149' };
+  if (p === 'P1') return { bg: '#2d2213', text: '#d29922' };
+  if (p === 'P2') return { bg: '#2d2213', text: '#d29922' };
+  return { bg: '#21262d', text: '#484f58' };
 }
 
 function avatarInitial(name: string): string {
@@ -54,7 +54,7 @@ function avatarInitial(name: string): string {
 }
 
 function avatarBg(_name: string, index: number): string {
-  const colors = ['#cba6f7', '#89b4fa', '#a6e3a1', '#94e2d5', '#fab387', '#f9e2af', '#74c7ec', '#b4befe'];
+  const colors = ['#8b8fc7', '#58a6ff', '#3fb950', '#58a6ff', '#d29922', '#d29922', '#58a6ff', '#8b8fc7'];
   return colors[index % colors.length];
 }
 
@@ -83,19 +83,19 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
       onClick={onSelect}
       className="w-full text-left rounded-xl p-4 flex flex-col gap-3 transition-all duration-200 cursor-pointer"
       style={{
-        backgroundColor: selected ? '#313244' : '#181825',
-        border: `1px solid ${selected ? '#89b4fa' : '#45475a'}`,
+        backgroundColor: selected ? '#21262d' : '#161b22',
+        border: `1px solid ${selected ? '#58a6ff' : '#30363d'}`,
         outline: 'none',
       }}
       onMouseEnter={(e) => {
-        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = '#7f849c';
+        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = '#6e7681';
       }}
       onMouseLeave={(e) => {
-        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = '#45475a';
+        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = '#30363d';
       }}
     >
       <div className="flex items-start justify-between gap-2">
-        <h3 className="text-sm font-semibold leading-tight" style={{ color: '#cdd6f4' }}>
+        <h3 className="text-sm font-semibold leading-tight" style={{ color: '#e6edf3' }}>
           {project.name}
         </h3>
         <span
@@ -109,7 +109,7 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
       {project.description && (
         <p
           className="text-xs leading-relaxed"
-          style={{ color: '#a6adc8', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+          style={{ color: '#8b949e', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
         >
           {project.description}
         </p>
@@ -124,7 +124,7 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
             {project.type}
           </span>
         )}
-        <span className="text-xs" style={{ color: '#6c7086' }}>
+        <span className="text-xs" style={{ color: '#484f58' }}>
           {total} tasks
         </span>
       </div>
@@ -132,13 +132,13 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
       {/* Progress bar */}
       <div>
         <div className="flex justify-between text-xs mb-1">
-          <span style={{ color: '#6c7086' }}>Progress</span>
-          <span style={{ color: '#a6e3a1' }}>{pct}%</span>
+          <span style={{ color: '#484f58' }}>Progress</span>
+          <span style={{ color: '#3fb950' }}>{pct}%</span>
         </div>
-        <div className="h-1.5 rounded-full" style={{ backgroundColor: '#313244' }}>
+        <div className="h-1.5 rounded-full" style={{ backgroundColor: '#21262d' }}>
           <div
             className="h-full rounded-full transition-all duration-500"
-            style={{ width: `${pct}%`, backgroundColor: '#a6e3a1' }}
+            style={{ width: `${pct}%`, backgroundColor: '#3fb950' }}
           />
         </div>
       </div>
@@ -175,7 +175,7 @@ function KanbanBoard({ tasks }: KanbanProps) {
 
   if (tasks.length === 0) {
     return (
-      <p className="text-xs py-4 text-center" style={{ color: '#6c7086' }}>
+      <p className="text-xs py-4 text-center" style={{ color: '#484f58' }}>
         No tasks in this project
       </p>
     );
@@ -192,22 +192,22 @@ function KanbanBoard({ tasks }: KanbanProps) {
             className="flex-shrink-0 flex flex-col rounded-xl"
             style={{
               width: '220px',
-              backgroundColor: '#181825',
-              border: '1px solid #313244',
+              backgroundColor: '#161b22',
+              border: '1px solid #21262d',
               minHeight: '200px',
             }}
           >
             {/* Column header */}
             <div
               className="px-3 py-2.5 flex items-center justify-between flex-shrink-0 rounded-t-xl"
-              style={{ borderBottom: '1px solid #313244' }}
+              style={{ borderBottom: '1px solid #21262d' }}
             >
               <span className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>
                 {KANBAN_LABELS[col]}
               </span>
               <span
                 className="text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold"
-                style={{ backgroundColor: '#313244', color: '#a6adc8' }}
+                style={{ backgroundColor: '#21262d', color: '#8b949e' }}
               >
                 {colTasks.length}
               </span>
@@ -221,10 +221,10 @@ function KanbanBoard({ tasks }: KanbanProps) {
                   <div
                     key={task.id}
                     className="rounded-lg p-3 flex flex-col gap-2"
-                    style={{ backgroundColor: '#313244', border: '1px solid #45475a' }}
+                    style={{ backgroundColor: '#21262d', border: '1px solid #30363d' }}
                   >
                     <div className="flex items-start justify-between gap-1">
-                      <p className="text-xs font-medium leading-tight" style={{ color: '#cdd6f4' }}>
+                      <p className="text-xs font-medium leading-tight" style={{ color: '#e6edf3' }}>
                         {task.title}
                       </p>
                       <span
@@ -239,7 +239,7 @@ function KanbanBoard({ tasks }: KanbanProps) {
                       <p
                         className="text-xs leading-relaxed"
                         style={{
-                          color: '#a6adc8',
+                          color: '#8b949e',
                           display: '-webkit-box',
                           WebkitLineClamp: 2,
                           WebkitBoxOrient: 'vertical',
@@ -254,11 +254,11 @@ function KanbanBoard({ tasks }: KanbanProps) {
                       <div className="flex items-center gap-1.5">
                         <div
                           className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-                          style={{ backgroundColor: '#89b4fa', color: '#11111b' }}
+                          style={{ backgroundColor: '#58a6ff', color: '#0d1117' }}
                         >
                           {avatarInitial(task.assigned_to)}
                         </div>
-                        <span className="text-xs" style={{ color: '#6c7086' }}>
+                        <span className="text-xs" style={{ color: '#484f58' }}>
                           {task.assigned_to}
                         </span>
                       </div>
@@ -308,7 +308,7 @@ function DecisionsTab({ projectId }: DecisionsTabProps) {
 
   if (decisions.length === 0) {
     return (
-      <p className="text-xs py-4" style={{ color: '#6c7086' }}>
+      <p className="text-xs py-4" style={{ color: '#484f58' }}>
         No decisions recorded for this project
       </p>
     );
@@ -320,13 +320,13 @@ function DecisionsTab({ projectId }: DecisionsTabProps) {
         <div
           key={i}
           className="rounded-xl p-4 flex flex-col gap-2"
-          style={{ backgroundColor: '#313244', border: '1px solid #45475a' }}
+          style={{ backgroundColor: '#21262d', border: '1px solid #30363d' }}
         >
           <div className="flex items-start justify-between gap-3">
-            <h4 className="text-sm font-semibold" style={{ color: '#cdd6f4' }}>
+            <h4 className="text-sm font-semibold" style={{ color: '#e6edf3' }}>
               {d.title}
             </h4>
-            <span className="text-xs flex-shrink-0" style={{ color: '#6c7086' }}>
+            <span className="text-xs flex-shrink-0" style={{ color: '#484f58' }}>
               {d.timestamp
                 ? new Date(d.timestamp).toLocaleDateString('en-US', {
                     month: 'short',
@@ -336,21 +336,21 @@ function DecisionsTab({ projectId }: DecisionsTabProps) {
             </span>
           </div>
 
-          <p className="text-xs leading-relaxed" style={{ color: '#a6adc8' }}>
-            <span style={{ color: '#94e2d5' }}>Decision: </span>
+          <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
+            <span style={{ color: '#58a6ff' }}>Decision: </span>
             {d.decision}
           </p>
 
           {d.rationale && (
-            <p className="text-xs leading-relaxed" style={{ color: '#a6adc8' }}>
-              <span style={{ color: '#89b4fa' }}>Rationale: </span>
+            <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
+              <span style={{ color: '#58a6ff' }}>Rationale: </span>
               {d.rationale}
             </p>
           )}
 
           {d.alternatives && (
-            <p className="text-xs leading-relaxed" style={{ color: '#a6adc8' }}>
-              <span style={{ color: '#f9e2af' }}>Alternatives: </span>
+            <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
+              <span style={{ color: '#d29922' }}>Alternatives: </span>
               {d.alternatives}
             </p>
           )}
@@ -358,11 +358,11 @@ function DecisionsTab({ projectId }: DecisionsTabProps) {
           <div className="flex items-center gap-1.5 mt-1">
             <div
               className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-              style={{ backgroundColor: '#cba6f7', color: '#11111b' }}
+              style={{ backgroundColor: '#8b8fc7', color: '#0d1117' }}
             >
               {avatarInitial(d.decided_by)}
             </div>
-            <span className="text-xs" style={{ color: '#6c7086' }}>
+            <span className="text-xs" style={{ color: '#484f58' }}>
               {d.decided_by}
             </span>
           </div>
@@ -379,7 +379,7 @@ interface TeamTabProps {
 function TeamTab({ team }: TeamTabProps) {
   if (team.length === 0) {
     return (
-      <p className="text-xs py-4" style={{ color: '#6c7086' }}>
+      <p className="text-xs py-4" style={{ color: '#484f58' }}>
         No team members assigned
       </p>
     );
@@ -391,15 +391,15 @@ function TeamTab({ team }: TeamTabProps) {
         <div
           key={member}
           className="flex flex-col items-center gap-2 rounded-xl p-4"
-          style={{ backgroundColor: '#313244', border: '1px solid #45475a' }}
+          style={{ backgroundColor: '#21262d', border: '1px solid #30363d' }}
         >
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
-            style={{ backgroundColor: avatarBg(member, i), color: '#11111b' }}
+            style={{ backgroundColor: avatarBg(member, i), color: '#0d1117' }}
           >
             {avatarInitial(member)}
           </div>
-          <p className="text-xs text-center font-medium" style={{ color: '#cdd6f4' }}>
+          <p className="text-xs text-center font-medium" style={{ color: '#e6edf3' }}>
             {member}
           </p>
         </div>
@@ -419,7 +419,7 @@ function InfoTab({ project }: InfoTabProps) {
     <div className="space-y-4">
       <div className="grid gap-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <div>
-          <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#6c7086' }}>
+          <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#484f58' }}>
             Status
           </p>
           <span
@@ -432,10 +432,10 @@ function InfoTab({ project }: InfoTabProps) {
 
         {project.type && (
           <div>
-            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#6c7086' }}>
+            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#484f58' }}>
               Type
             </p>
-            <p className="text-xs" style={{ color: '#cdd6f4' }}>
+            <p className="text-xs" style={{ color: '#e6edf3' }}>
               {project.type}
             </p>
           </div>
@@ -443,10 +443,10 @@ function InfoTab({ project }: InfoTabProps) {
 
         {project.created_at && (
           <div>
-            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#6c7086' }}>
+            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#484f58' }}>
               Created
             </p>
-            <p className="text-xs" style={{ color: '#cdd6f4' }}>
+            <p className="text-xs" style={{ color: '#e6edf3' }}>
               {new Date(project.created_at).toLocaleDateString('en-US', {
                 month: 'long',
                 day: 'numeric',
@@ -458,10 +458,10 @@ function InfoTab({ project }: InfoTabProps) {
 
         {project.updated_at && (
           <div>
-            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#6c7086' }}>
+            <p className="text-xs uppercase tracking-widest mb-1" style={{ color: '#484f58' }}>
               Last Updated
             </p>
-            <p className="text-xs" style={{ color: '#cdd6f4' }}>
+            <p className="text-xs" style={{ color: '#e6edf3' }}>
               {new Date(project.updated_at).toLocaleDateString('en-US', {
                 month: 'long',
                 day: 'numeric',
@@ -474,10 +474,10 @@ function InfoTab({ project }: InfoTabProps) {
 
       {project.description && (
         <div>
-          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#6c7086' }}>
+          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
             Description
           </p>
-          <p className="text-xs leading-relaxed" style={{ color: '#a6adc8' }}>
+          <p className="text-xs leading-relaxed" style={{ color: '#8b949e' }}>
             {project.description}
           </p>
         </div>
@@ -485,7 +485,7 @@ function InfoTab({ project }: InfoTabProps) {
 
       {project.phases && project.phases.length > 0 && (
         <div>
-          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#6c7086' }}>
+          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
             Phases
           </p>
           <div className="flex flex-wrap gap-1.5">
@@ -493,7 +493,7 @@ function InfoTab({ project }: InfoTabProps) {
               <span
                 key={i}
                 className="text-xs px-2 py-0.5 rounded-full"
-                style={{ backgroundColor: '#313244', color: '#b4befe', border: '1px solid #45475a' }}
+                style={{ backgroundColor: '#21262d', color: '#8b8fc7', border: '1px solid #30363d' }}
               >
                 {phase}
               </span>
@@ -504,7 +504,7 @@ function InfoTab({ project }: InfoTabProps) {
 
       {project.task_counts && (
         <div>
-          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#6c7086' }}>
+          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#484f58' }}>
             Task Counts
           </p>
           <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))' }}>
@@ -512,12 +512,12 @@ function InfoTab({ project }: InfoTabProps) {
               <div
                 key={status}
                 className="rounded-lg px-3 py-2 text-center"
-                style={{ backgroundColor: '#313244' }}
+                style={{ backgroundColor: '#21262d' }}
               >
                 <p className="text-base font-bold" style={{ color: taskColColor(status) }}>
                   {count}
                 </p>
-                <p className="text-xs capitalize" style={{ color: '#6c7086' }}>
+                <p className="text-xs capitalize" style={{ color: '#484f58' }}>
                   {status.replace(/_/g, ' ')}
                 </p>
               </div>
@@ -551,15 +551,15 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
   return (
     <div
       className="rounded-xl flex flex-col h-full animate-slide-in-right overflow-hidden"
-      style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+      style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
     >
       {/* Header */}
       <div
         className="px-5 py-4 flex items-start justify-between flex-shrink-0"
-        style={{ borderBottom: '1px solid #313244' }}
+        style={{ borderBottom: '1px solid #21262d' }}
       >
         <div className="flex-1 min-w-0 pr-4">
-          <h3 className="text-sm font-bold truncate" style={{ color: '#cdd6f4' }}>
+          <h3 className="text-sm font-bold truncate" style={{ color: '#e6edf3' }}>
             {project.name}
           </h3>
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
@@ -570,7 +570,7 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
               {project.status}
             </span>
             {project.type && (
-              <span className="text-xs" style={{ color: '#6c7086' }}>
+              <span className="text-xs" style={{ color: '#484f58' }}>
                 {project.type}
               </span>
             )}
@@ -579,10 +579,10 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
         <button
           onClick={onClose}
           className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer flex-shrink-0"
-          style={{ color: '#6c7086', backgroundColor: 'transparent' }}
+          style={{ color: '#484f58', backgroundColor: 'transparent' }}
           aria-label="Close project detail"
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#313244';
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#21262d';
           }}
           onMouseLeave={(e) => {
             (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
@@ -597,7 +597,7 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
       {/* Tabs */}
       <div
         className="flex gap-1 px-4 pt-3 flex-shrink-0"
-        style={{ borderBottom: '1px solid #313244' }}
+        style={{ borderBottom: '1px solid #21262d' }}
         role="tablist"
       >
         {tabs.map((tab) => (
@@ -608,16 +608,16 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
             onClick={() => setActiveTab(tab.id)}
             className="px-3 py-1.5 text-xs font-medium rounded-t-lg transition-all duration-200 cursor-pointer"
             style={{
-              color: activeTab === tab.id ? '#89b4fa' : '#6c7086',
-              borderBottom: activeTab === tab.id ? '2px solid #89b4fa' : '2px solid transparent',
+              color: activeTab === tab.id ? '#58a6ff' : '#484f58',
+              borderBottom: activeTab === tab.id ? '2px solid #58a6ff' : '2px solid transparent',
               backgroundColor: 'transparent',
               outline: 'none',
             }}
             onMouseEnter={(e) => {
-              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = '#a6adc8';
+              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = '#8b949e';
             }}
             onMouseLeave={(e) => {
-              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = '#6c7086';
+              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = '#484f58';
             }}
           >
             {tab.label}
@@ -654,7 +654,7 @@ export default function ProjectPanel({ projects, loading, tasksByProject }: Proj
           <div
             key={i}
             className="rounded-xl p-4 space-y-2"
-            style={{ backgroundColor: '#181825', border: '1px solid #45475a' }}
+            style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
           >
             <Skeleton className="h-5 w-3/4" />
             <Skeleton className="h-3 w-1/2" />
@@ -668,7 +668,7 @@ export default function ProjectPanel({ projects, loading, tasksByProject }: Proj
   if (projects.length === 0) {
     return (
       <div className="flex items-center justify-center py-16">
-        <p className="text-sm" style={{ color: '#6c7086' }}>
+        <p className="text-sm" style={{ color: '#484f58' }}>
           No projects found. Make sure the backend is running.
         </p>
       </div>
