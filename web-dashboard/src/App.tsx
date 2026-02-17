@@ -196,6 +196,7 @@ export default function App() {
           <AgentPanel
             agents={agents}
             loading={loadingAgents}
+            onAgentUpdated={loadAgents}
           />
         );
 
