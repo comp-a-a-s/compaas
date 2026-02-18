@@ -111,3 +111,21 @@ export async function updateConfig(updates: Record<string, unknown>): Promise<bo
     return false;
   }
 }
+
+export async function testLlmConnection(opts: {
+  base_url: string;
+  model: string;
+  api_key: string;
+}): Promise<{ status: 'ok' | 'error'; message: string }> {
+  try {
+    const res = await fetch(`${BASE}/llm/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    });
+    if (!res.ok) return { status: 'error', message: `HTTP ${res.status}` };
+    return res.json();
+  } catch (err) {
+    return { status: 'error', message: String(err) };
+  }
+}

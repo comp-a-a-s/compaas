@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { saveSetupConfig } from '../api/client';
-import type { AppConfig } from '../types';
+import { saveSetupConfig, testLlmConnection } from '../api/client';
+import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
 
@@ -18,7 +18,7 @@ interface SetupWizardProps {
 
 // ---- Constants ----
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 7;
 
 const AGENT_DEFAULTS: AgentDefault[] = [
   { id: 'ceo', role: 'CEO', defaultName: 'Marcus' },
@@ -220,6 +220,319 @@ function StepWelcome() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ---- AI Provider presets ----
+
+type LlmProvider = 'anthropic' | 'openai' | 'openai_compat';
+type LocalPreset  = 'ollama' | 'lmstudio' | 'llamacpp' | 'custom';
+
+const LOCAL_PRESETS: { id: LocalPreset; label: string; baseUrl: string; apiKey: string; placeholder: string }[] = [
+  { id: 'ollama',    label: 'Ollama',        baseUrl: 'http://localhost:11434/v1', apiKey: 'ollama',     placeholder: 'llama3.2' },
+  { id: 'lmstudio', label: 'LM Studio',      baseUrl: 'http://localhost:1234/v1',  apiKey: 'lm-studio',  placeholder: 'llama-3.2-3b-instruct' },
+  { id: 'llamacpp',  label: 'llama.cpp',      baseUrl: 'http://localhost:8080/v1',  apiKey: 'none',       placeholder: 'default' },
+  { id: 'custom',   label: 'Custom',         baseUrl: '',                          apiKey: '',           placeholder: 'my-model' },
+];
+
+const OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'custom'];
+
+function StepAiProvider({
+  llmProvider, setLlmProvider,
+  localPreset, setLocalPreset,
+  llmBaseUrl, setLlmBaseUrl,
+  llmModel, setLlmModel,
+  llmApiKey, setLlmApiKey,
+  openaiModelPreset, setOpenaiModelPreset,
+  proxyEnabled, setProxyEnabled,
+  proxyUrl, setProxyUrl,
+}: {
+  llmProvider: LlmProvider;            setLlmProvider: (v: LlmProvider) => void;
+  localPreset: LocalPreset;            setLocalPreset: (v: LocalPreset) => void;
+  llmBaseUrl: string;                  setLlmBaseUrl: (v: string) => void;
+  llmModel: string;                    setLlmModel: (v: string) => void;
+  llmApiKey: string;                   setLlmApiKey: (v: string) => void;
+  openaiModelPreset: string;           setOpenaiModelPreset: (v: string) => void;
+  proxyEnabled: boolean;               setProxyEnabled: (v: boolean) => void;
+  proxyUrl: string;                    setProxyUrl: (v: string) => void;
+}) {
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+  const [testMessage, setTestMessage] = useState('');
+
+  const handleLocalPreset = (preset: LocalPreset) => {
+    setLocalPreset(preset);
+    const p = LOCAL_PRESETS.find((x) => x.id === preset)!;
+    setLlmBaseUrl(p.baseUrl);
+    setLlmApiKey(p.apiKey);
+    if (!llmModel || llmModel === LOCAL_PRESETS.find((x) => x.id !== preset)?.placeholder) {
+      setLlmModel(p.placeholder);
+    }
+  };
+
+  const handleOpenaiModel = (m: string) => {
+    setOpenaiModelPreset(m);
+    if (m !== 'custom') setLlmModel(m);
+  };
+
+  const handleTest = async () => {
+    setTestStatus('testing');
+    setTestMessage('');
+    const result = await testLlmConnection({ base_url: llmBaseUrl, model: llmModel, api_key: llmApiKey });
+    setTestStatus(result.status);
+    setTestMessage(result.message);
+  };
+
+  const ProviderCard = ({
+    icon, title, description, selected, onClick, children,
+  }: {
+    id?: LlmProvider; icon: string; title: string; description: string;
+    selected: boolean; onClick: () => void; children?: React.ReactNode;
+  }) => (
+    <button
+      role="radio"
+      aria-checked={selected}
+      onClick={onClick}
+      style={{
+        width: '100%', textAlign: 'left', padding: '14px 16px',
+        borderRadius: '10px', cursor: 'pointer',
+        border: `2px solid ${selected ? C.accent : C.border}`,
+        backgroundColor: selected ? C.accentDim : C.surfaceRaised,
+        transition: 'all 0.15s', marginBottom: '10px', outline: 'none',
+      }}
+      onFocus={(e) => { e.currentTarget.style.boxShadow = `0 0 0 2px ${C.accentDim}`; }}
+      onBlur={(e) => { e.currentTarget.style.boxShadow = 'none'; }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: selected && children ? '14px' : 0 }}>
+        <span style={{ fontSize: '22px', flexShrink: 0 }}>{icon}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '14px', fontWeight: 600, color: C.textPrimary, marginBottom: '2px' }}>{title}</div>
+          <div style={{ fontSize: '12px', color: C.textSecondary }}>{description}</div>
+        </div>
+        <div style={{
+          width: '18px', height: '18px', borderRadius: '50%', flexShrink: 0,
+          border: `2px solid ${selected ? C.accent : C.border}`,
+          backgroundColor: selected ? C.accent : 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {selected && <div style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: C.bg }} />}
+        </div>
+      </div>
+      {selected && children && (
+        <div onClick={(e) => e.stopPropagation()}>
+          {children}
+        </div>
+      )}
+    </button>
+  );
+
+  return (
+    <div>
+      <h2 style={{ fontSize: '18px', fontWeight: 600, color: C.textPrimary, marginBottom: '6px' }}>
+        AI Provider
+      </h2>
+      <p style={{ fontSize: '13px', color: C.textSecondary, marginBottom: '20px' }}>
+        Choose how your AI agents communicate. You can change this later in Settings.
+      </p>
+
+      {/* Anthropic */}
+      <ProviderCard
+        id="anthropic" icon="⚡" selected={llmProvider === 'anthropic'}
+        title="Anthropic Cloud"
+        description="Claude Opus / Sonnet / Haiku via Anthropic API. Requires ANTHROPIC_API_KEY in your environment."
+        onClick={() => setLlmProvider('anthropic')}
+      />
+
+      {/* OpenAI */}
+      <ProviderCard
+        id="openai" icon="🤖" selected={llmProvider === 'openai'}
+        title="OpenAI"
+        description="GPT-4o, GPT-4-turbo, GPT-3.5-turbo, etc. Requires an OpenAI API key."
+        onClick={() => setLlmProvider('openai')}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {/* Model preset */}
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Model
+            </label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' }}>
+              {OPENAI_MODELS.map((m) => (
+                <button key={m} onClick={() => handleOpenaiModel(m)} style={{
+                  padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+                  border: `1px solid ${openaiModelPreset === m ? C.accent : C.border}`,
+                  backgroundColor: openaiModelPreset === m ? 'rgba(88,166,255,0.15)' : C.surface,
+                  color: openaiModelPreset === m ? C.accent : C.textSecondary,
+                }}>
+                  {m}
+                </button>
+              ))}
+            </div>
+            {openaiModelPreset === 'custom' && (
+              <input
+                type="text" value={llmModel} onChange={(e) => setLlmModel(e.target.value)}
+                placeholder="e.g. gpt-4o-2024-08-06"
+                style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              />
+            )}
+          </div>
+          {/* API key */}
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              API Key
+            </label>
+            <input
+              type="password" value={llmApiKey} onChange={(e) => setLlmApiKey(e.target.value)}
+              placeholder="sk-..."
+              style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+          {/* Test button */}
+          <TestConnectionButton status={testStatus} message={testMessage} onTest={handleTest} />
+        </div>
+      </ProviderCard>
+
+      {/* Local Model */}
+      <ProviderCard
+        id="openai_compat" icon="🖥️" selected={llmProvider === 'openai_compat'}
+        title="Local Model"
+        description="Ollama, LM Studio, llama.cpp, or any OpenAI-compatible server running locally."
+        onClick={() => setLlmProvider('openai_compat')}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {/* Preset tabs */}
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Server
+            </label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {LOCAL_PRESETS.map((p) => (
+                <button key={p.id} onClick={() => handleLocalPreset(p.id)} style={{
+                  padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+                  border: `1px solid ${localPreset === p.id ? C.accent : C.border}`,
+                  backgroundColor: localPreset === p.id ? 'rgba(88,166,255,0.15)' : C.surface,
+                  color: localPreset === p.id ? C.accent : C.textSecondary,
+                }}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Base URL */}
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Base URL
+            </label>
+            <input
+              type="text" value={llmBaseUrl} onChange={(e) => setLlmBaseUrl(e.target.value)}
+              placeholder="http://localhost:11434/v1"
+              style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+          {/* Model name */}
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Model Name
+            </label>
+            <input
+              type="text" value={llmModel} onChange={(e) => setLlmModel(e.target.value)}
+              placeholder={LOCAL_PRESETS.find((p) => p.id === localPreset)?.placeholder ?? 'llama3.2'}
+              style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+          {/* Test button */}
+          <TestConnectionButton status={testStatus} message={testMessage} onTest={handleTest} />
+        </div>
+      </ProviderCard>
+
+      {/* Phase 2 — proxy toggle (shown for all non-Anthropic providers) */}
+      {llmProvider !== 'anthropic' && (
+        <div style={{
+          marginTop: '4px', padding: '12px 14px',
+          backgroundColor: C.surfaceRaised, border: `1px solid ${C.border}`,
+          borderRadius: '8px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: proxyEnabled ? '10px' : 0 }}>
+            <div>
+              <div style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary, marginBottom: '2px' }}>
+                Route ALL agents through proxy
+              </div>
+              <div style={{ fontSize: '11px', color: C.textSecondary }}>
+                Uses a LiteLLM proxy to translate agent calls. Requires <code style={{ fontSize: '10px' }}>pip install thunderflow[proxy]</code>.
+              </div>
+            </div>
+            <button
+              role="switch" aria-checked={proxyEnabled}
+              onClick={() => setProxyEnabled(!proxyEnabled)}
+              style={{
+                position: 'relative', width: '44px', height: '24px', borderRadius: '12px', flexShrink: 0,
+                border: `1px solid ${proxyEnabled ? C.accent : C.border}`, cursor: 'pointer',
+                backgroundColor: proxyEnabled ? C.accentDim : C.surface, outline: 'none', padding: 0,
+              }}
+              aria-label="Enable proxy mode"
+            >
+              <span style={{
+                position: 'absolute', top: '3px', left: proxyEnabled ? '22px' : '3px',
+                width: '16px', height: '16px', borderRadius: '50%',
+                backgroundColor: proxyEnabled ? C.accent : C.textMuted,
+                transition: 'left 0.2s, background-color 0.2s',
+              }} />
+            </button>
+          </div>
+          {proxyEnabled && (
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Proxy URL
+              </label>
+              <input
+                type="text" value={proxyUrl} onChange={(e) => setProxyUrl(e.target.value)}
+                placeholder="http://localhost:4000"
+                style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TestConnectionButton({
+  status, message, onTest,
+}: {
+  status: 'idle' | 'testing' | 'ok' | 'error';
+  message: string;
+  onTest: () => void;
+}) {
+  const colors: Record<string, string> = { ok: C.success, error: C.error, testing: C.textMuted, idle: C.accent };
+  const labels: Record<string, string> = { ok: 'Connected', error: 'Failed', testing: 'Testing…', idle: 'Test Connection' };
+  return (
+    <div>
+      <button
+        onClick={onTest}
+        disabled={status === 'testing'}
+        style={{
+          padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: 500, cursor: 'pointer',
+          border: `1px solid ${colors[status]}`,
+          backgroundColor: status === 'ok' ? 'rgba(63,185,80,0.1)' : status === 'error' ? 'rgba(248,81,73,0.1)' : C.surface,
+          color: colors[status], outline: 'none',
+        }}
+      >
+        {labels[status]}
+      </button>
+      {message && status === 'error' && (
+        <div style={{ marginTop: '6px', fontSize: '11px', color: C.error, wordBreak: 'break-all' }}>{message}</div>
+      )}
     </div>
   );
 }
@@ -697,6 +1010,8 @@ function StepComplete({
   pollInterval,
   telegramBotToken,
   telegramChatId,
+  llmProvider,
+  llmModel,
 }: {
   userName: string;
   agentNames: Record<string, string>;
@@ -705,13 +1020,21 @@ function StepComplete({
   theme: string;
   telegramBotToken: string;
   telegramChatId: string;
+  llmProvider: LlmProvider;
+  llmModel: string;
 }) {
   const { currentTheme } = useThemeSwitch();
   const pollLabel = POLL_INTERVAL_OPTIONS.find((o) => o.value === pollInterval)?.label ?? `${pollInterval}ms`;
   const nameCount = Object.keys(agentNames).length;
   const telegramConfigured = telegramBotToken && telegramChatId;
 
+  const providerLabel =
+    llmProvider === 'anthropic'     ? 'Anthropic Cloud (Claude)' :
+    llmProvider === 'openai'        ? `OpenAI (${llmModel})` :
+                                      `Local Model (${llmModel})`;
+
   const rows = [
+    { label: 'AI Provider', value: providerLabel },
     { label: 'Board Head', value: userName || '(not set)' },
     { label: 'Team size', value: `${nameCount} agents configured` },
     { label: 'Theme', value: currentTheme.charAt(0).toUpperCase() + currentTheme.slice(1) },
@@ -788,15 +1111,34 @@ function StepComplete({
 
 export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [step, setStep] = useState(1);
+
+  // Step 2 — AI Provider
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>('anthropic');
+  const [localPreset, setLocalPreset] = useState<LocalPreset>('ollama');
+  const [llmBaseUrl, setLlmBaseUrl] = useState('http://localhost:11434/v1');
+  const [llmModel, setLlmModel] = useState('llama3.2');
+  const [llmApiKey, setLlmApiKey] = useState('ollama');
+  const [openaiModelPreset, setOpenaiModelPreset] = useState('gpt-4o');
+  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState('http://localhost:4000');
+
+  // Step 3 — Board Head name
   const [userName, setUserName] = useState('');
+
+  // Step 4 — Team Names
   const [agentNames, setAgentNames] = useState<Record<string, string>>(
     Object.fromEntries(AGENT_DEFAULTS.map((a) => [a.id, a.defaultName]))
   );
+
+  // Step 5 — Preferences
   const [autoOpenBrowser, setAutoOpenBrowser] = useState(true);
   const [pollInterval, setPollInterval] = useState(5000);
   const [theme, setTheme] = useState('midnight');
+
+  // Step 6 — Telegram
   const [telegramBotToken, setTelegramBotToken] = useState('');
   const [telegramChatId, setTelegramChatId] = useState('');
+
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -807,7 +1149,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   };
 
   const canProceed = () => {
-    if (step === 2 && !userName.trim()) return false;
+    if (step === 3 && !userName.trim()) return false;
     return true;
   };
 
@@ -830,6 +1172,22 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       localStorage.setItem('thunderflow_telegram_configured', 'true');
     }
 
+    // Resolve the effective model for OpenAI (custom vs preset)
+    const resolvedModel =
+      llmProvider === 'openai' && openaiModelPreset !== 'custom'
+        ? openaiModelPreset
+        : llmModel;
+
+    const llmConfig: LlmConfig = {
+      provider: llmProvider,
+      base_url: llmProvider === 'openai' ? 'https://api.openai.com/v1' : llmBaseUrl,
+      model: resolvedModel,
+      api_key: llmApiKey,
+      system_prompt: '',
+      proxy_enabled: llmProvider !== 'anthropic' && proxyEnabled,
+      proxy_url: proxyUrl,
+    };
+
     const config: Partial<AppConfig> = {
       setup_complete: true,
       user: { name: userName.trim() },
@@ -843,6 +1201,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         port: 0,
         auto_open_browser: autoOpenBrowser,
       },
+      llm: llmConfig,
     };
 
     const ok = await saveSetupConfig(config);
@@ -855,7 +1214,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     }
   };
 
-  const stepLabels = ['Welcome', 'Your Name', 'Team Names', 'Preferences', 'Telegram', 'Complete'];
+  const stepLabels = ['Welcome', 'AI Provider', 'Your Name', 'Team Names', 'Preferences', 'Telegram', 'Complete'];
 
   return (
     <div
@@ -936,18 +1295,30 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
           <div style={{ padding: '28px 24px 20px' }}>
             {step === 1 && <StepWelcome />}
             {step === 2 && (
+              <StepAiProvider
+                llmProvider={llmProvider}           setLlmProvider={setLlmProvider}
+                localPreset={localPreset}           setLocalPreset={setLocalPreset}
+                llmBaseUrl={llmBaseUrl}             setLlmBaseUrl={setLlmBaseUrl}
+                llmModel={llmModel}                 setLlmModel={setLlmModel}
+                llmApiKey={llmApiKey}               setLlmApiKey={setLlmApiKey}
+                openaiModelPreset={openaiModelPreset} setOpenaiModelPreset={setOpenaiModelPreset}
+                proxyEnabled={proxyEnabled}         setProxyEnabled={setProxyEnabled}
+                proxyUrl={proxyUrl}                 setProxyUrl={setProxyUrl}
+              />
+            )}
+            {step === 3 && (
               <StepBoardHead
                 userName={userName}
                 onUserNameChange={setUserName}
               />
             )}
-            {step === 3 && (
+            {step === 4 && (
               <StepTeamNames
                 agentNames={agentNames}
                 onAgentNameChange={handleAgentNameChange}
               />
             )}
-            {step === 4 && (
+            {step === 5 && (
               <StepPreferences
                 autoOpenBrowser={autoOpenBrowser}
                 pollInterval={pollInterval}
@@ -957,7 +1328,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 onThemeChange={setTheme}
               />
             )}
-            {step === 5 && (
+            {step === 6 && (
               <StepTelegram
                 telegramBotToken={telegramBotToken}
                 telegramChatId={telegramChatId}
@@ -965,7 +1336,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 onChatIdChange={setTelegramChatId}
               />
             )}
-            {step === 6 && (
+            {step === 7 && (
               <StepComplete
                 userName={userName}
                 agentNames={agentNames}
@@ -974,6 +1345,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 theme={theme}
                 telegramBotToken={telegramBotToken}
                 telegramChatId={telegramChatId}
+                llmProvider={llmProvider}
+                llmModel={llmModel}
               />
             )}
 
@@ -1067,9 +1440,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 onMouseLeave={(e) => {
                   if (canProceed()) e.currentTarget.style.opacity = '1';
                 }}
-                aria-label={step === 1 ? 'Get Started' : step === 5 ? 'Skip' : 'Go to next step'}
+                aria-label={step === 1 ? 'Get Started' : step === 6 ? 'Skip' : 'Go to next step'}
               >
-                {step === 1 ? 'Get Started' : step === 5 ? 'Skip / Next' : 'Next'}
+                {step === 1 ? 'Get Started' : step === 6 ? 'Skip / Next' : 'Next'}
               </button>
             ) : (
               <button

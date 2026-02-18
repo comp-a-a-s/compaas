@@ -97,6 +97,23 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+export interface LlmConfig {
+  /** "anthropic" | "openai" | "openai_compat" */
+  provider: 'anthropic' | 'openai' | 'openai_compat';
+  /** Base URL for OpenAI-compatible endpoints (OpenAI, Ollama, LM Studio, …) */
+  base_url: string;
+  /** Model identifier, e.g. "gpt-4o", "llama3.2", "opus" */
+  model: string;
+  /** API key — use a placeholder (e.g. "ollama") for local servers */
+  api_key: string;
+  /** Optional system prompt override for the CEO persona */
+  system_prompt: string;
+  /** Phase 2: route all agent subprocesses through a LiteLLM proxy */
+  proxy_enabled: boolean;
+  /** LiteLLM proxy URL, e.g. "http://localhost:4000" */
+  proxy_url: string;
+}
+
 export interface AppConfig {
   setup_complete: boolean;
   user: { name: string };
@@ -110,4 +127,5 @@ export interface AppConfig {
     port: number;
     auto_open_browser: boolean;
   };
+  llm: LlmConfig;
 }

@@ -64,6 +64,9 @@ VALID_PRIORITIES = {"p0", "p1", "p2", "p3", "low", "medium", "high", "critical"}
 VALID_MODELS = {"opus", "sonnet", "haiku"}
 VALID_COMPLEXITIES = {"low", "medium", "high", "very_high"}
 
+# Allowed characters for freeform local/OpenAI model names (e.g. "llama3.2", "gpt-4o", "mistral:7b")
+_LOCAL_MODEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:@/-]{0,127}$")
+
 # Valid status transitions (state machine)
 VALID_TRANSITIONS = {
     "todo": {"in_progress", "blocked"},
@@ -91,11 +94,22 @@ def validate_priority(priority: str) -> str:
 
 
 def validate_model(model: str) -> str:
-    """Validate a model name string."""
+    """Validate a model name string.
+
+    Accepts the standard Claude shorthand values (opus/sonnet/haiku) as well
+    as freeform model identifiers used by OpenAI, Ollama, LM Studio, etc.
+    (e.g. "gpt-4o", "llama3.2", "mistral:7b-instruct").
+    """
     m = model.lower()
-    if m not in VALID_MODELS:
-        raise ValueError(f"Invalid model '{model}': must be one of {sorted(VALID_MODELS)}")
-    return m
+    if m in VALID_MODELS:
+        return m
+    # Allow freeform identifiers for non-Anthropic providers
+    if _LOCAL_MODEL_RE.match(model):
+        return model
+    raise ValueError(
+        f"Invalid model '{model}': must be one of {sorted(VALID_MODELS)} "
+        f"or a valid provider model identifier (e.g. 'gpt-4o', 'llama3.2')"
+    )
 
 
 def validate_complexity(complexity: str) -> str:

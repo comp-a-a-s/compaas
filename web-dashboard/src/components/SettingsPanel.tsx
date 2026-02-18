@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { fetchConfig, updateConfig } from '../api/client';
-import type { AppConfig } from '../types';
+import { fetchConfig, updateConfig, testLlmConnection } from '../api/client';
+import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
 
@@ -520,6 +520,302 @@ function TelegramSection() {
 
 // ---- Main Settings Panel ----
 
+const LOCAL_PRESETS_SETTINGS = [
+  { id: 'ollama',    label: 'Ollama',    baseUrl: 'http://localhost:11434/v1', apiKey: 'ollama' },
+  { id: 'lmstudio', label: 'LM Studio', baseUrl: 'http://localhost:1234/v1',  apiKey: 'lm-studio' },
+  { id: 'llamacpp',  label: 'llama.cpp', baseUrl: 'http://localhost:8080/v1',  apiKey: 'none' },
+  { id: 'custom',   label: 'Custom',    baseUrl: '',                          apiKey: '' },
+] as const;
+
+const OPENAI_MODEL_PRESETS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'custom'];
+
+function AiProviderSection({
+  llm,
+  onSaved,
+}: {
+  llm: LlmConfig | undefined;
+  onSaved: () => void;
+}) {
+  const [provider, setProvider]         = useState<LlmConfig['provider']>(llm?.provider ?? 'anthropic');
+  const [baseUrl, setBaseUrl]           = useState(llm?.base_url ?? 'http://localhost:11434/v1');
+  const [model, setModel]               = useState(llm?.model ?? 'llama3.2');
+  const [apiKey, setApiKey]             = useState(llm?.api_key ?? '');
+  const [systemPrompt, setSystemPrompt] = useState(llm?.system_prompt ?? '');
+  const [proxyEnabled, setProxyEnabled] = useState(llm?.proxy_enabled ?? false);
+  const [proxyUrl, setProxyUrl]         = useState(llm?.proxy_url ?? 'http://localhost:4000');
+  const [openaiPreset, setOpenaiPreset] = useState(() => {
+    if (!llm || llm.provider !== 'openai') return 'gpt-4o';
+    return OPENAI_MODEL_PRESETS.includes(llm.model) ? llm.model : 'custom';
+  });
+
+  const [testStatus, setTestStatus]   = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+  const [testMessage, setTestMessage] = useState('');
+  const [saving, setSaving]           = useState(false);
+  const [saved, setSaved]             = useState(false);
+
+  const handlePreset = (presetId: string) => {
+    const p = LOCAL_PRESETS_SETTINGS.find((x) => x.id === presetId);
+    if (p) { setBaseUrl(p.baseUrl); setApiKey(p.apiKey); }
+  };
+
+  const handleOpenaiPreset = (m: string) => {
+    setOpenaiPreset(m);
+    if (m !== 'custom') setModel(m);
+  };
+
+  const handleTest = async () => {
+    setTestStatus('testing');
+    setTestMessage('');
+    const result = await testLlmConnection({ base_url: baseUrl, model, api_key: apiKey });
+    setTestStatus(result.status);
+    setTestMessage(result.message);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    const resolvedModel = provider === 'openai' && openaiPreset !== 'custom' ? openaiPreset : model;
+    const patch: Partial<AppConfig> = {
+      llm: {
+        provider,
+        base_url: provider === 'openai' ? 'https://api.openai.com/v1' : baseUrl,
+        model: resolvedModel,
+        api_key: apiKey,
+        system_prompt: systemPrompt,
+        proxy_enabled: provider !== 'anthropic' && proxyEnabled,
+        proxy_url: proxyUrl,
+      },
+    };
+    await updateConfig(patch as Record<string, unknown>);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+    onSaved();
+  };
+
+  const rowStyle: React.CSSProperties = {
+    padding: '12px 14px',
+    backgroundColor: C.surfaceRaised,
+    border: `1px solid ${C.border}`,
+    borderRadius: '8px',
+    marginBottom: '8px',
+  };
+
+  const labelStyle: React.CSSProperties = {
+    display: 'block', fontSize: '11px', fontWeight: 600,
+    color: C.textSecondary, marginBottom: '5px',
+    textTransform: 'uppercase', letterSpacing: '0.05em',
+  };
+
+  return (
+    <div>
+      {/* Provider radio cards */}
+      {(['anthropic', 'openai', 'openai_compat'] as LlmConfig['provider'][]).map((p) => {
+        const meta: Record<string, { icon: string; title: string; desc: string }> = {
+          anthropic:    { icon: '⚡', title: 'Anthropic Cloud', desc: 'Claude via Claude Code CLI. Requires ANTHROPIC_API_KEY.' },
+          openai:       { icon: '🤖', title: 'OpenAI',          desc: 'GPT-4o, GPT-4-turbo, etc. Requires an OpenAI API key.' },
+          openai_compat:{ icon: '🖥️', title: 'Local Model',     desc: 'Ollama, LM Studio, llama.cpp, or any OpenAI-compatible server.' },
+        };
+        const m = meta[p];
+        const selected = provider === p;
+        return (
+          <button
+            key={p}
+            role="radio"
+            aria-checked={selected}
+            onClick={() => setProvider(p)}
+            style={{
+              width: '100%', textAlign: 'left', padding: '12px 14px',
+              borderRadius: '8px', cursor: 'pointer',
+              border: `2px solid ${selected ? C.accent : C.border}`,
+              backgroundColor: selected ? C.accentDim : C.surfaceRaised,
+              marginBottom: '8px', outline: 'none', transition: 'all 0.15s',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '18px' }}>{m.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>{m.title}</div>
+                <div style={{ fontSize: '11px', color: C.textSecondary }}>{m.desc}</div>
+              </div>
+              <div style={{
+                width: '16px', height: '16px', borderRadius: '50%', flexShrink: 0,
+                border: `2px solid ${selected ? C.accent : C.border}`,
+                backgroundColor: selected ? C.accent : 'transparent',
+              }} />
+            </div>
+          </button>
+        );
+      })}
+
+      {/* OpenAI fields */}
+      {provider === 'openai' && (
+        <div style={{ ...rowStyle, marginTop: '4px' }}>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={labelStyle}>Model</label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: openaiPreset === 'custom' ? '6px' : 0 }}>
+              {OPENAI_MODEL_PRESETS.map((m) => (
+                <button key={m} onClick={() => handleOpenaiPreset(m)} style={{
+                  padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+                  border: `1px solid ${openaiPreset === m ? C.accent : C.border}`,
+                  backgroundColor: openaiPreset === m ? 'rgba(88,166,255,0.15)' : C.surface,
+                  color: openaiPreset === m ? C.accent : C.textSecondary, outline: 'none',
+                }}>
+                  {m}
+                </button>
+              ))}
+            </div>
+            {openaiPreset === 'custom' && (
+              <input type="text" value={model} onChange={(e) => setModel(e.target.value)}
+                placeholder="gpt-4o-2024-08-06" style={inputStyle({ maxWidth: '320px' })}
+                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              />
+            )}
+          </div>
+          <div>
+            <label style={labelStyle}>API Key</label>
+            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-..." style={inputStyle({ maxWidth: '420px' })}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Local model fields */}
+      {provider === 'openai_compat' && (
+        <div style={{ ...rowStyle, marginTop: '4px' }}>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={labelStyle}>Server Preset</label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {LOCAL_PRESETS_SETTINGS.map((p) => (
+                <button key={p.id} onClick={() => handlePreset(p.id)} style={{
+                  padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+                  border: `1px solid ${baseUrl === p.baseUrl ? C.accent : C.border}`,
+                  backgroundColor: baseUrl === p.baseUrl ? 'rgba(88,166,255,0.15)' : C.surface,
+                  color: baseUrl === p.baseUrl ? C.accent : C.textSecondary, outline: 'none',
+                }}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={labelStyle}>Base URL</label>
+            <input type="text" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="http://localhost:11434/v1" style={inputStyle({ maxWidth: '420px' })}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={labelStyle}>Model Name</label>
+            <input type="text" value={model} onChange={(e) => setModel(e.target.value)}
+              placeholder="llama3.2" style={inputStyle({ maxWidth: '320px' })}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* CEO system prompt (all non-Anthropic providers) */}
+      {provider !== 'anthropic' && (
+        <div style={{ marginBottom: '8px' }}>
+          <label style={labelStyle}>CEO System Prompt (optional)</label>
+          <textarea
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            placeholder="You are a seasoned CEO…"
+            rows={3}
+            style={{ ...inputStyle(), resize: 'vertical', fontFamily: 'inherit', lineHeight: '1.5' }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+          />
+        </div>
+      )}
+
+      {/* Test connection */}
+      {provider !== 'anthropic' && (
+        <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button
+            onClick={handleTest}
+            disabled={testStatus === 'testing'}
+            style={{
+              padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,
+              cursor: testStatus === 'testing' ? 'default' : 'pointer', outline: 'none',
+              border: `1px solid ${testStatus === 'ok' ? C.success : testStatus === 'error' ? C.error : C.accent}`,
+              backgroundColor: testStatus === 'ok' ? 'rgba(63,185,80,0.1)' : testStatus === 'error' ? 'rgba(248,81,73,0.1)' : 'transparent',
+              color: testStatus === 'ok' ? C.success : testStatus === 'error' ? C.error : C.accent,
+            }}
+          >
+            {testStatus === 'testing' ? 'Testing…' : testStatus === 'ok' ? '✓ Connected' : testStatus === 'error' ? '✗ Failed' : 'Test Connection'}
+          </button>
+          {testStatus === 'error' && testMessage && (
+            <span style={{ fontSize: '11px', color: C.error }}>{testMessage.slice(0, 120)}</span>
+          )}
+        </div>
+      )}
+
+      {/* Phase 2 — proxy toggle */}
+      {provider !== 'anthropic' && (
+        <div style={rowStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: proxyEnabled ? '10px' : 0 }}>
+            <div>
+              <div style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary, marginBottom: '2px' }}>Route ALL agents through proxy</div>
+              <div style={{ fontSize: '11px', color: C.textSecondary }}>
+                Uses a LiteLLM proxy to translate all agent subprocess calls. Requires <code style={{ fontSize: '10px' }}>pip install thunderflow[proxy]</code>.
+              </div>
+            </div>
+            <button
+              role="switch" aria-checked={proxyEnabled}
+              onClick={() => setProxyEnabled(!proxyEnabled)}
+              style={{
+                position: 'relative', width: '44px', height: '24px', borderRadius: '12px', flexShrink: 0,
+                border: `1px solid ${proxyEnabled ? C.accent : C.border}`,
+                backgroundColor: proxyEnabled ? C.accentDim : C.surface, cursor: 'pointer', outline: 'none', padding: 0,
+              }}
+            >
+              <span style={{
+                position: 'absolute', top: '3px', left: proxyEnabled ? '22px' : '3px',
+                width: '16px', height: '16px', borderRadius: '50%',
+                backgroundColor: proxyEnabled ? C.accent : C.textMuted,
+                transition: 'left 0.2s, background-color 0.2s',
+              }} />
+            </button>
+          </div>
+          {proxyEnabled && (
+            <div>
+              <label style={labelStyle}>Proxy URL</label>
+              <input type="text" value={proxyUrl} onChange={(e) => setProxyUrl(e.target.value)}
+                placeholder="http://localhost:4000" style={inputStyle({ maxWidth: '320px' })}
+                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Save */}
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        style={{
+          padding: '8px 18px', borderRadius: '6px', fontSize: '13px', fontWeight: 500,
+          border: `1px solid ${saved ? C.success : C.accent}`,
+          backgroundColor: saved ? 'rgba(63,185,80,0.1)' : C.accentDim,
+          color: saved ? C.success : C.textPrimary,
+          cursor: saving ? 'default' : 'pointer', outline: 'none',
+        }}
+      >
+        {saving ? 'Saving…' : saved ? 'Saved' : 'Save Provider Settings'}
+      </button>
+    </div>
+  );
+}
+
 export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [saving, setSaving] = useState(false);
@@ -585,6 +881,11 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
           Manage your ThunderFlow dashboard configuration.
         </p>
       </div>
+
+      {/* AI Provider */}
+      <Section title="AI Model Provider">
+        <AiProviderSection llm={config?.llm} onSaved={() => { fetchConfig().then((c) => { if (c) setConfig(c); }); onConfigUpdated?.(); }} />
+      </Section>
 
       {/* General settings */}
       <Section title="General">

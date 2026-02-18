@@ -386,6 +386,19 @@ DEFAULT_CONFIG: dict = {
         "port": 8420,
         "auto_open_browser": True,
     },
+    "llm": {
+        # "anthropic"     — use Claude via Claude Code CLI (default)
+        # "openai"        — use OpenAI API (GPT-4o, etc.)
+        # "openai_compat" — use any OpenAI-compatible local server (Ollama, LM Studio, …)
+        "provider": "anthropic",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o",
+        "api_key": "",
+        "system_prompt": "",
+        # Phase 2: route ALL agent subprocesses through a LiteLLM proxy
+        "proxy_enabled": False,
+        "proxy_url": "http://localhost:4000",
+    },
 }
 
 
@@ -445,6 +458,32 @@ def update_config(updates: dict) -> dict:
     merged = _deep_merge(config, updates)
     _save_config(merged)
     return {"status": "ok"}
+
+
+class LlmTestRequest(dict):
+    """Flexible body for LLM test — accepts base_url, model, api_key."""
+
+
+@app.post("/api/llm/test", summary="Test an OpenAI-compatible LLM connection")
+async def test_llm_connection(body: dict) -> dict:
+    """Probe an OpenAI-compatible endpoint with a tiny request.
+
+    Accepts optional ``base_url``, ``model``, and ``api_key`` in the request
+    body so the wizard can test before saving config.  Falls back to the
+    current saved config for any missing fields.
+    """
+    saved = _load_config().get("llm", {})
+    base_url = body.get("base_url") or saved.get("base_url", "https://api.openai.com/v1")
+    model    = body.get("model")    or saved.get("model", "gpt-4o")
+    api_key  = body.get("api_key")  or saved.get("api_key", "local")
+
+    try:
+        from src.llm_provider import probe_connection
+    except ImportError:
+        return {"status": "error", "message": "llm_provider module not found"}
+
+    ok, message = await probe_connection(base_url=base_url, model=model, api_key=api_key)
+    return {"status": "ok" if ok else "error", "message": message}
 
 
 # ---------------------------------------------------------------------------
@@ -736,19 +775,185 @@ def clear_chat_history() -> dict:
     return {"status": "cleared"}
 
 
+# ---------------------------------------------------------------------------
+# CEO chat: per-provider handler functions
+# ---------------------------------------------------------------------------
+
+async def _handle_ceo_claude(
+    websocket: WebSocket,
+    prompt: str,
+    claude_path: str,
+    llm_cfg: dict,
+) -> str | None:
+    """Handle a CEO chat turn using the Claude Code CLI subprocess.
+
+    Injects ANTHROPIC_BASE_URL into the subprocess environment when proxy
+    mode is enabled (Phase 2 — routes the Claude CLI through a LiteLLM proxy).
+
+    Returns the full response string, or None if an error was sent.
+    """
+    env = os.environ.copy()
+    if llm_cfg.get("proxy_enabled") and llm_cfg.get("proxy_url"):
+        env["ANTHROPIC_BASE_URL"] = llm_cfg["proxy_url"]
+        env["ANTHROPIC_API_KEY"] = env.get("ANTHROPIC_API_KEY") or "litellm"
+
+    process = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            claude_path, "--agent", "ceo", "-p", prompt,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=PROJECT_ROOT,
+        )
+
+        response_parts: list[str] = []
+        assert process.stdout is not None
+
+        thinking_count = 0
+        while True:
+            try:
+                chunk = await asyncio.wait_for(process.stdout.read(512), timeout=15.0)
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                response_parts.append(text)
+                await websocket.send_json({"type": "chunk", "content": text})
+            except asyncio.TimeoutError:
+                thinking_count += 1
+                await websocket.send_json({
+                    "type": "thinking",
+                    "content": f"CEO is thinking... ({thinking_count * 15}s elapsed)",
+                })
+                if process.returncode is not None:
+                    break
+
+        try:
+            await asyncio.wait_for(process.wait(), timeout=120.0)
+        except asyncio.TimeoutError:
+            process.kill()
+
+        full_response = "".join(response_parts).strip()
+
+        if not full_response:
+            stderr_text = ""
+            if process.stderr:
+                try:
+                    stderr_data = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
+                    stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
+                except asyncio.TimeoutError:
+                    pass
+            if process.returncode != 0:
+                error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
+                await websocket.send_json({"type": "error", "content": error_msg})
+                return None
+
+        return full_response
+
+    except OSError as exc:
+        await websocket.send_json({"type": "error", "content": f"Failed to start CEO agent: {exc}"})
+        return None
+    except Exception as exc:
+        await websocket.send_json({"type": "error", "content": f"Chat error: {str(exc)[:200]}"})
+        return None
+    finally:
+        if process and process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+
+
+async def _handle_ceo_openai(
+    websocket: WebSocket,
+    prompt: str,
+    llm_cfg: dict,
+    ceo_name: str,
+) -> str | None:
+    """Handle a CEO chat turn using an OpenAI-compatible streaming API.
+
+    Works with the real OpenAI API (provider="openai") and any local
+    OpenAI-compatible server such as Ollama or LM Studio (provider="openai_compat").
+
+    Returns the full response string, or None if an error was sent.
+    """
+    from src.llm_provider import stream_openai_compat
+
+    base_url = llm_cfg.get("base_url", "https://api.openai.com/v1")
+    model = llm_cfg.get("model", "gpt-4o")
+    api_key = llm_cfg.get("api_key", "")
+    system_prompt = llm_cfg.get("system_prompt") or None
+
+    response_parts: list[str] = []
+
+    # Background task: send periodic "thinking" pings while we wait for tokens
+    thinking_event = asyncio.Event()
+
+    async def _thinking_pings() -> None:
+        count = 0
+        while not thinking_event.is_set():
+            await asyncio.sleep(5)
+            if thinking_event.is_set():
+                break
+            count += 1
+            try:
+                await websocket.send_json({
+                    "type": "thinking",
+                    "content": f"{ceo_name} is thinking... ({count * 5}s elapsed)",
+                })
+            except Exception:
+                break
+
+    ping_task = asyncio.create_task(_thinking_pings())
+    try:
+        async for chunk in stream_openai_compat(
+            prompt=prompt,
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+            system_prompt=system_prompt,
+        ):
+            thinking_event.set()   # first token arrived — stop pings
+            response_parts.append(chunk)
+            await websocket.send_json({"type": "chunk", "content": chunk})
+    except RuntimeError as exc:
+        # openai package not installed
+        await websocket.send_json({"type": "error", "content": str(exc)})
+        return None
+    except Exception as exc:
+        await websocket.send_json({"type": "error", "content": f"LLM error: {str(exc)[:300]}"})
+        return None
+    finally:
+        thinking_event.set()
+        ping_task.cancel()
+        try:
+            await ping_task
+        except asyncio.CancelledError:
+            pass
+
+    return "".join(response_parts).strip()
+
+
 @app.websocket("/api/chat/ws")
 async def chat_websocket(websocket: WebSocket) -> None:
     """WebSocket endpoint for real-time CEO chat."""
     await websocket.accept()
 
-    claude_path = shutil.which("claude")
-    if not claude_path:
-        await websocket.send_json({
-            "type": "error",
-            "content": "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
-        })
-        await websocket.close()
-        return
+    config = _load_config()
+    llm_cfg = config.get("llm", {})
+    provider = llm_cfg.get("provider", "anthropic")
+
+    # For Anthropic/proxy mode we still need the Claude CLI
+    claude_path: str | None = None
+    if provider == "anthropic":
+        claude_path = shutil.which("claude")
+        if not claude_path:
+            await websocket.send_json({
+                "type": "error",
+                "content": "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
+            })
+            await websocket.close()
+            return
 
     try:
         while True:
@@ -769,81 +974,23 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 user_msg = _append_chat_message("user", user_message)
             await websocket.send_json({"type": "user_ack", "message": user_msg})
 
-            # Build prompt with conversation context
+            # Reload config each turn so Settings changes take effect live
             config = _load_config()
+            llm_cfg = config.get("llm", {})
+            provider = llm_cfg.get("provider", "anthropic")
             user_name = config.get("user", {}).get("name", "User")
+            ceo_name = config.get("agents", {}).get("ceo", "CEO")
             prompt = _build_context_prompt(user_message, user_name=user_name)
 
-            process = None
-            try:
-                process = await asyncio.create_subprocess_exec(
-                    claude_path, "--agent", "ceo", "-p", prompt,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=PROJECT_ROOT,
-                )
+            if provider in ("openai", "openai_compat"):
+                full_response = await _handle_ceo_openai(websocket, prompt, llm_cfg, ceo_name)
+            else:
+                full_response = await _handle_ceo_claude(websocket, prompt, claude_path or "", llm_cfg)
 
-                response_parts: list[str] = []
-                assert process.stdout is not None
-
-                # Read with timeout - send thinking indicator periodically
-                thinking_count = 0
-                while True:
-                    try:
-                        chunk = await asyncio.wait_for(process.stdout.read(512), timeout=15.0)
-                        if not chunk:
-                            break
-                        text = chunk.decode("utf-8", errors="replace")
-                        response_parts.append(text)
-                        await websocket.send_json({"type": "chunk", "content": text})
-                    except asyncio.TimeoutError:
-                        # No output yet — send thinking indicator to keep connection alive
-                        thinking_count += 1
-                        await websocket.send_json({
-                            "type": "thinking",
-                            "content": f"Marcus is thinking... ({thinking_count * 15}s elapsed)",
-                        })
-                        # Check if process is still running
-                        if process.returncode is not None:
-                            break
-
-                # Wait for process to finish (max 120s after stdout closes)
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=120.0)
-                except asyncio.TimeoutError:
-                    process.kill()
-
-                full_response = "".join(response_parts).strip()
-
-                if not full_response:
-                    stderr_text = ""
-                    if process.stderr:
-                        try:
-                            stderr_data = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
-                            stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
-                        except asyncio.TimeoutError:
-                            pass
-                    if process.returncode != 0:
-                        error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
-                        await websocket.send_json({"type": "error", "content": error_msg})
-                        continue
-
-                if full_response:
-                    async with _chat_lock:
-                        _append_chat_message("ceo", full_response)
-
+            if full_response:
+                async with _chat_lock:
+                    _append_chat_message("ceo", full_response)
                 await websocket.send_json({"type": "done", "content": full_response})
-
-            except OSError as exc:
-                await websocket.send_json({"type": "error", "content": f"Failed to start CEO agent: {exc}"})
-            except Exception as exc:
-                await websocket.send_json({"type": "error", "content": f"Chat error: {str(exc)[:200]}"})
-            finally:
-                if process and process.returncode is None:
-                    try:
-                        process.kill()
-                    except ProcessLookupError:
-                        pass
 
     except WebSocketDisconnect:
         pass
