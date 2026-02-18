@@ -475,6 +475,7 @@ def list_agents() -> list[dict]:
         for h in log.get("hired", []):
             entry = {
                 "id": h["name"],
+                "name": h["name"],
                 "role": h["role"],
                 "model": h.get("model", "sonnet"),
                 "status": h.get("status", "active"),

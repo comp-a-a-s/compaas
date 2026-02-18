@@ -45,7 +45,7 @@ function formatTokens(n: number): string {
 }
 
 function formatCost(usd: number): string {
-  if (usd < 0.01) return `$${(usd * 100).toFixed(2)}¢`;
+  if (usd < 0.01) return `< $0.01`;
   return `$${usd.toFixed(2)}`;
 }
 
@@ -317,7 +317,7 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
     return sum + estimateCost(data.model, data.total_tokens);
   }, 0);
 
-  const activeBudgets = budgets.filter((b) => b.status === 'active' || b.usage_percent < 100);
+  const activeBudgets = budgets.filter((b) => b.status === 'OK' || b.usage_percent < 100);
 
   return (
     <div className="space-y-6 animate-fade-in">

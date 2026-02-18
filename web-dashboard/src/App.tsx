@@ -206,8 +206,8 @@ export default function App() {
         const event = parseActivityLine(line);
         if (!event) return;
         setActivityEvents((prev) => {
-          const next = [event, ...prev];
-          return next.length > MAX_EVENTS ? next.slice(0, MAX_EVENTS) : next;
+          const next = [...prev, event];
+          return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
         });
       });
     } catch {
