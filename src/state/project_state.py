@@ -95,9 +95,11 @@ class ProjectStateManager:
                 projects.append({
                     "id": data["id"],
                     "name": data["name"],
+                    "description": data.get("description", ""),
                     "status": data["status"],
                     "type": data.get("type", "general"),
                     "created_at": data.get("created_at", ""),
+                    "updated_at": data.get("updated_at", ""),
                 })
             except (yaml.YAMLError, KeyError, OSError):
                 continue

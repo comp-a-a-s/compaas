@@ -35,8 +35,8 @@ Leadership  Engineering  On-Demand     Dashboards
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/Idanhen26/crackpie.git
-cd crackpie
+git clone https://github.com/Idanhen26/thunderflow.git
+cd thunderflow
 
 # 2. Run the installer
 ./install.sh
@@ -128,9 +128,12 @@ Features:
 - Project list with progress tracking
 - Task boards per project
 - Real-time activity feed (SSE)
-- Token usage metrics
-- CEO Chat — talk directly to Marcus from the dashboard
+- Token usage metrics and budget tracking
+- CEO Chat — talk directly to Marcus from the dashboard (WebSocket-based, with streaming responses)
+- Setup wizard — guided first-run configuration for team names, theme, and preferences
 - Telegram integration — hand off sessions to your phone
+- Keyboard shortcuts — press `?` to see all shortcuts
+- Three themes — Midnight (dark), Twilight (blue-dark), Dawn (light)
 
 ### TUI Dashboard
 
@@ -163,39 +166,39 @@ A terminal-based dashboard with org chart, project summary, task board, and acti
 ## MCP Tools Reference
 
 ### Project Tools
-- `create_project(name, description, type)` - Create a new project
-- `get_project_status(project_id)` - Get project details
-- `update_project(project_id, status, team, phase)` - Update project
-- `list_projects()` - List all projects
+- `create_project(name, description, type)` — Create a new project
+- `get_project_status(project_id)` — Get project details
+- `update_project(project_id, status, team, phase)` — Update project
+- `list_projects()` — List all projects
 
 ### Task Board Tools
-- `create_task(project_id, title, description, assigned_to, priority, depends_on)` - Create task
-- `update_task_status(project_id, task_id, status, notes)` - Update task status
-- `get_task_board(project_id, filter_status, filter_assignee)` - Get task board
-- `assign_task(project_id, task_id, assigned_to)` - Reassign task
+- `create_task(project_id, title, description, assigned_to, priority, depends_on)` — Create task
+- `update_task_status(project_id, task_id, status, notes)` — Update task status (enforces state machine: todo -> in_progress -> review -> done)
+- `get_task_board(project_id, filter_status, filter_assignee)` — Get task board
+- `assign_task(project_id, task_id, assigned_to)` — Reassign task
 
 ### Memory Tools
-- `read_memory(key)` - Read shared memory
-- `write_memory(key, value)` - Write to shared memory
-- `log_decision(project_id, title, decision, rationale, decided_by, alternatives)` - Log decision
-- `get_decisions(project_id)` - Get decision log
+- `read_memory(key)` — Read shared memory
+- `write_memory(key, value)` — Write to shared memory
+- `log_decision(project_id, title, decision, rationale, decided_by, alternatives)` — Log decision
+- `get_decisions(project_id)` — Get decision log
 
 ### Company Tools
-- `get_org_chart()` - Get organization chart
-- `get_roster()` - Get all agents
-- `hire_agent(name, role, expertise, tools, model)` - Hire new agent
-- `fire_agent(name)` - Deactivate hired agent
+- `get_org_chart()` — Get organization chart
+- `get_roster()` — Get all agents
+- `hire_agent(name, role, expertise, tools, model)` — Hire new agent
+- `fire_agent(name)` — Deactivate hired agent
 
 ### Metrics Tools
-- `log_token_usage(agent_name, model, task_description, ...)` - Log token usage
-- `get_token_report(project_id, agent_name)` - Get usage report
-- `get_session_durations(agent_name)` - Get session durations
-- `estimate_task_cost(task_description, model, complexity)` - Estimate cost
+- `log_token_usage(agent_name, model, task_description, ...)` — Log token usage
+- `get_token_report(project_id, agent_name)` — Get usage report
+- `get_session_durations(agent_name)` — Get session durations
+- `estimate_task_cost(task_description, model, complexity)` — Estimate cost
 
 ### Micro-Agent Tools
-- `spawn_micro_agent(parent_agent, specialization, task_description, model)` - Spawn specialist
-- `list_micro_agents()` - List active micro-agents
-- `retire_micro_agent(name)` - Retire a micro-agent
+- `spawn_micro_agent(parent_agent, specialization, task_description, model)` — Spawn specialist
+- `list_micro_agents()` — List active micro-agents
+- `retire_micro_agent(name)` — Retire a micro-agent
 
 ## Configuration
 
@@ -235,12 +238,12 @@ ThunderFlow supports handing off sessions to Telegram so you can continue direct
 1. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram
 2. Copy the bot token
 3. Get your chat ID (send a message to your bot, then call `https://api.telegram.org/bot<TOKEN>/getUpdates`)
-4. Enter the credentials in Settings → Telegram Integration
+4. Enter the credentials in Settings or during the Setup Wizard
 5. Click "Continue on Telegram" in the sidebar to hand off the current session
 
 ### Themes
 
-Choose from 3 built-in themes in Settings → Appearance:
+Choose from 3 built-in themes in Settings or during the Setup Wizard:
 - **Midnight** — Deep dark, easy on the eyes (default)
 - **Twilight** — Softer dark with blue tones
 - **Dawn** — Light mode, clean and bright
@@ -260,6 +263,16 @@ pytest tests/ --cov=src --cov-report=html
 pytest tests/test_validators.py -v
 ```
 
+### Web Dashboard Development
+
+```bash
+cd web-dashboard
+npm install
+npm run dev    # Start Vite dev server (hot-reload)
+npm run build  # Production build
+npm run lint   # Run ESLint
+```
+
 ### Project Structure
 
 ```
@@ -270,10 +283,17 @@ thunderflow/
 │   ├── validators.py        # Input validation & state machine
 │   ├── utils.py             # Atomic writes, file locking, log rotation
 │   ├── state/               # YAML-based project & task state
+│   │   ├── project_state.py # Project CRUD
+│   │   └── task_board.py    # Task CRUD with dependency tracking
 │   ├── mcp_server/          # MCP tools (6 scopes, 20+ tools)
-│   ├── web/                 # FastAPI dashboard API
+│   ├── web/                 # FastAPI dashboard API + CEO chat WebSocket
 │   └── tui/                 # Textual TUI dashboard
-├── web-dashboard/           # React + TypeScript frontend
+├── web-dashboard/           # React + TypeScript + Tailwind v4 frontend
+│   └── src/
+│       ├── api/client.ts    # API client (REST + WebSocket + SSE)
+│       ├── components/      # UI components (Overview, Agents, Projects, Chat, etc.)
+│       ├── hooks/           # Theme management, keyboard shortcuts
+│       └── types/           # TypeScript interfaces
 ├── tests/                   # pytest test suite
 ├── scripts/hooks/           # Agent activity logging hooks
 ├── company_data/            # Runtime state (gitignored)
@@ -288,6 +308,8 @@ thunderflow/
 **"ANTHROPIC_API_KEY not set"** — Add your key to `.env`: `ANTHROPIC_API_KEY=sk-ant-...`
 
 **Web dashboard not loading** — Ensure Node.js 18+ is installed and run `cd web-dashboard && npm install && npm run build`
+
+**CEO Chat not connecting** — Ensure the backend is running (`thunderflow-web`) and the Claude Code CLI is installed. The chat uses WebSocket at `/api/chat/ws`.
 
 **Tests failing** — Run `pip install -e ".[dev]"` to ensure all dev dependencies are installed
 

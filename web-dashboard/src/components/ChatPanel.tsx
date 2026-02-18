@@ -288,11 +288,16 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatOpenRef = useRef(chatOpen);
+  const onNewCeoMessageRef = useRef(onNewCeoMessage);
 
-  // Keep a ref of chatOpen to avoid stale closures in ws handlers
+  // Keep refs to avoid stale closures in ws handlers
   useEffect(() => {
     chatOpenRef.current = chatOpen;
   }, [chatOpen]);
+
+  useEffect(() => {
+    onNewCeoMessageRef.current = onNewCeoMessage;
+  }, [onNewCeoMessage]);
 
   // Auto-scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -355,7 +360,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
               setIsWaiting(false);
               // Notify parent if chat is not open
               if (!chatOpenRef.current) {
-                onNewCeoMessage?.();
+                onNewCeoMessageRef.current?.();
               }
               break;
             }
@@ -392,7 +397,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
     } catch {
       setConnectionStatus('error');
     }
-  }, [onNewCeoMessage]);
+  }, []);
 
   useEffect(() => {
     connectWebSocket();
@@ -471,6 +476,18 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
 
           <div className="flex items-center gap-3">
             <StatusBadge status={connectionStatus} />
+            <button
+              onClick={() => setShowThinking(t => !t)}
+              title={showThinking ? 'Hide thinking' : 'Show thinking'}
+              className="text-xs px-2 py-1 rounded-lg transition-colors duration-200 cursor-pointer"
+              style={{
+                backgroundColor: showThinking ? 'var(--tf-surface-raised)' : 'transparent',
+                color: 'var(--tf-text-muted)',
+                border: '1px solid var(--tf-border)',
+              }}
+            >
+              {showThinking ? '◎ thinking' : '○ thinking'}
+            </button>
             {messages.length > 0 && (
               <button
                 onClick={handleClear}
