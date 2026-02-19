@@ -142,10 +142,36 @@ function EventBubble({ event, index }: EventBubbleProps) {
   );
 }
 
+// ---- Audit log entry ----
+function AuditEntry({ event, index }: { event: ActivityEvent; index: number }) {
+  const badge = actionBadgeStyle(event.action);
+  return (
+    <div
+      className="flex items-center gap-3 py-2 text-xs animate-slide-up"
+      style={{ borderBottom: '1px solid var(--tf-surface-raised)', animationDelay: `${Math.min(index * 0.01, 0.2)}s`, fontFamily: 'ui-monospace, monospace' }}
+    >
+      <span style={{ color: 'var(--tf-text-muted)', flexShrink: 0, width: '130px' }}>
+        {formatDate(event.timestamp)} {formatTime(event.timestamp)}
+      </span>
+      <span
+        style={{ flexShrink: 0, width: '90px', padding: '1px 6px', borderRadius: '4px', backgroundColor: badge.bg, color: badge.text, textAlign: 'center', fontSize: '10px', fontWeight: 600 }}
+      >
+        {event.action}
+      </span>
+      <span style={{ color: 'var(--tf-accent)', flexShrink: 0, width: '90px' }}>{event.agent}</span>
+      <span style={{ color: 'var(--tf-text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {event.detail}
+      </span>
+    </div>
+  );
+}
+
 // ---- Main ActivityPanel ----
 export default function ActivityPanel({ events }: ActivityPanelProps) {
   const [agentFilter, setAgentFilter] = useState<string>('');
   const [actionFilter, setActionFilter] = useState<string>('ALL');
+  const [activeTab, setActiveTab] = useState<'live' | 'audit'>('live');
+  const [auditSearch, setAuditSearch] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom on new events
@@ -173,8 +199,66 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
     });
   }, [events, agentFilter, actionFilter]);
 
+  // Audit log derived state
+  const auditEvents = useMemo(() => {
+    const all = [...events].reverse(); // newest first
+    if (!auditSearch.trim()) return all;
+    const q = auditSearch.toLowerCase();
+    return all.filter((e) =>
+      (e.agent || '').toLowerCase().includes(q) ||
+      (e.action || '').toLowerCase().includes(q) ||
+      (e.detail || '').toLowerCase().includes(q)
+    );
+  }, [events, auditSearch]);
+
   return (
     <div className="flex flex-col animate-fade-in" style={{ height: '100%', minHeight: '600px' }}>
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 pb-3 flex-shrink-0">
+        {(['live', 'audit'] as const).map((tab) => (
+          <button key={tab} onClick={() => setActiveTab(tab)}
+            className="text-xs px-3 py-1.5 rounded-lg transition-all duration-150 cursor-pointer capitalize font-medium"
+            style={{
+              backgroundColor: activeTab === tab ? 'var(--tf-surface-raised)' : 'transparent',
+              color: activeTab === tab ? 'var(--tf-text)' : 'var(--tf-text-muted)',
+              border: activeTab === tab ? '1px solid var(--tf-border)' : '1px solid transparent',
+              outline: 'none',
+            }}>
+            {tab === 'live' ? 'Live Feed' : 'Audit Log'}
+          </button>
+        ))}
+        <span className="ml-auto text-xs" style={{ color: 'var(--tf-text-muted)' }}>{events.length} total events</span>
+      </div>
+
+      {/* Audit log view */}
+      {activeTab === 'audit' && (
+        <div className="flex flex-col flex-1 min-h-0">
+          <div className="flex items-center gap-2 mb-3 flex-shrink-0" style={{ padding: '6px 10px', backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', borderRadius: '8px' }}>
+            <span style={{ fontSize: '12px', color: 'var(--tf-text-muted)' }}>⌕</span>
+            <input type="text" value={auditSearch} onChange={(e) => setAuditSearch(e.target.value)}
+              placeholder="Search audit log…"
+              style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontSize: '12px', color: 'var(--tf-text)' }} />
+            {auditSearch && <button onClick={() => setAuditSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--tf-text-muted)', fontSize: '11px' }}>✕</button>}
+            {auditSearch && <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>{auditEvents.length} results</span>}
+          </div>
+          <div className="flex-1 overflow-y-auto rounded-xl px-3" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
+            {/* Header row */}
+            <div className="flex items-center gap-3 py-2 text-xs sticky top-0" style={{ borderBottom: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)', fontFamily: 'ui-monospace, monospace', fontWeight: 600, color: 'var(--tf-text-muted)' }}>
+              <span style={{ width: '130px', flexShrink: 0 }}>TIMESTAMP</span>
+              <span style={{ width: '90px', flexShrink: 0 }}>ACTION</span>
+              <span style={{ width: '90px', flexShrink: 0 }}>AGENT</span>
+              <span>DETAIL</span>
+            </div>
+            {auditEvents.length === 0
+              ? <p className="text-xs text-center py-8" style={{ color: 'var(--tf-text-muted)' }}>No audit entries yet.</p>
+              : auditEvents.map((e, i) => <AuditEntry key={`${e.timestamp}-${i}`} event={e} index={i} />)
+            }
+          </div>
+        </div>
+      )}
+
+      {/* Live feed view */}
+      {activeTab === 'live' && <>
       {/* Filter bar */}
       <div
         className="flex items-center gap-3 px-0 pb-4 flex-shrink-0 flex-wrap"
@@ -280,6 +364,7 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
           </div>
         )}
       </div>
+    </>}
     </div>
   );
 }

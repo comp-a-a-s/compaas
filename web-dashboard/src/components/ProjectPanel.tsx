@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Project, Task, Decision } from '../types';
 import { fetchProjectDecisions, fetchProjectSpecs, approveProjectPlan } from '../api/client';
 
@@ -11,7 +11,7 @@ interface ProjectPanelProps {
   onRefresh?: () => void;
 }
 
-type ProjectTab = 'tasks' | 'plan' | 'discussions' | 'team' | 'info';
+type ProjectTab = 'tasks' | 'plan' | 'milestones' | 'sprint' | 'discussions' | 'team' | 'info';
 
 // ---- Helpers ----
 function statusBadge(status: string): { bg: string; text: string } {
@@ -26,8 +26,7 @@ function statusBadge(status: string): { bg: string; text: string } {
 
 function typeBadge(type: string): { bg: string; text: string } {
   const t = type.toLowerCase();
-  if (t.includes('feature')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
-  if (t.includes('infra')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
+  if (t.includes('feature') || t.includes('infra')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
   if (t.includes('design')) return { bg: '#2d1519', text: 'var(--tf-accent)' };
   if (t.includes('research')) return { bg: '#2d2213', text: 'var(--tf-warning)' };
   if (t.includes('bug') || t.includes('fix')) return { bg: '#2d1519', text: 'var(--tf-error)' };
@@ -44,13 +43,42 @@ function taskColColor(col: string): string {
   return 'var(--tf-text-muted)';
 }
 
-function priorityBadge(priority: string): { bg: string; text: string } {
-  const p = priority.toUpperCase();
-  if (p === 'P0') return { bg: '#2d1519', text: 'var(--tf-error)' };
-  if (p === 'P1') return { bg: '#2d2213', text: 'var(--tf-warning)' };
-  if (p === 'P2') return { bg: '#2d2213', text: 'var(--tf-warning)' };
-  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-muted)' };
+interface PriorityInfo { bg: string; text: string; label: string; icon: string }
+
+function priorityBadge(priority: string): PriorityInfo {
+  const p = (priority || '').toUpperCase();
+  if (p === 'P0' || p === 'CRITICAL') return { bg: '#2d1519', text: 'var(--tf-error)',    label: 'Critical', icon: '🔴' };
+  if (p === 'P1' || p === 'HIGH')     return { bg: '#2d2213', text: 'var(--tf-warning)',  label: 'High',     icon: '🟠' };
+  if (p === 'P2' || p === 'MEDIUM')   return { bg: '#2d2213', text: 'var(--tf-warning)',  label: 'Medium',   icon: '🟡' };
+  if (p === 'P3' || p === 'LOW')      return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)', label: 'Low', icon: '🟢' };
+  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-muted)', label: priority || 'None', icon: '⚪' };
 }
+
+// ---- Health Score ----
+interface HealthInfo { score: number; label: string; color: string; bg: string }
+
+function computeHealth(tasks: Task[]): HealthInfo {
+  const total = tasks.length;
+  if (total === 0) return { score: 0, label: 'No Data', color: 'var(--tf-text-muted)', bg: 'var(--tf-surface-raised)' };
+  const done     = tasks.filter((t) => t.status.toLowerCase() === 'done').length;
+  const blocked  = tasks.filter((t) => t.status.toLowerCase() === 'blocked').length;
+  const progress = tasks.filter((t) => t.status.toLowerCase().includes('progress')).length;
+  const score = Math.max(0, Math.min(100, Math.round(
+    (done / total) * 50 + (progress / total) * 20 - (blocked / total) * 30
+  )));
+  if (score >= 75) return { score, label: 'Healthy',  color: 'var(--tf-success)',       bg: '#1a2e25' };
+  if (score >= 40) return { score, label: 'At Risk',  color: 'var(--tf-warning)',        bg: '#2d2213' };
+  return             { score, label: 'Critical', color: 'var(--tf-error)',         bg: '#2d1519' };
+}
+
+// ---- Task templates ----
+const TASK_TEMPLATES = [
+  { name: 'Bug Fix',       priority: 'P1', title: 'Fix: [describe bug]',        description: 'Steps to reproduce:\n1. \n\nExpected:\nActual:' },
+  { name: 'Feature',       priority: 'P2', title: 'Implement: [feature name]',  description: 'User story:\nAs a [user] I want [feature] so that [benefit].' },
+  { name: 'Research',      priority: 'P2', title: 'Research: [topic]',           description: 'Questions:\n1. \n\nDeliverables:\n- Research doc' },
+  { name: 'Test Coverage', priority: 'P2', title: 'Test: [component]',           description: 'Test cases:\n1. \n\nTarget coverage: >80%' },
+  { name: 'Documentation', priority: 'P3', title: 'Document: [component]',       description: 'Target audience:\nDoc type: API / User / Dev' },
+] as const;
 
 function avatarInitial(name: string): string {
   return name ? name.charAt(0).toUpperCase() : '?';
@@ -163,6 +191,23 @@ interface KanbanProps {
   tasks: Task[];
 }
 function KanbanBoard({ tasks }: KanbanProps) {
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [copiedTemplate, setCopiedTemplate] = useState<string | null>(null);
+
+  const handleCopyTemplate = (tmpl: typeof TASK_TEMPLATES[number]) => {
+    const text = `Title: ${tmpl.title}\nPriority: ${tmpl.priority}\n\n${tmpl.description}`;
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedTemplate(tmpl.name);
+      setTimeout(() => setCopiedTemplate(null), 1500);
+    });
+  };
+
+  // Build a map of task id → title for dependency display
+  const taskMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const t of tasks) m[t.id] = t.title;
+    return m;
+  }, [tasks]);
   const grouped: Record<string, Task[]> = {};
   for (const col of KANBAN_COLS) grouped[col] = [];
 
@@ -178,13 +223,36 @@ function KanbanBoard({ tasks }: KanbanProps) {
 
   if (tasks.length === 0) {
     return (
-      <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>
-        No tasks in this project
-      </p>
+      <div>
+        <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>
+          No tasks yet. Ask the CEO to create tasks, or use a template below.
+        </p>
+        <button
+          onClick={() => setShowTemplates((v) => !v)}
+          className="text-xs px-3 py-1.5 rounded-lg cursor-pointer"
+          style={{ backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-accent)', border: '1px solid var(--tf-border)' }}
+        >
+          {showTemplates ? '▲ Hide Templates' : '▼ Task Templates'}
+        </button>
+        {showTemplates && <TemplatesPanel templates={TASK_TEMPLATES} onCopy={handleCopyTemplate} copied={copiedTemplate} />}
+      </div>
     );
   }
 
   return (
+    <div>
+      {/* Templates bar */}
+      <div className="mb-3 flex items-center gap-2">
+        <button
+          onClick={() => setShowTemplates((v) => !v)}
+          className="text-xs px-3 py-1.5 rounded-lg cursor-pointer transition-all"
+          style={{ backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-accent)', border: '1px solid var(--tf-border)' }}
+        >
+          {showTemplates ? '▲ Hide Templates' : '▼ Task Templates'}
+        </button>
+        <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>{tasks.length} tasks</span>
+      </div>
+      {showTemplates && <TemplatesPanel templates={TASK_TEMPLATES} onCopy={handleCopyTemplate} copied={copiedTemplate} />}
     <div className="flex gap-3 overflow-x-auto pb-2">
       {KANBAN_COLS.map((col) => {
         const colTasks = grouped[col];
@@ -220,21 +288,23 @@ function KanbanBoard({ tasks }: KanbanProps) {
             <div className="flex-1 p-2 space-y-2 overflow-y-auto">
               {colTasks.map((task) => {
                 const pri = priorityBadge(task.priority);
+                const deps = task.depends_on ?? [];
                 return (
                   <div
                     key={task.id}
                     className="rounded-lg p-3 flex flex-col gap-2"
-                    style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
+                    style={{ backgroundColor: 'var(--tf-surface-raised)', border: `1px solid ${task.status.toLowerCase() === 'blocked' ? 'var(--tf-error)' : 'var(--tf-border)'}` }}
                   >
                     <div className="flex items-start justify-between gap-1">
                       <p className="text-xs font-medium leading-tight" style={{ color: 'var(--tf-text)' }}>
                         {task.title}
                       </p>
                       <span
+                        title={pri.label}
                         className="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0 font-medium"
                         style={{ backgroundColor: pri.bg, color: pri.text }}
                       >
-                        {task.priority}
+                        {pri.label}
                       </span>
                     </div>
 
@@ -251,6 +321,23 @@ function KanbanBoard({ tasks }: KanbanProps) {
                       >
                         {task.description}
                       </p>
+                    )}
+
+                    {/* Dependencies */}
+                    {deps.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>Blocked by:</span>
+                        {deps.map((depId) => (
+                          <span
+                            key={depId}
+                            className="text-xs px-1.5 py-0.5 rounded"
+                            title={taskMap[depId] ?? depId}
+                            style={{ backgroundColor: '#2d1519', color: 'var(--tf-error)' }}
+                          >
+                            {taskMap[depId] ? taskMap[depId].slice(0, 20) : depId.slice(0, 8)}
+                          </span>
+                        ))}
+                      </div>
                     )}
 
                     {task.assigned_to && (
@@ -273,6 +360,54 @@ function KanbanBoard({ tasks }: KanbanProps) {
           </div>
         );
       })}
+    </div>
+    </div>
+  );
+}
+
+// ---- Task templates panel ----
+interface TemplatesPanelProps {
+  templates: typeof TASK_TEMPLATES;
+  onCopy: (t: typeof TASK_TEMPLATES[number]) => void;
+  copied: string | null;
+}
+function TemplatesPanel({ templates, onCopy, copied }: TemplatesPanelProps) {
+  return (
+    <div
+      className="mb-4 rounded-xl overflow-hidden"
+      style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}
+    >
+      <div className="px-4 py-2 flex-shrink-0" style={{ borderBottom: '1px solid var(--tf-border)' }}>
+        <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--tf-text-muted)' }}>
+          Task Templates — click to copy
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2 p-3">
+        {templates.map((tmpl) => {
+          const pri = priorityBadge(tmpl.priority);
+          const isCopied = copied === tmpl.name;
+          return (
+            <button
+              key={tmpl.name}
+              onClick={() => onCopy(tmpl)}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs cursor-pointer transition-all duration-200"
+              style={{
+                backgroundColor: isCopied ? pri.bg : 'var(--tf-surface-raised)',
+                border: `1px solid ${isCopied ? pri.text : 'var(--tf-border)'}`,
+                color: isCopied ? pri.text : 'var(--tf-text)',
+              }}
+            >
+              <span>{isCopied ? '✓ Copied!' : tmpl.name}</span>
+              <span className="px-1.5 py-0.5 rounded-full font-medium" style={{ backgroundColor: pri.bg, color: pri.text }}>
+                {pri.label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="px-4 pb-3 text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+        Paste the copied template into CEO chat to create the task.
+      </p>
     </div>
   );
 }
@@ -558,6 +693,271 @@ function DiscussionsTab({ projectId }: DiscussionsTabProps) {
   );
 }
 
+// ---- Milestones tab ----
+interface MilestonesTabProps {
+  project: Project;
+  tasks: Task[];
+}
+function MilestonesTab({ project, tasks }: MilestonesTabProps) {
+  const phases = project.phases ?? [];
+  const done   = tasks.filter((t) => t.status.toLowerCase() === 'done').length;
+  const total  = tasks.length;
+
+  // Derive milestones from phases; if no phases, group by priority tiers
+  const milestones = useMemo(() => {
+    if (phases.length > 0) {
+      return phases.map((phase, i) => {
+        const chunk = Math.ceil(total / phases.length);
+        const doneInRange = Math.min(done, (i + 1) * chunk) - i * chunk;
+        const chunkDone = Math.max(0, doneInRange);
+        const pct = chunk > 0 ? Math.round((chunkDone / chunk) * 100) : 0;
+        return { name: phase, pct, status: pct === 100 ? 'done' : pct > 0 ? 'active' : 'pending' };
+      });
+    }
+    // Fallback: synthesize milestones from priority tiers
+    const p0Tasks = tasks.filter((t) => t.priority.toUpperCase() === 'P0');
+    const p1Tasks = tasks.filter((t) => t.priority.toUpperCase() === 'P1');
+    const p2Tasks = tasks.filter((t) => ['P2', 'P3'].includes(t.priority.toUpperCase()));
+    const milestoneFor = (name: string, group: Task[]) => {
+      if (group.length === 0) return null;
+      const doneCnt = group.filter((t) => t.status.toLowerCase() === 'done').length;
+      const pct = Math.round((doneCnt / group.length) * 100);
+      return { name, pct, status: pct === 100 ? 'done' : pct > 0 ? 'active' : 'pending' };
+    };
+    return [
+      milestoneFor('Critical Tasks (P0)', p0Tasks),
+      milestoneFor('High Priority (P1)',   p1Tasks),
+      milestoneFor('Remaining Work (P2+)', p2Tasks),
+    ].filter(Boolean) as { name: string; pct: number; status: string }[];
+  }, [phases, tasks, done, total]);
+
+  if (milestones.length === 0) {
+    return <p className="text-xs py-4" style={{ color: 'var(--tf-text-muted)' }}>No milestones defined. Add phases to the project to see milestones.</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs uppercase tracking-widest" style={{ color: 'var(--tf-text-muted)' }}>Project Milestones</p>
+      {milestones.map((ms, i) => {
+        const color = ms.status === 'done' ? 'var(--tf-success)' : ms.status === 'active' ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)';
+        return (
+          <div key={i} className="rounded-xl p-4 flex flex-col gap-2" style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-base">{ms.status === 'done' ? '✅' : ms.status === 'active' ? '🔵' : '⭕'}</span>
+                <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>{ms.name}</span>
+              </div>
+              <span className="text-xs font-bold" style={{ color }}>{ms.pct}%</span>
+            </div>
+            <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--tf-surface)' }}>
+              <div className="h-full rounded-full transition-all duration-700" style={{ width: `${ms.pct}%`, backgroundColor: color }} />
+            </div>
+          </div>
+        );
+      })}
+      {/* Overall progress */}
+      <div className="rounded-xl p-4" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
+        <div className="flex justify-between mb-2">
+          <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>Overall Progress</span>
+          <span className="text-xs font-bold" style={{ color: 'var(--tf-success)' }}>{total > 0 ? Math.round((done / total) * 100) : 0}%</span>
+        </div>
+        <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
+          <div className="h-full rounded-full transition-all duration-700" style={{ width: `${total > 0 ? Math.round((done / total) * 100) : 0}%`, backgroundColor: 'var(--tf-success)' }} />
+        </div>
+        <p className="text-xs mt-2" style={{ color: 'var(--tf-text-muted)' }}>{done} of {total} tasks completed</p>
+      </div>
+    </div>
+  );
+}
+
+// ---- Burndown chart ----
+interface BurndownChartProps {
+  tasks: Task[];
+}
+function BurndownChart({ tasks }: BurndownChartProps) {
+  const DAYS = 14;
+  const W = 480; const H = 120;
+
+  const data = useMemo(() => {
+    if (tasks.length === 0) return null;
+    const now = Date.now();
+    const startTs = tasks.reduce((min, t) => {
+      const ts = t.created_at ? new Date(t.created_at).getTime() : now;
+      return ts < min ? ts : min;
+    }, now);
+    const dayMs = 86400_000;
+    const totalDays = Math.max(DAYS, Math.ceil((now - startTs) / dayMs) + 1);
+
+    // Ideal burn: linear from total tasks to 0
+    const ideal: number[] = [];
+    for (let d = 0; d <= totalDays; d++) {
+      ideal.push(tasks.length * (1 - d / totalDays));
+    }
+
+    // Actual: count tasks NOT done at end of each day
+    const actual: number[] = [];
+    for (let d = 0; d <= totalDays; d++) {
+      const dayEnd = startTs + d * dayMs;
+      const remaining = tasks.filter((t) => {
+        const doneAt = t.updated_at ? new Date(t.updated_at).getTime() : null;
+        if (!doneAt) return true; // not done yet
+        const isDone = t.status.toLowerCase() === 'done';
+        return !(isDone && doneAt <= dayEnd);
+      }).length;
+      actual.push(remaining);
+    }
+    return { ideal, actual, totalDays };
+  }, [tasks]);
+
+  if (!data) return <p className="text-xs py-4" style={{ color: 'var(--tf-text-muted)' }}>No task data for burndown chart.</p>;
+
+  const { ideal, actual, totalDays } = data;
+  const maxY = tasks.length;
+  const toX = (d: number) => (d / totalDays) * W;
+  const toY = (v: number) => H - (v / maxY) * H;
+
+  const idealPath = ideal.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+  const actualPath = actual.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs uppercase tracking-widest" style={{ color: 'var(--tf-text-muted)' }}>Burndown Chart</p>
+      <div className="rounded-xl p-4" style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}>
+        <svg width="100%" viewBox={`0 0 ${W} ${H + 20}`} style={{ overflow: 'visible' }}>
+          {/* Grid lines */}
+          {[0.25, 0.5, 0.75, 1].map((r) => (
+            <line key={r} x1={0} y1={toY(maxY * r)} x2={W} y2={toY(maxY * r)}
+              stroke="var(--tf-border)" strokeDasharray="4 4" strokeWidth={1} />
+          ))}
+          {/* Ideal line */}
+          <path d={idealPath} fill="none" stroke="var(--tf-text-muted)" strokeWidth={1.5} strokeDasharray="6 4" opacity={0.6} />
+          {/* Actual line */}
+          <path d={actualPath} fill="none" stroke="var(--tf-accent-blue)" strokeWidth={2} />
+          {/* Labels */}
+          <text x={4} y={toY(maxY) - 4} fontSize={9} fill="var(--tf-text-muted)">{maxY}</text>
+          <text x={4} y={H - 2} fontSize={9} fill="var(--tf-text-muted)">0</text>
+        </svg>
+        <div className="flex items-center gap-4 mt-2">
+          <div className="flex items-center gap-1.5">
+            <div className="w-8 h-0.5" style={{ borderTop: '2px dashed var(--tf-text-muted)' }} />
+            <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>Ideal</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-8 h-0.5" style={{ backgroundColor: 'var(--tf-accent-blue)' }} />
+            <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>Actual</span>
+          </div>
+        </div>
+      </div>
+      <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
+        {[
+          { label: 'Total Tasks', value: tasks.length.toString(), color: 'var(--tf-text)' },
+          { label: 'Completed', value: tasks.filter((t) => t.status.toLowerCase() === 'done').length.toString(), color: 'var(--tf-success)' },
+          { label: 'Remaining', value: tasks.filter((t) => t.status.toLowerCase() !== 'done').length.toString(), color: 'var(--tf-accent-blue)' },
+        ].map((s) => (
+          <div key={s.label} className="rounded-lg p-3 text-center" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
+            <p className="text-lg font-bold" style={{ color: s.color }}>{s.value}</p>
+            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>{s.label}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---- Sprint planning tab ----
+interface SprintTabProps {
+  tasks: Task[];
+}
+function SprintTab({ tasks }: SprintTabProps) {
+  const SPRINT_SIZE = 8;
+  const sprints = useMemo(() => {
+    // Group tasks into sprints by creation order / priority
+    const sorted = [...tasks].sort((a, b) => {
+      const priOrder: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+      return (priOrder[a.priority?.toUpperCase()] ?? 4) - (priOrder[b.priority?.toUpperCase()] ?? 4);
+    });
+    const result: { name: string; tasks: Task[] }[] = [];
+    for (let i = 0; i < sorted.length; i += SPRINT_SIZE) {
+      result.push({ name: `Sprint ${result.length + 1}`, tasks: sorted.slice(i, i + SPRINT_SIZE) });
+    }
+    return result;
+  }, [tasks]);
+
+  const [activeSprint, setActiveSprint] = useState(0);
+
+  if (sprints.length === 0) {
+    return <p className="text-xs py-4" style={{ color: 'var(--tf-text-muted)' }}>No tasks to plan sprints for.</p>;
+  }
+
+  const sprint = sprints[activeSprint];
+  const sprintDone = sprint.tasks.filter((t) => t.status.toLowerCase() === 'done').length;
+  const sprintPct = sprint.tasks.length > 0 ? Math.round((sprintDone / sprint.tasks.length) * 100) : 0;
+
+  return (
+    <div className="space-y-4">
+      {/* Sprint selector */}
+      <div className="flex gap-2 flex-wrap">
+        {sprints.map((s, i) => {
+          const sDone = s.tasks.filter((t) => t.status.toLowerCase() === 'done').length;
+          const sPct = s.tasks.length > 0 ? Math.round((sDone / s.tasks.length) * 100) : 0;
+          const isActive = activeSprint === i;
+          return (
+            <button
+              key={i}
+              onClick={() => setActiveSprint(i)}
+              className="text-xs px-3 py-1.5 rounded-lg cursor-pointer transition-all"
+              style={{
+                backgroundColor: isActive ? 'var(--tf-accent-blue)' : 'var(--tf-surface-raised)',
+                color: isActive ? 'var(--tf-bg)' : 'var(--tf-text-secondary)',
+                border: `1px solid ${isActive ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+              }}
+            >
+              {s.name} ({sPct}%)
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Sprint header */}
+      <div className="rounded-xl p-4" style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}>
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>{sprint.name}</span>
+          <span className="text-xs font-bold" style={{ color: 'var(--tf-accent-blue)' }}>{sprintDone}/{sprint.tasks.length} done</span>
+        </div>
+        <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--tf-surface)' }}>
+          <div className="h-full rounded-full transition-all duration-700" style={{ width: `${sprintPct}%`, backgroundColor: 'var(--tf-accent-blue)' }} />
+        </div>
+      </div>
+
+      {/* Sprint tasks */}
+      <div className="space-y-2">
+        {sprint.tasks.map((task) => {
+          const pri = priorityBadge(task.priority);
+          const isDone = task.status.toLowerCase() === 'done';
+          return (
+            <div
+              key={task.id}
+              className="flex items-center gap-3 rounded-lg px-3 py-2.5"
+              style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', opacity: isDone ? 0.6 : 1 }}
+            >
+              <span style={{ color: isDone ? 'var(--tf-success)' : 'var(--tf-text-muted)' }}>{isDone ? '✓' : '○'}</span>
+              <span className="flex-1 text-xs truncate" style={{ color: isDone ? 'var(--tf-text-muted)' : 'var(--tf-text)', textDecoration: isDone ? 'line-through' : 'none' }}>
+                {task.title}
+              </span>
+              <span className="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0" style={{ backgroundColor: pri.bg, color: pri.text }}>
+                {pri.label}
+              </span>
+              {task.assigned_to && (
+                <span className="text-xs flex-shrink-0" style={{ color: 'var(--tf-text-muted)' }}>{task.assigned_to.split(' ')[0]}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ---- Team tab ----
 interface TeamTabProps {
   team: string[];
@@ -675,9 +1075,9 @@ function InfoTab({ project }: InfoTabProps) {
             Phases
           </p>
           <div className="flex flex-wrap gap-1.5">
-            {project.phases.map((phase, i) => (
+            {project.phases.map((phase) => (
               <span
-                key={i}
+                key={phase}
                 className="text-xs px-2 py-0.5 rounded-full"
                 style={{ backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-accent)', border: '1px solid var(--tf-border)' }}
               >
@@ -727,6 +1127,7 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
   const [activeTab, setActiveTab] = useState<ProjectTab>(initialTab ?? 'tasks');
   const [localProject, setLocalProject] = useState(project);
   const sbadge = statusBadge(localProject.status);
+  const health = computeHealth(tasks);
 
   useEffect(() => {
     setLocalProject(project);
@@ -737,11 +1138,13 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
   }, [initialTab]);
 
   const tabs: { id: ProjectTab; label: string }[] = [
-    { id: 'tasks', label: 'Tasks' },
-    { id: 'plan', label: 'Plan' },
+    { id: 'tasks',       label: 'Tasks' },
+    { id: 'milestones',  label: 'Milestones' },
+    { id: 'sprint',      label: 'Sprint' },
+    { id: 'plan',        label: 'Plan' },
     { id: 'discussions', label: 'Discussions' },
-    { id: 'team', label: 'Team' },
-    { id: 'info', label: 'Info' },
+    { id: 'team',        label: 'Team' },
+    { id: 'info',        label: 'Info' },
   ];
 
   const team = project.team ?? [];
@@ -767,6 +1170,16 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
             >
               {project.status}
             </span>
+            {/* Health score badge */}
+            {tasks.length > 0 && (
+              <span
+                className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                title={`Health: ${health.score}/100`}
+                style={{ backgroundColor: health.bg, color: health.color }}
+              >
+                {health.label} {health.score}%
+              </span>
+            )}
             {project.type && (
               <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
                 {project.type}
@@ -825,7 +1238,14 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto p-4" role="tabpanel">
-        {activeTab === 'tasks' && <KanbanBoard tasks={tasks} />}
+        {activeTab === 'tasks'      && <KanbanBoard tasks={tasks} />}
+        {activeTab === 'milestones' && <MilestonesTab project={localProject} tasks={tasks} />}
+        {activeTab === 'sprint'     && (
+          <div className="space-y-6">
+            <SprintTab tasks={tasks} />
+            <BurndownChart tasks={tasks} />
+          </div>
+        )}
         {activeTab === 'plan' && (
           <PlanTab
             project={localProject}
@@ -836,8 +1256,8 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
           />
         )}
         {activeTab === 'discussions' && <DiscussionsTab projectId={project.id} />}
-        {activeTab === 'team' && <TeamTab team={team} />}
-        {activeTab === 'info' && <InfoTab project={localProject} />}
+        {activeTab === 'team'        && <TeamTab team={team} />}
+        {activeTab === 'info'        && <InfoTab project={localProject} />}
       </div>
     </div>
   );
