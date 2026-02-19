@@ -243,6 +243,22 @@ function EmptyState({ ceoName = 'CEO' }: { ceoName?: string }) {
   );
 }
 
+// ---- WebSocket message type ----
+
+interface WsMessage {
+  type: 'user_ack' | 'thinking' | 'chunk' | 'done' | 'error';
+  content?: string;
+  message?: ChatMessage;
+}
+
+function isWsMessage(data: unknown): data is WsMessage {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    typeof (data as Record<string, unknown>).type === 'string'
+  );
+}
+
 // ---- Connection status ----
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -339,7 +355,9 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
 
       ws.onmessage = (evt) => {
         try {
-          const data = JSON.parse(evt.data);
+          const raw: unknown = JSON.parse(evt.data);
+          if (!isWsMessage(raw)) return;
+          const data: WsMessage = raw;
 
           switch (data.type) {
             case 'user_ack':

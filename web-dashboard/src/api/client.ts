@@ -1,15 +1,20 @@
 import type { Agent, Project, Task, Decision, ActivityEvent, TokenReport, Budget, ChatMessage, AppConfig } from '../types';
 
 const BASE = '/api';
+const FETCH_TIMEOUT_MS = 15_000;
 
-async function safeFetch<T>(url: string, fallback: T): Promise<T> {
+async function safeFetch<T>(url: string, fallback: T, options?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { ...options, signal: controller.signal });
     if (!res.ok) return fallback;
     const data: T = await res.json();
     return data;
   } catch {
     return fallback;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -70,10 +75,14 @@ export async function fetchChatHistory(limit = 50): Promise<ChatMessage[]> {
 }
 
 export async function clearChatHistory(): Promise<void> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    await fetch(`${BASE}/chat/history`, { method: 'DELETE' });
+    await fetch(`${BASE}/chat/history`, { method: 'DELETE', signal: controller.signal });
   } catch {
     // ignore
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -87,28 +96,38 @@ export async function fetchConfig(): Promise<AppConfig | null> {
 }
 
 export async function saveSetupConfig(config: Partial<AppConfig>): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await fetch(`${BASE}/config/setup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
+      signal: controller.signal,
     });
     return res.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
 export async function updateConfig(updates: Record<string, unknown>): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await fetch(`${BASE}/config`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
+      signal: controller.signal,
     });
     return res.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

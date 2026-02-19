@@ -196,6 +196,7 @@ _active_sse_connections = 0
 async def _tail_activity_log(activity_log_path: str) -> AsyncGenerator[str, None]:
     """Async generator that watches activity.log for new lines via polling."""
     global _active_sse_connections
+    _active_sse_connections += 1
     last_size: int = 0
     last_pos: int = 0
 
@@ -236,10 +237,8 @@ async def _tail_activity_log(activity_log_path: str) -> AsyncGenerator[str, None
 @app.get("/api/activity/stream", summary="SSE stream of activity.log changes")
 def activity_stream() -> StreamingResponse:
     """Server-Sent Events endpoint."""
-    global _active_sse_connections
     if _active_sse_connections >= MAX_SSE_CONNECTIONS:
         raise HTTPException(status_code=429, detail="Too many SSE connections.")
-    _active_sse_connections += 1
 
     activity_log_path = os.path.join(DATA_DIR, "activity.log")
     return StreamingResponse(

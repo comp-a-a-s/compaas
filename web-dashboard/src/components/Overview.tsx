@@ -532,11 +532,14 @@ export default function Overview({
   loadingProjects,
   loadingTasks,
 }: OverviewProps) {
-  // Compute task status distribution
-  const statusCounts: Record<string, number> = {};
-  for (const t of tasks) {
-    statusCounts[t.status] = (statusCounts[t.status] ?? 0) + 1;
-  }
+  // Compute task status distribution — memoized so it only recomputes when tasks change
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of tasks) {
+      counts[t.status] = (counts[t.status] ?? 0) + 1;
+    }
+    return counts;
+  }, [tasks]);
 
   return (
     <div className="space-y-6 animate-fade-in">
