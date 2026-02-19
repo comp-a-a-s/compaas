@@ -5,21 +5,21 @@ instead of maintaining their own copies.
 """
 
 AGENT_REGISTRY: dict[str, dict] = {
-    "ceo": {"name": "Marcus", "role": "CEO — Central Orchestrator", "team": "leadership", "model": "opus", "status": "permanent"},
-    "cto": {"name": "Elena", "role": "Chief Technology Officer", "team": "leadership", "model": "opus", "status": "permanent"},
-    "chief-researcher": {"name": "Victor", "role": "Chief Researcher", "team": "leadership", "model": "opus", "status": "permanent"},
-    "ciso": {"name": "Rachel", "role": "Chief Information Security Officer", "team": "leadership", "model": "opus", "status": "permanent"},
-    "cfo": {"name": "Jonathan", "role": "Chief Financial Officer", "team": "leadership", "model": "sonnet", "status": "permanent"},
-    "vp-product": {"name": "Sarah", "role": "VP of Product", "team": "leadership", "model": "sonnet", "status": "permanent"},
-    "vp-engineering": {"name": "David", "role": "VP of Engineering", "team": "leadership", "model": "sonnet", "status": "permanent"},
-    "lead-backend": {"name": "James", "role": "Lead Backend Engineer", "team": "engineering", "model": "sonnet", "status": "permanent"},
-    "lead-frontend": {"name": "Priya", "role": "Lead Frontend Engineer", "team": "engineering", "model": "sonnet", "status": "permanent"},
-    "lead-designer": {"name": "Lena", "role": "Lead UI/UX Designer", "team": "design", "model": "sonnet", "status": "permanent"},
-    "qa-lead": {"name": "Carlos", "role": "QA Lead", "team": "engineering", "model": "sonnet", "status": "permanent"},
-    "devops": {"name": "Nina", "role": "DevOps Engineer", "team": "engineering", "model": "sonnet", "status": "permanent"},
-    "security-engineer": {"name": "Alex", "role": "Security Engineer", "team": "on_demand", "model": "opus", "status": "available"},
-    "data-engineer": {"name": "Maya", "role": "Data Engineer", "team": "on_demand", "model": "sonnet", "status": "available"},
-    "tech-writer": {"name": "Tom", "role": "Technical Writer", "team": "on_demand", "model": "sonnet", "status": "available"},
+    "ceo":               {"name": "Marcus",   "role": "CEO — Central Orchestrator",           "team": "leadership",  "model": "opus",   "provider": "anthropic", "status": "permanent"},
+    "cto":               {"name": "Elena",    "role": "Chief Technology Officer",             "team": "leadership",  "model": "opus",   "provider": "anthropic", "status": "permanent"},
+    "chief-researcher":  {"name": "Victor",   "role": "Chief Researcher",                     "team": "leadership",  "model": "opus",   "provider": "anthropic", "status": "permanent"},
+    "ciso":              {"name": "Rachel",   "role": "Chief Information Security Officer",   "team": "leadership",  "model": "opus",   "provider": "anthropic", "status": "permanent"},
+    "cfo":               {"name": "Jonathan", "role": "Chief Financial Officer",              "team": "leadership",  "model": "sonnet", "provider": "anthropic", "status": "permanent"},
+    "vp-product":        {"name": "Sarah",    "role": "VP of Product",                        "team": "leadership",  "model": "sonnet", "provider": "anthropic", "status": "permanent"},
+    "vp-engineering":    {"name": "David",    "role": "VP of Engineering",                    "team": "leadership",  "model": "sonnet", "provider": "anthropic", "status": "permanent"},
+    "lead-backend":      {"name": "James",    "role": "Lead Backend Engineer",                "team": "engineering", "model": "sonnet", "provider": "anthropic", "status": "permanent"},
+    "lead-frontend":     {"name": "Priya",    "role": "Lead Frontend Engineer",               "team": "engineering", "model": "sonnet", "provider": "anthropic", "status": "permanent"},
+    "lead-designer":     {"name": "Lena",     "role": "Lead UI/UX Designer",                  "team": "design",      "model": "sonnet", "provider": "anthropic", "status": "permanent"},
+    "qa-lead":           {"name": "Carlos",   "role": "QA Lead",                              "team": "engineering", "model": "sonnet", "provider": "anthropic", "status": "permanent"},
+    "devops":            {"name": "Nina",     "role": "DevOps Engineer",                      "team": "engineering", "model": "sonnet", "provider": "anthropic", "status": "permanent"},
+    "security-engineer": {"name": "Alex",     "role": "Security Engineer",                    "team": "on_demand",   "model": "opus",   "provider": "anthropic", "status": "available"},
+    "data-engineer":     {"name": "Maya",     "role": "Data Engineer",                        "team": "on_demand",   "model": "sonnet", "provider": "anthropic", "status": "available"},
+    "tech-writer":       {"name": "Tom",      "role": "Technical Writer",                     "team": "on_demand",   "model": "sonnet", "provider": "anthropic", "status": "available"},
 }
 
 

@@ -15,6 +15,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Local / alternative model support (OpenAI, Ollama, LM Studio, llama.cpp, etc.)
+# Install with:  pip install thunderflow[local-models]
+local-models = [
+    "openai>=1.0",
+]
+# Full agent routing via LiteLLM proxy (Phase 2)
+# Install with:  pip install thunderflow[proxy]
+proxy = [
+    "openai>=1.0",
+    "litellm>=1.40",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
