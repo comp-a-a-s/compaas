@@ -131,6 +131,26 @@ export async function updateConfig(updates: Record<string, unknown>): Promise<bo
   }
 }
 
+export async function fetchProjectSpecs(id: string): Promise<{ filename: string; content: string }[]> {
+  return safeFetch(`${BASE}/projects/${encodeURIComponent(id)}/specs`, []);
+}
+
+export async function approveProjectPlan(id: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE}/projects/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      signal: controller.signal,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function testLlmConnection(opts: {
   base_url: string;
   model: string;

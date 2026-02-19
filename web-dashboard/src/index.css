@@ -49,6 +49,7 @@
   --tf-scrollbar-track: #0d1117;
   --tf-scrollbar-thumb: #30363d;
   --tf-scrollbar-hover: #484f58;
+  --tf-user-bubble:    #1c2940;
 }
 
 [data-theme="twilight"] {
@@ -69,6 +70,7 @@
   --tf-scrollbar-track: #0f1923;
   --tf-scrollbar-thumb: #2d3f54;
   --tf-scrollbar-hover: #506070;
+  --tf-user-bubble:    #1a2d40;
 }
 
 [data-theme="dawn"] {
@@ -89,6 +91,7 @@
   --tf-scrollbar-track: #ffffff;
   --tf-scrollbar-thumb: #d0d7de;
   --tf-scrollbar-hover: #8b949e;
+  --tf-user-bubble:    #dbeafe;
 }
 
 [data-theme="claude"] {
@@ -109,6 +112,7 @@
   --tf-scrollbar-track: #1a1715;
   --tf-scrollbar-thumb: #3d3830;
   --tf-scrollbar-hover: #7a716a;
+  --tf-user-bubble:    #2d1f1a;
 }
 
 *,

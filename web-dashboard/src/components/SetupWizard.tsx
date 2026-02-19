@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { saveSetupConfig, testLlmConnection } from '../api/client';
 import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
@@ -231,13 +231,72 @@ type LlmProvider = 'anthropic' | 'openai' | 'openai_compat';
 type LocalPreset  = 'ollama' | 'lmstudio' | 'llamacpp' | 'custom';
 
 const LOCAL_PRESETS: { id: LocalPreset; label: string; baseUrl: string; apiKey: string; placeholder: string }[] = [
-  { id: 'ollama',    label: 'Ollama',        baseUrl: 'http://localhost:11434/v1', apiKey: 'ollama',     placeholder: 'llama3.2' },
-  { id: 'lmstudio', label: 'LM Studio',      baseUrl: 'http://localhost:1234/v1',  apiKey: 'lm-studio',  placeholder: 'llama-3.2-3b-instruct' },
-  { id: 'llamacpp',  label: 'llama.cpp',      baseUrl: 'http://localhost:8080/v1',  apiKey: 'none',       placeholder: 'default' },
-  { id: 'custom',   label: 'Custom',         baseUrl: '',                          apiKey: '',           placeholder: 'my-model' },
+  { id: 'ollama',    label: 'Ollama',    baseUrl: 'http://localhost:11434/v1', apiKey: 'ollama',    placeholder: 'llama3.3' },
+  { id: 'lmstudio', label: 'LM Studio', baseUrl: 'http://localhost:1234/v1',  apiKey: 'lm-studio', placeholder: 'llama-3.3-70b-instruct' },
+  { id: 'llamacpp',  label: 'llama.cpp', baseUrl: 'http://localhost:8080/v1',  apiKey: 'none',      placeholder: 'default' },
+  { id: 'custom',   label: 'Custom',    baseUrl: '',                          apiKey: '',          placeholder: 'my-model' },
 ];
 
-const OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'custom'];
+// Current recommended models as of 2025
+const OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'o1', 'custom'];
+
+const LOCAL_MODEL_SUGGESTIONS: Record<LocalPreset, string[]> = {
+  ollama:    ['llama3.3', 'llama3.2', 'deepseek-r1', 'qwen2.5-coder', 'mistral', 'gemma3'],
+  lmstudio:  ['llama-3.3-70b-instruct', 'deepseek-r1-distill-llama-70b', 'qwen2.5-coder-32b'],
+  llamacpp:  ['llama-3.3-70b', 'mistral-7b', 'deepseek-coder'],
+  custom:    [],
+};
+
+// Guide box shown inside provider cards
+function GuideBox({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div style={{ borderTop: `1px solid ${C.border}`, marginTop: '10px', paddingTop: '10px' }}>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+          fontSize: '11px', fontWeight: 600, color: C.accent,
+          textTransform: 'uppercase', letterSpacing: '0.05em',
+        }}
+      >
+        <span style={{ fontSize: '10px', transition: 'transform 0.2s', transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block' }}>▶</span>
+        {open ? 'Hide setup guide' : 'How to set up →'}
+      </button>
+      {open && (
+        <div
+          style={{
+            marginTop: '10px', padding: '12px',
+            backgroundColor: C.surface, borderRadius: '8px',
+            border: `1px solid ${C.border}`,
+            fontSize: '12px', color: C.textSecondary, lineHeight: '1.6',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Inline link style used in guides
+const guideLink: React.CSSProperties = {
+  color: C.accent, textDecoration: 'underline', cursor: 'pointer',
+};
+
+// Code snippet style
+function Code({ children }: { children: string }) {
+  return (
+    <code style={{
+      backgroundColor: 'rgba(0,0,0,0.2)', padding: '1px 5px', borderRadius: '4px',
+      fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: C.textPrimary,
+    }}>
+      {children}
+    </code>
+  );
+}
 
 function StepAiProvider({
   llmProvider, setLlmProvider,
@@ -339,16 +398,44 @@ function StepAiProvider({
       {/* Anthropic */}
       <ProviderCard
         id="anthropic" icon="⚡" selected={llmProvider === 'anthropic'}
-        title="Anthropic Cloud"
-        description="Claude Opus / Sonnet / Haiku via Anthropic API. Requires ANTHROPIC_API_KEY in your environment."
+        title="Anthropic Cloud (Recommended)"
+        description="Claude Opus 4 / Sonnet 4 / Haiku 4.5 — best reasoning and tool use. Uses the Claude Code CLI."
         onClick={() => setLlmProvider('anthropic')}
-      />
+      >
+        <GuideBox>
+          <strong style={{ color: C.textPrimary }}>Requirements</strong>
+          <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+            <li style={{ marginBottom: '6px' }}>
+              <strong>Install Claude Code CLI</strong><br />
+              <Code>npm install -g @anthropic-ai/claude-code</Code>
+            </li>
+            <li style={{ marginBottom: '6px' }}>
+              <strong>Set your API key</strong><br />
+              Get one at{' '}
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={guideLink}>
+                console.anthropic.com/settings/keys
+              </a>
+              , then:<br />
+              <Code>export ANTHROPIC_API_KEY=sk-ant-...</Code><br />
+              <span style={{ fontSize: '11px', color: C.textMuted }}>Add this to your shell profile (~/.bashrc or ~/.zshrc) so it persists.</span>
+            </li>
+            <li>
+              <strong>Verify install</strong><br />
+              <Code>claude --version</Code>
+            </li>
+          </ol>
+          <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+            <strong style={{ color: C.accent, fontSize: '11px' }}>Recommended models:</strong>{' '}
+            <span style={{ fontSize: '11px' }}>claude-opus-4-6 (most capable), claude-sonnet-4-5 (balanced), claude-haiku-4-5 (fastest)</span>
+          </div>
+        </GuideBox>
+      </ProviderCard>
 
       {/* OpenAI */}
       <ProviderCard
         id="openai" icon="🤖" selected={llmProvider === 'openai'}
         title="OpenAI"
-        description="GPT-4o, GPT-4-turbo, GPT-3.5-turbo, etc. Requires an OpenAI API key."
+        description="GPT-4o, o3-mini, o1 — cloud models via OpenAI API. Requires an API key."
         onClick={() => setLlmProvider('openai')}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -365,19 +452,23 @@ function StepAiProvider({
                   backgroundColor: openaiModelPreset === m ? 'rgba(88,166,255,0.15)' : C.surface,
                   color: openaiModelPreset === m ? C.accent : C.textSecondary,
                 }}>
-                  {m}
+                  {m === 'gpt-4o' ? 'gpt-4o ★' : m}
                 </button>
               ))}
             </div>
             {openaiModelPreset === 'custom' && (
               <input
                 type="text" value={llmModel} onChange={(e) => setLlmModel(e.target.value)}
-                placeholder="e.g. gpt-4o-2024-08-06"
+                placeholder="e.g. gpt-4o-2024-11-20"
                 style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
                 onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
                 onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
               />
             )}
+            <p style={{ fontSize: '10px', color: C.textMuted, margin: '4px 0 0' }}>
+              ★ gpt-4o is recommended — best balance of speed, cost, and quality.
+              o3-mini / o1 offer stronger reasoning at higher cost.
+            </p>
           </div>
           {/* API key */}
           <div>
@@ -394,6 +485,29 @@ function StepAiProvider({
           </div>
           {/* Test button */}
           <TestConnectionButton status={testStatus} message={testMessage} onTest={handleTest} />
+          {/* Guide */}
+          <GuideBox>
+            <strong style={{ color: C.textPrimary }}>How to get your OpenAI API key</strong>
+            <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+              <li style={{ marginBottom: '6px' }}>
+                Go to{' '}
+                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" style={guideLink}>
+                  platform.openai.com/api-keys
+                </a>
+                {' '}(sign up or log in)
+              </li>
+              <li style={{ marginBottom: '6px' }}>Click <strong>Create new secret key</strong> and copy it</li>
+              <li>Paste it in the API Key field above. The key starts with <Code>sk-</Code></li>
+            </ol>
+            <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+              <strong style={{ color: C.accent, fontSize: '11px' }}>Pricing note:</strong>{' '}
+              <span style={{ fontSize: '11px' }}>gpt-4o is ~$2.50/M input tokens. o1 is ~$15/M. Set usage limits at{' '}
+                <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noreferrer" style={guideLink}>
+                  platform.openai.com
+                </a>
+              </span>
+            </div>
+          </GuideBox>
         </div>
       </ProviderCard>
 
@@ -401,7 +515,7 @@ function StepAiProvider({
       <ProviderCard
         id="openai_compat" icon="🖥️" selected={llmProvider === 'openai_compat'}
         title="Local Model"
-        description="Ollama, LM Studio, llama.cpp, or any OpenAI-compatible server running locally."
+        description="Ollama, LM Studio, llama.cpp — run models on your own machine. Free, private, no API key needed."
         onClick={() => setLlmProvider('openai_compat')}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -436,21 +550,103 @@ function StepAiProvider({
               onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
             />
           </div>
-          {/* Model name */}
+          {/* Model name + quick-pick */}
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Model Name
             </label>
             <input
               type="text" value={llmModel} onChange={(e) => setLlmModel(e.target.value)}
-              placeholder={LOCAL_PRESETS.find((p) => p.id === localPreset)?.placeholder ?? 'llama3.2'}
+              placeholder={LOCAL_PRESETS.find((p) => p.id === localPreset)?.placeholder ?? 'llama3.3'}
               style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
               onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
               onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
             />
+            {/* Quick picks */}
+            {LOCAL_MODEL_SUGGESTIONS[localPreset]?.length > 0 && (
+              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px' }}>
+                {LOCAL_MODEL_SUGGESTIONS[localPreset].map((m) => (
+                  <button key={m} onClick={() => setLlmModel(m)} style={{
+                    padding: '2px 7px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer',
+                    border: `1px solid ${llmModel === m ? C.accent : C.border}`,
+                    backgroundColor: llmModel === m ? 'rgba(88,166,255,0.15)' : 'transparent',
+                    color: llmModel === m ? C.accent : C.textMuted,
+                  }}>{m}</button>
+                ))}
+              </div>
+            )}
           </div>
           {/* Test button */}
           <TestConnectionButton status={testStatus} message={testMessage} onTest={handleTest} />
+          {/* Per-preset guide */}
+          {localPreset === 'ollama' && (
+            <GuideBox>
+              <strong style={{ color: C.textPrimary }}>Setting up Ollama</strong>
+              <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li style={{ marginBottom: '6px' }}>
+                  Download Ollama from{' '}
+                  <a href="https://ollama.com/download" target="_blank" rel="noreferrer" style={guideLink}>ollama.com/download</a>
+                  {' '}(macOS, Linux, Windows)
+                </li>
+                <li style={{ marginBottom: '6px' }}>Pull a model:<br /><Code>ollama pull llama3.3</Code></li>
+                <li style={{ marginBottom: '6px' }}>Start the server (runs automatically after install):<br /><Code>ollama serve</Code></li>
+                <li>ThunderFlow connects to <Code>http://localhost:11434/v1</Code> — no API key needed</li>
+              </ol>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+                <strong style={{ color: C.accent, fontSize: '11px' }}>Recommended models:</strong>{' '}
+                <span style={{ fontSize: '11px' }}>llama3.3 (best), deepseek-r1 (reasoning), qwen2.5-coder (coding)</span><br />
+                <span style={{ fontSize: '11px', color: C.textMuted }}>Browse all models: <a href="https://ollama.com/library" target="_blank" rel="noreferrer" style={guideLink}>ollama.com/library</a></span>
+              </div>
+            </GuideBox>
+          )}
+          {localPreset === 'lmstudio' && (
+            <GuideBox>
+              <strong style={{ color: C.textPrimary }}>Setting up LM Studio</strong>
+              <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li style={{ marginBottom: '6px' }}>
+                  Download from{' '}
+                  <a href="https://lmstudio.ai" target="_blank" rel="noreferrer" style={guideLink}>lmstudio.ai</a>
+                </li>
+                <li style={{ marginBottom: '6px' }}>In LM Studio, go to the <strong>Discover</strong> tab and download a model</li>
+                <li style={{ marginBottom: '6px' }}>Go to <strong>Local Server</strong> tab → Start Server</li>
+                <li>ThunderFlow connects to <Code>http://localhost:1234/v1</Code></li>
+              </ol>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+                <strong style={{ color: C.accent, fontSize: '11px' }}>Recommended models:</strong>{' '}
+                <span style={{ fontSize: '11px' }}>llama-3.3-70b-instruct, deepseek-r1-distill-llama-70b, qwen2.5-coder-32b</span>
+              </div>
+            </GuideBox>
+          )}
+          {localPreset === 'llamacpp' && (
+            <GuideBox>
+              <strong style={{ color: C.textPrimary }}>Setting up llama.cpp server</strong>
+              <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li style={{ marginBottom: '6px' }}>
+                  Get llama.cpp from{' '}
+                  <a href="https://github.com/ggerganov/llama.cpp" target="_blank" rel="noreferrer" style={guideLink}>github.com/ggerganov/llama.cpp</a>
+                </li>
+                <li style={{ marginBottom: '6px' }}>Build it: <Code>make</Code></li>
+                <li style={{ marginBottom: '6px' }}>Download a GGUF model from{' '}
+                  <a href="https://huggingface.co/models?library=gguf" target="_blank" rel="noreferrer" style={guideLink}>HuggingFace</a>
+                </li>
+                <li>Start the server:<br /><Code>./llama-server -m model.gguf --port 8080</Code></li>
+              </ol>
+            </GuideBox>
+          )}
+          {localPreset === 'custom' && (
+            <GuideBox>
+              <strong style={{ color: C.textPrimary }}>Custom OpenAI-compatible server</strong>
+              <p style={{ margin: '6px 0 0' }}>
+                Any server that implements the OpenAI chat completions API (<Code>/v1/chat/completions</Code>) will work.
+              </p>
+              <p style={{ margin: '6px 0 0' }}>
+                Examples: vLLM, text-generation-webui (with --api), LocalAI, Nitro, Kobold.cpp with OpenAI extension.
+              </p>
+              <p style={{ margin: '6px 0 0', fontSize: '11px', color: C.textMuted }}>
+                Set the Base URL to your server's address and the Model Name to the model identifier the server expects.
+              </p>
+            </GuideBox>
+          )}
         </div>
       </ProviderCard>
 
@@ -1117,7 +1313,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [llmProvider, setLlmProvider] = useState<LlmProvider>('anthropic');
   const [localPreset, setLocalPreset] = useState<LocalPreset>('ollama');
   const [llmBaseUrl, setLlmBaseUrl] = useState('http://localhost:11434/v1');
-  const [llmModel, setLlmModel] = useState('llama3.2');
+  const [llmModel, setLlmModel] = useState('llama3.3');
   const [llmApiKey, setLlmApiKey] = useState('ollama');
   const [openaiModelPreset, setOpenaiModelPreset] = useState('gpt-4o');
   const [proxyEnabled, setProxyEnabled] = useState(false);
@@ -1166,11 +1362,15 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setSubmitting(true);
     setSubmitError(null);
 
-    // Save Telegram credentials if provided
+    // Save Telegram credentials if provided; clear any stale values if skipped
     if (telegramBotToken && telegramChatId) {
       localStorage.setItem('thunderflow_telegram_token', telegramBotToken);
       localStorage.setItem('thunderflow_telegram_chatid', telegramChatId);
       localStorage.setItem('thunderflow_telegram_configured', 'true');
+    } else {
+      localStorage.removeItem('thunderflow_telegram_token');
+      localStorage.removeItem('thunderflow_telegram_chatid');
+      localStorage.removeItem('thunderflow_telegram_configured');
     }
 
     // Resolve the effective model for OpenAI (custom vs preset)
