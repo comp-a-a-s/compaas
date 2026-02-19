@@ -78,7 +78,7 @@ const THEMES = [
   { id: 'midnight', label: 'Midnight', description: 'Deep dark — easy on the eyes', preview: ['#0d1117', '#161b22', '#e6edf3'] },
   { id: 'twilight', label: 'Twilight', description: 'Softer dark with blue tones', preview: ['#0f1923', '#1a2332', '#d0d8e4'] },
   { id: 'dawn', label: 'Dawn', description: 'Light mode — clean and bright', preview: ['#ffffff', '#f6f8fa', '#24292f'] },
-  { id: 'claude', label: 'Claude', description: 'Warm terracotta — Claude brand colors', preview: ['#1a1715', '#2d2924', '#d97757'] },
+  { id: 'sahara', label: 'Sahara', description: 'Warm desert sand — soft on eyes', preview: ['#1a1715', '#2d2924', '#d97757'] },
 ];
 
 // ---- Colours (CSS variables only) ----
@@ -228,22 +228,35 @@ function StepWelcome() {
 // ---- AI Provider presets ----
 
 type LlmProvider = 'anthropic' | 'openai' | 'openai_compat';
-type LocalPreset  = 'ollama' | 'lmstudio' | 'llamacpp' | 'custom';
+type AnthropicMode = 'cli' | 'apikey';
+type OpenaiMode    = 'apikey' | 'codex';
+type LocalPreset   = 'ollama' | 'lmstudio' | 'llamacpp' | 'jan' | 'vllm' | 'custom';
 
 const LOCAL_PRESETS: { id: LocalPreset; label: string; baseUrl: string; apiKey: string; placeholder: string }[] = [
   { id: 'ollama',    label: 'Ollama',    baseUrl: 'http://localhost:11434/v1', apiKey: 'ollama',    placeholder: 'llama3.3' },
   { id: 'lmstudio', label: 'LM Studio', baseUrl: 'http://localhost:1234/v1',  apiKey: 'lm-studio', placeholder: 'llama-3.3-70b-instruct' },
   { id: 'llamacpp',  label: 'llama.cpp', baseUrl: 'http://localhost:8080/v1',  apiKey: 'none',      placeholder: 'default' },
+  { id: 'jan',       label: 'Jan',       baseUrl: 'http://localhost:1337/v1',  apiKey: 'jan',       placeholder: 'llama3.3-70b-instruct' },
+  { id: 'vllm',      label: 'vLLM',      baseUrl: 'http://localhost:8000/v1',  apiKey: 'vllm',      placeholder: 'meta-llama/Llama-3.3-70B-Instruct' },
   { id: 'custom',   label: 'Custom',    baseUrl: '',                          apiKey: '',          placeholder: 'my-model' },
 ];
 
 // Current recommended models as of 2025
-const OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'o1', 'custom'];
+const ANTHROPIC_MODELS = [
+  { id: 'claude-opus-4-6',          label: 'Opus 4.6 ★',     note: 'Most capable — complex tasks' },
+  { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5',  note: 'Balanced speed & quality' },
+  { id: 'claude-haiku-4-5-20251001',  label: 'Haiku 4.5',   note: 'Fastest & lowest cost' },
+  { id: 'custom',                    label: 'Custom',        note: '' },
+];
+
+const OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'o1', 'o1-mini', 'custom'];
 
 const LOCAL_MODEL_SUGGESTIONS: Record<LocalPreset, string[]> = {
-  ollama:    ['llama3.3', 'llama3.2', 'deepseek-r1', 'qwen2.5-coder', 'mistral', 'gemma3'],
-  lmstudio:  ['llama-3.3-70b-instruct', 'deepseek-r1-distill-llama-70b', 'qwen2.5-coder-32b'],
-  llamacpp:  ['llama-3.3-70b', 'mistral-7b', 'deepseek-coder'],
+  ollama:    ['llama3.3', 'llama3.2', 'deepseek-r1', 'qwen2.5-coder', 'mistral', 'gemma3', 'phi4'],
+  lmstudio:  ['llama-3.3-70b-instruct', 'deepseek-r1-distill-llama-70b', 'qwen2.5-coder-32b', 'gemma-3-27b-it'],
+  llamacpp:  ['llama-3.3-70b', 'mistral-7b', 'deepseek-coder', 'qwen2.5-7b'],
+  jan:       ['llama3.3-70b-instruct', 'mistral-7b-instruct', 'qwen2.5-coder-7b'],
+  vllm:      ['meta-llama/Llama-3.3-70B-Instruct', 'Qwen/Qwen2.5-Coder-32B-Instruct', 'mistralai/Mistral-7B-Instruct-v0.3'],
   custom:    [],
 };
 
@@ -298,8 +311,29 @@ function Code({ children }: { children: string }) {
   );
 }
 
+// Sub-tab selector used inside provider cards
+function SubTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      style={{
+        padding: '4px 12px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+        border: `1px solid ${active ? C.accent : C.border}`,
+        backgroundColor: active ? 'rgba(88,166,255,0.15)' : C.surface,
+        color: active ? C.accent : C.textSecondary,
+        transition: 'all 0.15s',
+        fontWeight: active ? 600 : 400,
+      }}
+    >{label}</button>
+  );
+}
+
 function StepAiProvider({
   llmProvider, setLlmProvider,
+  anthropicMode, setAnthropicMode,
+  anthropicApiKey, setAnthropicApiKey,
+  anthropicModelPreset, setAnthropicModelPreset,
+  openaiMode, setOpenaiMode,
   localPreset, setLocalPreset,
   llmBaseUrl, setLlmBaseUrl,
   llmModel, setLlmModel,
@@ -308,14 +342,18 @@ function StepAiProvider({
   proxyEnabled, setProxyEnabled,
   proxyUrl, setProxyUrl,
 }: {
-  llmProvider: LlmProvider;            setLlmProvider: (v: LlmProvider) => void;
-  localPreset: LocalPreset;            setLocalPreset: (v: LocalPreset) => void;
-  llmBaseUrl: string;                  setLlmBaseUrl: (v: string) => void;
-  llmModel: string;                    setLlmModel: (v: string) => void;
-  llmApiKey: string;                   setLlmApiKey: (v: string) => void;
-  openaiModelPreset: string;           setOpenaiModelPreset: (v: string) => void;
-  proxyEnabled: boolean;               setProxyEnabled: (v: boolean) => void;
-  proxyUrl: string;                    setProxyUrl: (v: string) => void;
+  llmProvider: LlmProvider;              setLlmProvider: (v: LlmProvider) => void;
+  anthropicMode: AnthropicMode;          setAnthropicMode: (v: AnthropicMode) => void;
+  anthropicApiKey: string;               setAnthropicApiKey: (v: string) => void;
+  anthropicModelPreset: string;          setAnthropicModelPreset: (v: string) => void;
+  openaiMode: OpenaiMode;                setOpenaiMode: (v: OpenaiMode) => void;
+  localPreset: LocalPreset;              setLocalPreset: (v: LocalPreset) => void;
+  llmBaseUrl: string;                    setLlmBaseUrl: (v: string) => void;
+  llmModel: string;                      setLlmModel: (v: string) => void;
+  llmApiKey: string;                     setLlmApiKey: (v: string) => void;
+  openaiModelPreset: string;             setOpenaiModelPreset: (v: string) => void;
+  proxyEnabled: boolean;                 setProxyEnabled: (v: boolean) => void;
+  proxyUrl: string;                      setProxyUrl: (v: string) => void;
 }) {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
@@ -335,10 +373,22 @@ function StepAiProvider({
     if (m !== 'custom') setLlmModel(m);
   };
 
+  // Resolve test connection params based on current selection
+  const getTestParams = () => {
+    if (llmProvider === 'anthropic' && anthropicMode === 'apikey') {
+      return { base_url: 'https://api.anthropic.com/v1', model: anthropicModelPreset === 'custom' ? llmModel : anthropicModelPreset, api_key: anthropicApiKey };
+    }
+    if (llmProvider === 'openai') {
+      return { base_url: 'https://api.openai.com/v1', model: openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel, api_key: llmApiKey };
+    }
+    return { base_url: llmBaseUrl, model: llmModel, api_key: llmApiKey };
+  };
+
   const handleTest = async () => {
     setTestStatus('testing');
     setTestMessage('');
-    const result = await testLlmConnection({ base_url: llmBaseUrl, model: llmModel, api_key: llmApiKey });
+    const params = getTestParams();
+    const result = await testLlmConnection(params);
     setTestStatus(result.status);
     setTestMessage(result.message);
   };
@@ -395,51 +445,149 @@ function StepAiProvider({
         Choose how your AI agents communicate. You can change this later in Settings.
       </p>
 
-      {/* Anthropic */}
+      {/* ── Anthropic ── */}
       <ProviderCard
         id="anthropic" icon="⚡" selected={llmProvider === 'anthropic'}
-        title="Anthropic Cloud (Recommended)"
-        description="Claude Opus 4 / Sonnet 4 / Haiku 4.5 — best reasoning and tool use. Uses the Claude Code CLI."
+        title="Anthropic (Recommended)"
+        description="Claude Opus 4 / Sonnet 4 / Haiku 4.5 — world's best reasoning and tool-use. Via CLI or direct API key."
         onClick={() => setLlmProvider('anthropic')}
       >
-        <GuideBox>
-          <strong style={{ color: C.textPrimary }}>Requirements</strong>
-          <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
-            <li style={{ marginBottom: '6px' }}>
-              <strong>Install Claude Code CLI</strong><br />
-              <Code>npm install -g @anthropic-ai/claude-code</Code>
-            </li>
-            <li style={{ marginBottom: '6px' }}>
-              <strong>Set your API key</strong><br />
-              Get one at{' '}
-              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={guideLink}>
-                console.anthropic.com/settings/keys
-              </a>
-              , then:<br />
-              <Code>export ANTHROPIC_API_KEY=sk-ant-...</Code><br />
-              <span style={{ fontSize: '11px', color: C.textMuted }}>Add this to your shell profile (~/.bashrc or ~/.zshrc) so it persists.</span>
-            </li>
-            <li>
-              <strong>Verify install</strong><br />
-              <Code>claude --version</Code>
-            </li>
-          </ol>
-          <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
-            <strong style={{ color: C.accent, fontSize: '11px' }}>Recommended models:</strong>{' '}
-            <span style={{ fontSize: '11px' }}>claude-opus-4-6 (most capable), claude-sonnet-4-5 (balanced), claude-haiku-4-5 (fastest)</span>
+        {/* Sub-mode tabs */}
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+          <SubTab label="Claude Code CLI" active={anthropicMode === 'cli'} onClick={() => setAnthropicMode('cli')} />
+          <SubTab label="API Key (direct)" active={anthropicMode === 'apikey'} onClick={() => setAnthropicMode('apikey')} />
+        </div>
+
+        {/* Model picker — shared across both modes */}
+        <div style={{ marginBottom: '12px' }}>
+          <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Model
+          </label>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '4px' }}>
+            {ANTHROPIC_MODELS.map((m) => (
+              <button key={m.id} onClick={() => setAnthropicModelPreset(m.id)} style={{
+                padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+                border: `1px solid ${anthropicModelPreset === m.id ? C.accent : C.border}`,
+                backgroundColor: anthropicModelPreset === m.id ? 'rgba(88,166,255,0.15)' : C.surface,
+                color: anthropicModelPreset === m.id ? C.accent : C.textSecondary,
+              }}>{m.label}</button>
+            ))}
           </div>
-        </GuideBox>
+          {anthropicModelPreset === 'custom' && (
+            <input
+              type="text" value={llmModel} onChange={(e) => setLlmModel(e.target.value)}
+              placeholder="e.g. claude-opus-4-6"
+              style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          )}
+          <p style={{ fontSize: '10px', color: C.textMuted, margin: '4px 0 0' }}>
+            ★ Opus 4.6 — most capable. Sonnet 4.5 — balanced. Haiku 4.5 — fastest &amp; cheapest.
+          </p>
+        </div>
+
+        {/* CLI mode */}
+        {anthropicMode === 'cli' && (
+          <GuideBox>
+            <strong style={{ color: C.textPrimary }}>Setting up Claude Code CLI</strong>
+            <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+              <li style={{ marginBottom: '6px' }}>
+                <strong>Install Node.js 18+</strong> if not already installed:<br />
+                <a href="https://nodejs.org" target="_blank" rel="noreferrer" style={guideLink}>nodejs.org</a>
+                {' '}— download the LTS installer for your OS
+              </li>
+              <li style={{ marginBottom: '6px' }}>
+                <strong>Install Claude Code globally:</strong><br />
+                <Code>npm install -g @anthropic-ai/claude-code</Code>
+              </li>
+              <li style={{ marginBottom: '6px' }}>
+                <strong>Get your Anthropic API key</strong> at{' '}
+                <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={guideLink}>
+                  console.anthropic.com/settings/keys
+                </a>
+                {' '}→ sign up → <em>Create Key</em>
+              </li>
+              <li style={{ marginBottom: '6px' }}>
+                <strong>Set the key in your shell:</strong><br />
+                <Code>export ANTHROPIC_API_KEY=sk-ant-api03-...</Code><br />
+                <span style={{ fontSize: '11px', color: C.textMuted }}>Add to ~/.bashrc or ~/.zshrc so it persists across terminals.</span>
+              </li>
+              <li>
+                <strong>Verify the install:</strong><br />
+                <Code>claude --version</Code><br />
+                <span style={{ fontSize: '11px', color: C.textMuted }}>Should print a version like "1.x.x"</span>
+              </li>
+            </ol>
+            <div style={{ marginTop: '10px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+              <strong style={{ color: C.accent, fontSize: '11px' }}>Why CLI?</strong>{' '}
+              <span style={{ fontSize: '11px' }}>The CLI handles auth, tool use, and streaming with built-in retries. No API key management needed in ThunderFlow — the CLI handles it.</span>
+            </div>
+          </GuideBox>
+        )}
+
+        {/* API key mode */}
+        {anthropicMode === 'apikey' && (
+          <>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Anthropic API Key
+              </label>
+              <input
+                type="password" value={anthropicApiKey} onChange={(e) => setAnthropicApiKey(e.target.value)}
+                placeholder="sk-ant-api03-..."
+                style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              />
+              <p style={{ fontSize: '10px', color: C.textMuted, margin: '4px 0 0' }}>
+                Your key is stored locally and sent only to Anthropic's API.
+              </p>
+            </div>
+            <TestConnectionButton status={testStatus} message={testMessage} onTest={handleTest} />
+            <GuideBox>
+              <strong style={{ color: C.textPrimary }}>How to get your Anthropic API key</strong>
+              <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li style={{ marginBottom: '6px' }}>
+                  Go to{' '}
+                  <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={guideLink}>console.anthropic.com</a>
+                  {' '}and create a free account (credit card required for paid tier)
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  Navigate to <strong>Settings → API Keys</strong> → click <strong>Create Key</strong>
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  Copy the key — it starts with <Code>sk-ant-api03-</Code>
+                </li>
+                <li>Paste it above. ThunderFlow sends it directly to <Code>api.anthropic.com</Code></li>
+              </ol>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+                <strong style={{ color: C.accent, fontSize: '11px' }}>Pricing:</strong>{' '}
+                <span style={{ fontSize: '11px' }}>Opus 4.6 ~$15/M input tokens. Sonnet 4.5 ~$3/M. Haiku 4.5 ~$0.80/M.{' '}
+                  Set limits at{' '}
+                  <a href="https://console.anthropic.com/settings/limits" target="_blank" rel="noreferrer" style={guideLink}>console.anthropic.com/settings/limits</a>
+                </span>
+              </div>
+            </GuideBox>
+          </>
+        )}
       </ProviderCard>
 
-      {/* OpenAI */}
+      {/* ── OpenAI ── */}
       <ProviderCard
         id="openai" icon="🤖" selected={llmProvider === 'openai'}
         title="OpenAI"
-        description="GPT-4o, o3-mini, o1 — cloud models via OpenAI API. Requires an API key."
+        description="GPT-4o, o3-mini, o1 — cloud models. Works via API key or the Codex CLI."
         onClick={() => setLlmProvider('openai')}
       >
+        {/* Sub-mode tabs */}
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+          <SubTab label="API Key" active={openaiMode === 'apikey'} onClick={() => setOpenaiMode('apikey')} />
+          <SubTab label="Codex CLI" active={openaiMode === 'codex'} onClick={() => setOpenaiMode('codex')} />
+        </div>
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {/* Model preset */}
+          {/* Model picker — shown for both modes */}
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Model
@@ -466,14 +614,14 @@ function StepAiProvider({
               />
             )}
             <p style={{ fontSize: '10px', color: C.textMuted, margin: '4px 0 0' }}>
-              ★ gpt-4o is recommended — best balance of speed, cost, and quality.
-              o3-mini / o1 offer stronger reasoning at higher cost.
+              ★ gpt-4o — best balance of speed &amp; cost. o3-mini / o1 — stronger reasoning.
             </p>
           </div>
-          {/* API key */}
+
+          {/* API key — shown for both modes (Codex CLI also needs OPENAI_API_KEY) */}
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              API Key
+              OpenAI API Key
             </label>
             <input
               type="password" value={llmApiKey} onChange={(e) => setLlmApiKey(e.target.value)}
@@ -483,39 +631,78 @@ function StepAiProvider({
               onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
             />
           </div>
-          {/* Test button */}
+
           <TestConnectionButton status={testStatus} message={testMessage} onTest={handleTest} />
-          {/* Guide */}
-          <GuideBox>
-            <strong style={{ color: C.textPrimary }}>How to get your OpenAI API key</strong>
-            <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
-              <li style={{ marginBottom: '6px' }}>
-                Go to{' '}
-                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" style={guideLink}>
-                  platform.openai.com/api-keys
-                </a>
-                {' '}(sign up or log in)
-              </li>
-              <li style={{ marginBottom: '6px' }}>Click <strong>Create new secret key</strong> and copy it</li>
-              <li>Paste it in the API Key field above. The key starts with <Code>sk-</Code></li>
-            </ol>
-            <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
-              <strong style={{ color: C.accent, fontSize: '11px' }}>Pricing note:</strong>{' '}
-              <span style={{ fontSize: '11px' }}>gpt-4o is ~$2.50/M input tokens. o1 is ~$15/M. Set usage limits at{' '}
-                <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noreferrer" style={guideLink}>
-                  platform.openai.com
-                </a>
-              </span>
-            </div>
-          </GuideBox>
+
+          {/* API Key guide */}
+          {openaiMode === 'apikey' && (
+            <GuideBox>
+              <strong style={{ color: C.textPrimary }}>Getting your OpenAI API key</strong>
+              <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li style={{ marginBottom: '6px' }}>
+                  Create an account at{' '}
+                  <a href="https://platform.openai.com" target="_blank" rel="noreferrer" style={guideLink}>platform.openai.com</a>
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  Go to <strong>Dashboard → API Keys</strong> → <strong>Create new secret key</strong>
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  Copy the key (starts with <Code>sk-</Code>) and paste it above
+                </li>
+                <li>
+                  Optional — add a spending limit at{' '}
+                  <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noreferrer" style={guideLink}>
+                    platform.openai.com/settings/organization/limits
+                  </a>
+                </li>
+              </ol>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+                <strong style={{ color: C.accent, fontSize: '11px' }}>Pricing:</strong>{' '}
+                <span style={{ fontSize: '11px' }}>gpt-4o ~$2.50/M input. o3-mini ~$1.10/M. o1 ~$15/M.</span>
+              </div>
+            </GuideBox>
+          )}
+
+          {/* Codex CLI guide */}
+          {openaiMode === 'codex' && (
+            <GuideBox>
+              <strong style={{ color: C.textPrimary }}>Setting up OpenAI Codex CLI</strong>
+              <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li style={{ marginBottom: '6px' }}>
+                  <strong>Install Node.js 18+</strong> from{' '}
+                  <a href="https://nodejs.org" target="_blank" rel="noreferrer" style={guideLink}>nodejs.org</a>
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  <strong>Install the Codex CLI:</strong><br />
+                  <Code>npm install -g @openai/codex</Code>
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  <strong>Set your OpenAI API key in your shell</strong> (Codex CLI reads it automatically):<br />
+                  <Code>export OPENAI_API_KEY=sk-...</Code><br />
+                  <span style={{ fontSize: '11px', color: C.textMuted }}>Add to ~/.bashrc or ~/.zshrc to persist.</span>
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  <strong>Verify install:</strong><br />
+                  <Code>codex --version</Code>
+                </li>
+                <li>
+                  <strong>Also paste the same key above</strong> — ThunderFlow uses it for direct API calls in addition to the CLI.
+                </li>
+              </ol>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+                <strong style={{ color: C.accent, fontSize: '11px' }}>About Codex CLI:</strong>{' '}
+                <span style={{ fontSize: '11px' }}>OpenAI's terminal coding agent. Same API key as above — the CLI handles tool execution locally while ThunderFlow coordinates the agents via API.</span>
+              </div>
+            </GuideBox>
+          )}
         </div>
       </ProviderCard>
 
-      {/* Local Model */}
+      {/* ── Local Model ── */}
       <ProviderCard
         id="openai_compat" icon="🖥️" selected={llmProvider === 'openai_compat'}
-        title="Local Model"
-        description="Ollama, LM Studio, llama.cpp — run models on your own machine. Free, private, no API key needed."
+        title="Local / Self-Hosted"
+        description="Ollama, LM Studio, llama.cpp, Jan, vLLM — run models on your own machine. Free, private, no cloud."
         onClick={() => setLlmProvider('openai_compat')}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -633,6 +820,60 @@ function StepAiProvider({
               </ol>
             </GuideBox>
           )}
+          {localPreset === 'jan' && (
+            <GuideBox>
+              <strong style={{ color: C.textPrimary }}>Setting up Jan</strong>
+              <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li style={{ marginBottom: '6px' }}>
+                  Download Jan from{' '}
+                  <a href="https://jan.ai" target="_blank" rel="noreferrer" style={guideLink}>jan.ai</a>
+                  {' '}(macOS, Linux, Windows)
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  Open Jan → go to the <strong>Hub</strong> tab → download a model
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  Go to <strong>Settings → Advanced</strong> → enable <strong>API Server</strong>
+                </li>
+                <li>ThunderFlow connects to <Code>http://localhost:1337/v1</Code></li>
+              </ol>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+                <strong style={{ color: C.accent, fontSize: '11px' }}>Note:</strong>{' '}
+                <span style={{ fontSize: '11px' }}>Jan is a great desktop-first alternative to LM Studio with a clean UI and one-click model downloads.</span>
+              </div>
+            </GuideBox>
+          )}
+          {localPreset === 'vllm' && (
+            <GuideBox>
+              <strong style={{ color: C.textPrimary }}>Setting up vLLM (GPU server)</strong>
+              <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li style={{ marginBottom: '6px' }}>
+                  <strong>Requires Python 3.9+ and CUDA GPU (NVIDIA)</strong>
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  Install vLLM:<br />
+                  <Code>pip install vllm</Code>
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  (Optional) Set HuggingFace token for gated models:<br />
+                  <Code>export HF_TOKEN=hf_...</Code>
+                </li>
+                <li style={{ marginBottom: '6px' }}>
+                  Start the server with your chosen model:<br />
+                  <Code>vllm serve meta-llama/Llama-3.3-70B-Instruct --port 8000</Code>
+                </li>
+                <li>
+                  ThunderFlow connects to <Code>http://localhost:8000/v1</Code>
+                </li>
+              </ol>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+                <strong style={{ color: C.accent, fontSize: '11px' }}>Best for:</strong>{' '}
+                <span style={{ fontSize: '11px' }}>High-throughput production deployments with NVIDIA GPU. Supports continuous batching and 70B+ models with multi-GPU. Browse models at{' '}
+                  <a href="https://huggingface.co/models" target="_blank" rel="noreferrer" style={guideLink}>huggingface.co/models</a>
+                </span>
+              </div>
+            </GuideBox>
+          )}
           {localPreset === 'custom' && (
             <GuideBox>
               <strong style={{ color: C.textPrimary }}>Custom OpenAI-compatible server</strong>
@@ -640,10 +881,17 @@ function StepAiProvider({
                 Any server that implements the OpenAI chat completions API (<Code>/v1/chat/completions</Code>) will work.
               </p>
               <p style={{ margin: '6px 0 0' }}>
-                Examples: vLLM, text-generation-webui (with --api), LocalAI, Nitro, Kobold.cpp with OpenAI extension.
+                <strong style={{ color: C.textPrimary }}>Compatible servers:</strong>
               </p>
-              <p style={{ margin: '6px 0 0', fontSize: '11px', color: C.textMuted }}>
-                Set the Base URL to your server's address and the Model Name to the model identifier the server expects.
+              <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                <li style={{ marginBottom: '3px' }}><strong>text-generation-webui</strong> — run with <Code>--api</Code> flag</li>
+                <li style={{ marginBottom: '3px' }}><strong>LocalAI</strong> — drop-in local API server, no GPU required</li>
+                <li style={{ marginBottom: '3px' }}><strong>Kobold.cpp</strong> — with OpenAI extension enabled</li>
+                <li style={{ marginBottom: '3px' }}><strong>Nitro</strong> — compact inference server by Jan team</li>
+                <li><strong>TabbyAPI</strong> — ExLlamaV2-based server for quantized models</li>
+              </ul>
+              <p style={{ margin: '8px 0 0', fontSize: '11px', color: C.textMuted }}>
+                Set Base URL to your server's endpoint and Model Name to the identifier the server expects.
               </p>
             </GuideBox>
           )}
@@ -1209,6 +1457,10 @@ function StepComplete({
   telegramChatId,
   llmProvider,
   llmModel,
+  anthropicMode,
+  anthropicModelPreset,
+  openaiMode,
+  openaiModelPreset,
 }: {
   userName: string;
   agentNames: Record<string, string>;
@@ -1219,6 +1471,10 @@ function StepComplete({
   telegramChatId: string;
   llmProvider: LlmProvider;
   llmModel: string;
+  anthropicMode: AnthropicMode;
+  anthropicModelPreset: string;
+  openaiMode: OpenaiMode;
+  openaiModelPreset: string;
 }) {
   const { currentTheme } = useThemeSwitch();
   const pollLabel = POLL_INTERVAL_OPTIONS.find((o) => o.value === pollInterval)?.label ?? `${pollInterval}ms`;
@@ -1226,9 +1482,11 @@ function StepComplete({
   const telegramConfigured = telegramBotToken && telegramChatId;
 
   const providerLabel =
-    llmProvider === 'anthropic'     ? 'Anthropic Cloud (Claude)' :
-    llmProvider === 'openai'        ? `OpenAI (${llmModel})` :
-                                      `Local Model (${llmModel})`;
+    llmProvider === 'anthropic' && anthropicMode === 'cli'    ? `Anthropic — Claude CLI (${anthropicModelPreset})` :
+    llmProvider === 'anthropic' && anthropicMode === 'apikey' ? `Anthropic — API Key (${anthropicModelPreset})` :
+    llmProvider === 'openai'    && openaiMode === 'codex'     ? `OpenAI — Codex CLI (${openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel})` :
+    llmProvider === 'openai'                                  ? `OpenAI — API Key (${openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel})` :
+                                                                `Local Model (${llmModel})`;
 
   const rows = [
     { label: 'AI Provider', value: providerLabel },
@@ -1311,6 +1569,13 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
   // Step 2 — AI Provider
   const [llmProvider, setLlmProvider] = useState<LlmProvider>('anthropic');
+  // Anthropic sub-options
+  const [anthropicMode, setAnthropicMode] = useState<AnthropicMode>('cli');
+  const [anthropicApiKey, setAnthropicApiKey] = useState('');
+  const [anthropicModelPreset, setAnthropicModelPreset] = useState('claude-opus-4-6');
+  // OpenAI sub-options
+  const [openaiMode, setOpenaiMode] = useState<OpenaiMode>('apikey');
+  // Local / shared
   const [localPreset, setLocalPreset] = useState<LocalPreset>('ollama');
   const [llmBaseUrl, setLlmBaseUrl] = useState('http://localhost:11434/v1');
   const [llmModel, setLlmModel] = useState('llama3.3');
@@ -1373,17 +1638,26 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       localStorage.removeItem('thunderflow_telegram_configured');
     }
 
-    // Resolve the effective model for OpenAI (custom vs preset)
-    const resolvedModel =
-      llmProvider === 'openai' && openaiModelPreset !== 'custom'
-        ? openaiModelPreset
-        : llmModel;
+    // Resolve model, base_url, and api_key based on provider + sub-mode
+    let resolvedModel = llmModel;
+    let resolvedBaseUrl = llmBaseUrl;
+    let resolvedApiKey = llmApiKey;
+
+    if (llmProvider === 'anthropic') {
+      resolvedModel = anthropicModelPreset === 'custom' ? llmModel : anthropicModelPreset;
+      resolvedBaseUrl = 'https://api.anthropic.com/v1';
+      resolvedApiKey = anthropicMode === 'apikey' ? anthropicApiKey : '';
+    } else if (llmProvider === 'openai') {
+      resolvedModel = openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel;
+      resolvedBaseUrl = 'https://api.openai.com/v1';
+      resolvedApiKey = llmApiKey;
+    }
 
     const llmConfig: LlmConfig = {
       provider: llmProvider,
-      base_url: llmProvider === 'openai' ? 'https://api.openai.com/v1' : llmBaseUrl,
+      base_url: resolvedBaseUrl,
       model: resolvedModel,
-      api_key: llmApiKey,
+      api_key: resolvedApiKey,
       system_prompt: '',
       proxy_enabled: llmProvider !== 'anthropic' && proxyEnabled,
       proxy_url: proxyUrl,
@@ -1497,14 +1771,18 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             {step === 1 && <StepWelcome />}
             {step === 2 && (
               <StepAiProvider
-                llmProvider={llmProvider}           setLlmProvider={setLlmProvider}
-                localPreset={localPreset}           setLocalPreset={setLocalPreset}
-                llmBaseUrl={llmBaseUrl}             setLlmBaseUrl={setLlmBaseUrl}
-                llmModel={llmModel}                 setLlmModel={setLlmModel}
-                llmApiKey={llmApiKey}               setLlmApiKey={setLlmApiKey}
+                llmProvider={llmProvider}             setLlmProvider={setLlmProvider}
+                anthropicMode={anthropicMode}         setAnthropicMode={setAnthropicMode}
+                anthropicApiKey={anthropicApiKey}     setAnthropicApiKey={setAnthropicApiKey}
+                anthropicModelPreset={anthropicModelPreset} setAnthropicModelPreset={setAnthropicModelPreset}
+                openaiMode={openaiMode}               setOpenaiMode={setOpenaiMode}
+                localPreset={localPreset}             setLocalPreset={setLocalPreset}
+                llmBaseUrl={llmBaseUrl}               setLlmBaseUrl={setLlmBaseUrl}
+                llmModel={llmModel}                   setLlmModel={setLlmModel}
+                llmApiKey={llmApiKey}                 setLlmApiKey={setLlmApiKey}
                 openaiModelPreset={openaiModelPreset} setOpenaiModelPreset={setOpenaiModelPreset}
-                proxyEnabled={proxyEnabled}         setProxyEnabled={setProxyEnabled}
-                proxyUrl={proxyUrl}                 setProxyUrl={setProxyUrl}
+                proxyEnabled={proxyEnabled}           setProxyEnabled={setProxyEnabled}
+                proxyUrl={proxyUrl}                   setProxyUrl={setProxyUrl}
               />
             )}
             {step === 3 && (
@@ -1548,6 +1826,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 telegramChatId={telegramChatId}
                 llmProvider={llmProvider}
                 llmModel={llmModel}
+                anthropicMode={anthropicMode}
+                anthropicModelPreset={anthropicModelPreset}
+                openaiMode={openaiMode}
+                openaiModelPreset={openaiModelPreset}
               />
             )}
 
