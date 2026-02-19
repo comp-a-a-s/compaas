@@ -168,7 +168,7 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
 
         {/* Navigation */}
         <nav
-          className="flex-1 py-3 overflow-y-auto overflow-x-hidden"
+          className="flex-1 flex flex-col overflow-y-auto overflow-x-hidden"
           style={{ padding: sidebarCollapsed ? '12px 0' : '12px 8px' }}
           role="navigation"
           aria-label="Main navigation"
@@ -354,23 +354,23 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         </main>
       </div>
 
-      {/* Floating CEO Chat */}
-      {chatOpen && (
-        <div
-          className="fixed z-50 flex flex-col"
-          style={{
-            bottom: chatFullscreen ? '5vh' : '80px',
-            right: chatFullscreen ? '2.5vw' : '24px',
-            width: chatFullscreen ? '95vw' : '420px',
-            height: chatFullscreen ? '90vh' : '560px',
-            backgroundColor: 'var(--tf-surface)',
-            border: '1px solid var(--tf-border)',
-            borderRadius: '16px',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-            overflow: 'hidden',
-            transition: 'all 0.25s ease',
-          }}
-        >
+      {/* Floating CEO Chat — always mounted to preserve in-flight state; toggled via display */}
+      <div
+        className="fixed z-50 flex flex-col"
+        style={{
+          display: chatOpen ? 'flex' : 'none',
+          bottom: chatFullscreen ? '5vh' : '80px',
+          right: chatFullscreen ? '2.5vw' : '24px',
+          width: chatFullscreen ? '95vw' : '420px',
+          height: chatFullscreen ? '90vh' : '560px',
+          backgroundColor: 'var(--tf-surface)',
+          border: '1px solid var(--tf-border)',
+          borderRadius: '16px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          overflow: 'hidden',
+          transition: 'all 0.25s ease',
+        }}
+      >
           {/* Chat header with fullscreen + close */}
           <div
             className="flex items-center justify-between px-4 py-3 flex-shrink-0"
@@ -435,7 +435,6 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
             {chatPanel}
           </div>
         </div>
-      )}
 
       {/* Floating chat toggle button — hidden when chat is fullscreen */}
       {!(chatOpen && chatFullscreen) && (
