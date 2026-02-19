@@ -58,6 +58,7 @@ const THEMES = [
   { id: 'midnight', label: 'Midnight', description: 'Deep dark', preview: ['#0d1117', '#161b22', '#e6edf3'] },
   { id: 'twilight', label: 'Twilight', description: 'Soft blue dark', preview: ['#0f1923', '#1a2332', '#d0d8e4'] },
   { id: 'dawn', label: 'Dawn', description: 'Light mode', preview: ['#ffffff', '#f6f8fa', '#24292f'] },
+  { id: 'claude', label: 'Claude', description: 'Warm terracotta', preview: ['#1a1715', '#2d2924', '#d97757'] },
 ];
 
 // ---- Shared input style helper ----

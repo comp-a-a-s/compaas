@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState } from 'react';
 
 const STORAGE_KEY = 'thunderflow_theme';
-const VALID_THEMES = ['midnight', 'twilight', 'dawn'] as const;
+const VALID_THEMES = ['midnight', 'twilight', 'dawn', 'claude'] as const;
 export type ThemeName = (typeof VALID_THEMES)[number];
 
 function getStoredTheme(): ThemeName {

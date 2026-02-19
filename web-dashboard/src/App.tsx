@@ -30,26 +30,143 @@ import type { Agent, Project, Task, ActivityEvent, TokenReport, Budget, AppConfi
 const MAX_EVENTS = 200;
 const POLL_INTERVAL_MS = 5000;
 
+// Agent slug/name → display name for activity tagging (Map for O(1) exact lookups)
+const AGENT_SLUG_MAP = new Map<string, string>([
+  ['chief-researcher', 'Chief Researcher'],
+  ['chief researcher', 'Chief Researcher'],
+  ['vp-engineering', 'VP Engineering'],
+  ['vp engineering', 'VP Engineering'],
+  ['vp-product', 'VP Product'],
+  ['vp product', 'VP Product'],
+  ['lead-backend', 'Lead Backend'],
+  ['lead backend', 'Lead Backend'],
+  ['lead-frontend', 'Lead Frontend'],
+  ['lead frontend', 'Lead Frontend'],
+  ['lead-designer', 'Lead Designer'],
+  ['lead designer', 'Lead Designer'],
+  ['security-engineer', 'Security Engineer'],
+  ['security engineer', 'Security Engineer'],
+  ['data-engineer', 'Data Engineer'],
+  ['data engineer', 'Data Engineer'],
+  ['tech-writer', 'Tech Writer'],
+  ['tech writer', 'Tech Writer'],
+  ['qa-lead', 'QA Lead'],
+  ['qa lead', 'QA Lead'],
+  ['devops', 'DevOps'],
+  ['marcus', 'CEO'],
+  ['elena', 'CTO'],
+  ['victor', 'Chief Researcher'],
+  ['rachel', 'CISO'],
+  ['jonathan', 'CFO'],
+  ['sarah', 'VP Product'],
+  ['david', 'VP Engineering'],
+  ['james', 'Lead Backend'],
+  ['priya', 'Lead Frontend'],
+  ['lena', 'Lead Designer'],
+  ['carlos', 'QA Lead'],
+  ['nina', 'DevOps'],
+  ['alex', 'Security Engineer'],
+  ['maya', 'Data Engineer'],
+  ['tom', 'Tech Writer'],
+  ['ceo', 'CEO'],
+  ['cto', 'CTO'],
+  ['ciso', 'CISO'],
+  ['cfo', 'CFO'],
+]);
+
+// Ordered list for partial-match fallback (longest patterns first to avoid false matches)
+const AGENT_PARTIAL_PATTERNS: [string, string][] = [
+  ['chief-researcher', 'Chief Researcher'],
+  ['vp-engineering', 'VP Engineering'],
+  ['vp-product', 'VP Product'],
+  ['lead-backend', 'Lead Backend'],
+  ['lead-frontend', 'Lead Frontend'],
+  ['lead-designer', 'Lead Designer'],
+  ['security-engineer', 'Security Engineer'],
+  ['data-engineer', 'Data Engineer'],
+  ['tech-writer', 'Tech Writer'],
+  ['qa-lead', 'QA Lead'],
+  ['devops', 'DevOps'],
+  ['marcus', 'CEO'],
+  ['elena', 'CTO'],
+  ['victor', 'Chief Researcher'],
+  ['rachel', 'CISO'],
+  ['jonathan', 'CFO'],
+  ['sarah', 'VP Product'],
+  ['david', 'VP Engineering'],
+  ['james', 'Lead Backend'],
+  ['priya', 'Lead Frontend'],
+  ['carlos', 'QA Lead'],
+  ['nina', 'DevOps'],
+  ['alex', 'Security Engineer'],
+  ['maya', 'Data Engineer'],
+  ['ceo', 'CEO'],
+  ['cto', 'CTO'],
+  ['ciso', 'CISO'],
+  ['cfo', 'CFO'],
+];
+
+function normalizeAgent(raw: string): string {
+  const lower = raw.toLowerCase().trim();
+  // O(1) exact match (handles both slug and space-separated forms)
+  const exact = AGENT_SLUG_MAP.get(lower);
+  if (exact) return exact;
+  // Partial match as fallback (for raw text that contains the agent name)
+  for (const [pattern, name] of AGENT_PARTIAL_PATTERNS) {
+    if (lower.includes(pattern)) return name;
+  }
+  return raw;
+}
+
+function inferActionFromText(lower: string): string {
+  if (lower.includes('error') || lower.includes('failed') || lower.includes('fail')) return 'ERROR';
+  if (lower.includes('completed') || lower.includes('finished') || lower.includes('done')) return 'COMPLETED';
+  if (lower.includes('started') || lower.includes('starting') || lower.includes('begin')) return 'STARTED';
+  if (lower.includes('created') || lower.includes('creating')) return 'CREATED';
+  if (lower.includes('updated') || lower.includes('updating')) return 'UPDATED';
+  if (lower.includes('assigned') || lower.includes('assigning')) return 'ASSIGNED';
+  if (lower.includes('blocked')) return 'BLOCKED';
+  if (lower.includes('review')) return 'REVIEW';
+  if (lower.includes('message') || lower.includes('chat') || lower.includes('respond')) return 'MESSAGE';
+  return 'EVENT';
+}
+
+function inferAgentFromText(lower: string): string {
+  for (const [pattern, name] of AGENT_PARTIAL_PATTERNS) {
+    if (lower.includes(pattern)) return name;
+  }
+  return 'System';
+}
+
+function eventKey(evt: ActivityEvent): string {
+  return `${evt.timestamp}|${evt.agent}|${evt.action}`;
+}
+
 function parseActivityLine(line: string): ActivityEvent | null {
   if (!line || !line.trim()) return null;
   try {
     const parsed = JSON.parse(line) as ActivityEvent;
+    if (parsed.agent) {
+      parsed.agent = normalizeAgent(parsed.agent);
+    }
     return parsed;
   } catch {
-    // Try to parse as a simple text event: "timestamp | agent | action | detail"
+    // Try pipe-delimited: "timestamp | agent | action | detail"
     const parts = line.split('|').map((s) => s.trim());
     if (parts.length >= 3) {
       return {
         timestamp: parts[0] || new Date().toISOString(),
-        agent: parts[1] || 'System',
+        agent: normalizeAgent(parts[1] || 'System'),
         action: parts[2] || 'EVENT',
         detail: parts[3] || line,
       };
     }
+    // Fallback: infer from raw text content
+    const lower = line.toLowerCase();
     return {
       timestamp: new Date().toISOString(),
-      agent: 'System',
-      action: 'EVENT',
+      agent: inferAgentFromText(lower),
+      action: inferActionFromText(lower),
       detail: line,
     };
   }
@@ -61,7 +178,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('overview');
 
   // Config / setup state
-  const [, setConfig] = useState<AppConfig | null>(null);
+  const [config, setConfig] = useState<AppConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(true);
   const [showWizard, setShowWizard] = useState(false);
 
@@ -174,12 +291,14 @@ export default function App() {
     loadProjects();
     loadMetrics();
 
-    // Also seed recent activity
-    fetchRecentActivity(50).then((events) => {
-      if (Array.isArray(events) && events.length > 0) {
+    // Seed recent activity (deduplicated to avoid duplicates with SSE stream)
+    fetchRecentActivity(50).then((fetched) => {
+      if (Array.isArray(fetched) && fetched.length > 0) {
         setActivityEvents((prev) => {
-          const merged = [...events, ...prev];
-          return merged.slice(0, MAX_EVENTS);
+          const seen = new Set(prev.map(eventKey));
+          const newEvents = fetched.filter((e) => !seen.has(eventKey(e)));
+          const merged = [...newEvents, ...prev].slice(0, MAX_EVENTS);
+          return merged;
         });
       }
     }).catch(() => {
@@ -206,6 +325,10 @@ export default function App() {
         const event = parseActivityLine(line);
         if (!event) return;
         setActivityEvents((prev) => {
+          // Deduplicate: skip if identical event already present in last 10 entries
+          const key = eventKey(event);
+          const tail = prev.slice(-10);
+          if (tail.some((e) => eventKey(e) === key)) return prev;
           const next = [...prev, event];
           return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
         });
@@ -331,6 +454,9 @@ export default function App() {
     }
   };
 
+  const ceoName = config?.agents?.['ceo'] || 'CEO';
+  const userName = config?.user?.name || 'You';
+
   return (
     <>
       <Layout
@@ -345,6 +471,7 @@ export default function App() {
           });
         }}
         chatHasUnread={chatHasUnread}
+        ceoName={ceoName}
         chatPanel={
           <ChatPanel
             floating
@@ -352,6 +479,8 @@ export default function App() {
             onNewCeoMessage={() => {
               if (!chatOpen) setChatHasUnread(true);
             }}
+            ceoName={ceoName}
+            userName={userName}
           />
         }
       >
