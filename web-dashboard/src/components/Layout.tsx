@@ -9,6 +9,7 @@ interface LayoutProps {
   onChatToggle: () => void;
   chatPanel?: React.ReactNode;
   chatHasUnread?: boolean;
+  ceoName?: string;
 }
 
 const NAV_ITEMS = [
@@ -59,8 +60,11 @@ const PAGE_LABELS: Record<string, string> = {
   settings: 'Settings',
 };
 
-export default function Layout({ activeTab, onTabChange, children, chatOpen, onChatToggle, chatPanel, chatHasUnread }: LayoutProps) {
+export default function Layout({ activeTab, onTabChange, children, chatOpen, onChatToggle, chatPanel, chatHasUnread, ceoName = 'CEO' }: LayoutProps) {
   const [chatFullscreen, setChatFullscreen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('thunderflow_sidebar_collapsed') === 'true';
+  });
 
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'short',
@@ -76,16 +80,38 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
     onChatToggle();
   };
 
+  const toggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('thunderflow_sidebar_collapsed', String(next));
+      return next;
+    });
+  };
+
   return (
     <div className="flex h-screen overflow-hidden" style={{ backgroundColor: 'var(--tf-bg)', color: 'var(--tf-text)' }}>
       {/* Sidebar */}
       <aside
-        className="flex flex-col flex-shrink-0 w-56"
-        style={{ backgroundColor: 'var(--tf-bg)', borderRight: '1px solid var(--tf-border)' }}
+        className="flex flex-col flex-shrink-0 transition-all duration-200"
+        style={{
+          width: sidebarCollapsed ? '56px' : '224px',
+          backgroundColor: 'var(--tf-bg)',
+          borderRight: '1px solid var(--tf-border)',
+          overflow: 'hidden',
+        }}
       >
         {/* Logo */}
-        <div className="px-4 py-5 flex-shrink-0" style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
-          <div className="flex items-center gap-3">
+        <div
+          className="flex-shrink-0"
+          style={{
+            borderBottom: '1px solid var(--tf-surface-raised)',
+            padding: sidebarCollapsed ? '14px 0' : '20px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: sidebarCollapsed ? 'center' : 'space-between',
+          }}
+        >
+          <div className="flex items-center gap-3" style={{ minWidth: 0 }}>
             {/* Lightning bolt icon */}
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -103,23 +129,77 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
-            <div>
-              <h1 className="text-sm font-bold leading-tight" style={{ color: 'var(--tf-text)' }}>
-                ThunderFlow
-              </h1>
-              <p className="text-xs leading-tight" style={{ color: 'var(--tf-text-muted)' }}>
-                AI Dashboard
-              </p>
-            </div>
+            {!sidebarCollapsed && (
+              <div style={{ minWidth: 0 }}>
+                <h1 className="text-sm font-bold leading-tight" style={{ color: 'var(--tf-text)' }}>
+                  ThunderFlow
+                </h1>
+                <p className="text-xs leading-tight" style={{ color: 'var(--tf-text-muted)' }}>
+                  AI Dashboard
+                </p>
+              </div>
+            )}
           </div>
+          {/* Collapse toggle (only visible when expanded) */}
+          {!sidebarCollapsed && (
+            <button
+              onClick={toggleSidebar}
+              title="Collapse sidebar"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--tf-text-muted)',
+                cursor: 'pointer',
+                padding: '2px',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                flexShrink: 0,
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-muted)'; }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11 19l-7-7 7-7M18 19l-7-7 7-7" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {/* Navigation */}
         <nav
-          className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto"
+          className="flex-1 py-3 overflow-y-auto overflow-x-hidden"
+          style={{ padding: sidebarCollapsed ? '12px 0' : '12px 8px' }}
           role="navigation"
           aria-label="Main navigation"
         >
+          {/* Expand button when collapsed */}
+          {sidebarCollapsed && (
+            <Tooltip content="Expand sidebar" position="right">
+              <button
+                onClick={toggleSidebar}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '8px 0',
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--tf-text-muted)',
+                  cursor: 'pointer',
+                  marginBottom: '4px',
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-muted)'; }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M6 5l7 7-7 7" />
+                </svg>
+              </button>
+            </Tooltip>
+          )}
+
           {NAV_ITEMS.map((item) => {
             const isActive = activeTab === item.id;
             return (
@@ -127,11 +207,15 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                 <button
                   onClick={() => onTabChange(item.id)}
                   aria-current={isActive ? 'page' : undefined}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer text-left"
+                  className="w-full flex items-center rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer"
                   style={{
+                    gap: sidebarCollapsed ? 0 : '12px',
+                    padding: sidebarCollapsed ? '8px 0' : '8px 12px',
+                    justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
                     backgroundColor: isActive ? 'var(--tf-surface-raised)' : 'transparent',
                     color: isActive ? 'var(--tf-accent)' : 'var(--tf-text-secondary)',
-                    borderLeft: isActive ? '2px solid var(--tf-accent)' : '2px solid transparent',
+                    borderLeft: isActive && !sidebarCollapsed ? '2px solid var(--tf-accent)' : '2px solid transparent',
+                    marginBottom: '2px',
                   }}
                   onMouseEnter={(e) => {
                     if (!isActive) {
@@ -156,7 +240,7 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                   >
                     <path strokeLinecap="round" strokeLinejoin="round" d={item.iconPath} />
                   </svg>
-                  {item.label}
+                  {!sidebarCollapsed && item.label}
                 </button>
               </Tooltip>
             );
@@ -165,56 +249,71 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
 
         {/* Status footer */}
         <div
-          className="px-4 py-4 flex-shrink-0"
-          style={{ borderTop: '1px solid var(--tf-surface-raised)' }}
+          className="flex-shrink-0"
+          style={{
+            borderTop: '1px solid var(--tf-surface-raised)',
+            padding: sidebarCollapsed ? '12px 0' : '16px',
+          }}
         >
-          <div className="flex items-center gap-2">
-            <span
-              className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse-dot"
-              style={{ backgroundColor: 'var(--tf-success)' }}
-              aria-hidden="true"
-            />
-            <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-              Live
-            </span>
-            <span className="text-xs ml-auto" style={{ color: 'var(--tf-border)' }}>
-              5s poll
-            </span>
-          </div>
-          {/* Telegram handoff button */}
-          <button
-            onClick={() => {
-              const configured = localStorage.getItem('thunderflow_telegram_configured') === 'true';
-              if (configured) {
-                alert('Session handoff to Telegram initiated. Continue the conversation in your Telegram bot.');
-              } else {
-                onTabChange('settings');
-              }
-            }}
-            title="Continue on Telegram"
-            style={{
-              marginTop: '8px',
-              width: '100%',
-              padding: '6px 8px',
-              borderRadius: '6px',
-              border: '1px solid var(--tf-border)',
-              backgroundColor: 'transparent',
-              color: 'var(--tf-text-secondary)',
-              fontSize: '11px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              transition: 'all 0.2s',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; e.currentTarget.style.color = '#2ca5e0'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--tf-border)'; e.currentTarget.style.color = 'var(--tf-text-secondary)'; }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
-            </svg>
-            Continue on Telegram
-          </button>
+          {sidebarCollapsed ? (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <span
+                className="w-2 h-2 rounded-full animate-pulse-dot"
+                style={{ backgroundColor: 'var(--tf-success)' }}
+                aria-hidden="true"
+              />
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <span
+                  className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse-dot"
+                  style={{ backgroundColor: 'var(--tf-success)' }}
+                  aria-hidden="true"
+                />
+                <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+                  Live
+                </span>
+                <span className="text-xs ml-auto" style={{ color: 'var(--tf-border)' }}>
+                  5s poll
+                </span>
+              </div>
+              {/* Telegram handoff button */}
+              <button
+                onClick={() => {
+                  const configured = localStorage.getItem('thunderflow_telegram_configured') === 'true';
+                  if (configured) {
+                    alert('Session handoff to Telegram initiated. Continue the conversation in your Telegram bot.');
+                  } else {
+                    onTabChange('settings');
+                  }
+                }}
+                title="Continue on Telegram"
+                style={{
+                  marginTop: '8px',
+                  width: '100%',
+                  padding: '6px 8px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--tf-border)',
+                  backgroundColor: 'transparent',
+                  color: 'var(--tf-text-secondary)',
+                  fontSize: '11px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; e.currentTarget.style.color = '#2ca5e0'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--tf-border)'; e.currentTarget.style.color = 'var(--tf-text-secondary)'; }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
+                </svg>
+                Continue on Telegram
+              </button>
+            </>
+          )}
         </div>
       </aside>
 
@@ -282,10 +381,10 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                 className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
                 style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
               >
-                M
+                {ceoName.charAt(0).toUpperCase()}
               </div>
               <span className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>
-                CEO Chat
+                {ceoName} — CEO
               </span>
             </div>
             <div className="flex items-center gap-2">

@@ -113,10 +113,14 @@ function renderMarkdown(text: string): React.ReactNode {
 interface MessageBubbleProps {
   message: ChatMessage;
   isStreaming?: boolean;
+  ceoName?: string;
+  userName?: string;
 }
 
-function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
+function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You' }: MessageBubbleProps) {
   const isUser = message.role === 'user';
+  const ceoInitial = ceoName.charAt(0).toUpperCase();
+  const userInitial = userName.charAt(0).toUpperCase();
 
   return (
     <div
@@ -127,9 +131,9 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         <div
           className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2 mt-1"
           style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
-          title="Marcus (CEO)"
+          title={ceoName}
         >
-          M
+          {ceoInitial}
         </div>
       )}
 
@@ -147,7 +151,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
             className="text-xs font-semibold"
             style={{ color: isUser ? 'var(--tf-accent-blue)' : 'var(--tf-accent)' }}
           >
-            {isUser ? 'You' : 'Marcus (CEO)'}
+            {isUser ? userName : ceoName}
           </span>
           {message.timestamp && (
             <span className="text-xs" style={{ color: 'var(--tf-border)' }}>
@@ -193,9 +197,9 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         <div
           className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ml-2 mt-1"
           style={{ backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}
-          title="You (Idan)"
+          title={userName}
         >
-          I
+          {userInitial}
         </div>
       )}
     </div>
@@ -204,7 +208,7 @@ function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
 
 // ---- Empty state ----
 
-function EmptyState() {
+function EmptyState({ ceoName = 'CEO' }: { ceoName?: string }) {
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-4 py-20">
       <div
@@ -228,10 +232,10 @@ function EmptyState() {
       </div>
       <div className="text-center">
         <p className="text-sm font-medium" style={{ color: 'var(--tf-text)' }}>
-          Chat with Marcus, the CEO
+          Chat with {ceoName}, the CEO
         </p>
         <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-          Send a message to start a conversation. Marcus has full access
+          Send a message to start a conversation. {ceoName} has full access
           to company tools and can manage projects, tasks, and team operations.
         </p>
       </div>
@@ -272,9 +276,11 @@ interface ChatPanelProps {
   floating?: boolean;
   chatOpen?: boolean;
   onNewCeoMessage?: () => void;
+  ceoName?: string;
+  userName?: string;
 }
 
-export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage }: ChatPanelProps) {
+export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage, ceoName = 'CEO', userName = 'You' }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isWaiting, setIsWaiting] = useState(false);
@@ -341,7 +347,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
               break;
 
             case 'thinking':
-              setThinkingContent(data.content || 'Marcus is thinking...');
+              setThinkingContent(data.content || `${ceoName} is thinking...`);
               break;
 
             case 'chunk':
@@ -462,11 +468,11 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
               className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold"
               style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
             >
-              M
+              {ceoName.charAt(0).toUpperCase()}
             </div>
             <div>
               <h3 className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>
-                Marcus — CEO Chat
+                {ceoName} — CEO Chat
               </h3>
               <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
                 AI Virtual Company Orchestrator
@@ -558,13 +564,15 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
         }}
       >
         {!hasMessages ? (
-          <EmptyState />
+          <EmptyState ceoName={ceoName} />
         ) : (
           <>
             {messages.map((msg, i) => (
               <MessageBubble
                 key={`${msg.timestamp}-${msg.role}-${i}`}
                 message={msg}
+                ceoName={ceoName}
+                userName={userName}
               />
             ))}
 
@@ -584,6 +592,8 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
                     timestamp: new Date().toISOString(),
                   }}
                   isStreaming
+                  ceoName={ceoName}
+                  userName={userName}
                 />
               </>
             )}
@@ -602,7 +612,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
                     className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2"
                     style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
                   >
-                    M
+                    {ceoName.charAt(0).toUpperCase()}
                   </div>
                   <div
                     className="rounded-2xl px-4 py-3"
@@ -647,7 +657,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage 
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isWaiting ? 'Waiting for response...' : 'Message Marcus (CEO)...'}
+            placeholder={isWaiting ? 'Waiting for response...' : `Message ${ceoName}...`}
             disabled={isWaiting}
             rows={1}
             className="w-full resize-none px-4 py-3 text-sm outline-none"

@@ -30,26 +30,94 @@ import type { Agent, Project, Task, ActivityEvent, TokenReport, Budget, AppConfi
 const MAX_EVENTS = 200;
 const POLL_INTERVAL_MS = 5000;
 
+// Agent slug/name → display name for activity tagging
+const AGENT_NAME_MAP: [string, string][] = [
+  ['chief-researcher', 'Chief Researcher'],
+  ['vp-engineering', 'VP Engineering'],
+  ['vp-product', 'VP Product'],
+  ['lead-backend', 'Lead Backend'],
+  ['lead-frontend', 'Lead Frontend'],
+  ['lead-designer', 'Lead Designer'],
+  ['security-engineer', 'Security Engineer'],
+  ['data-engineer', 'Data Engineer'],
+  ['tech-writer', 'Tech Writer'],
+  ['qa-lead', 'QA Lead'],
+  ['devops', 'DevOps'],
+  ['marcus', 'CEO'],
+  ['elena', 'CTO'],
+  ['victor', 'Chief Researcher'],
+  ['rachel', 'CISO'],
+  ['jonathan', 'CFO'],
+  ['sarah', 'VP Product'],
+  ['david', 'VP Engineering'],
+  ['james', 'Lead Backend'],
+  ['priya', 'Lead Frontend'],
+  ['lena', 'Lead Designer'],
+  ['carlos', 'QA Lead'],
+  ['nina', 'DevOps'],
+  ['alex', 'Security Engineer'],
+  ['maya', 'Data Engineer'],
+  ['tom', 'Tech Writer'],
+  ['ceo', 'CEO'],
+  ['cto', 'CTO'],
+  ['ciso', 'CISO'],
+  ['cfo', 'CFO'],
+];
+
+function normalizeAgent(raw: string): string {
+  const lower = raw.toLowerCase();
+  for (const [pattern, name] of AGENT_NAME_MAP) {
+    if (lower === pattern || lower.includes(pattern)) return name;
+  }
+  return raw;
+}
+
+function inferActionFromText(lower: string): string {
+  if (lower.includes('error') || lower.includes('failed') || lower.includes('fail')) return 'ERROR';
+  if (lower.includes('completed') || lower.includes('finished') || lower.includes('done')) return 'COMPLETED';
+  if (lower.includes('started') || lower.includes('starting') || lower.includes('begin')) return 'STARTED';
+  if (lower.includes('created') || lower.includes('creating')) return 'CREATED';
+  if (lower.includes('updated') || lower.includes('updating')) return 'UPDATED';
+  if (lower.includes('assigned') || lower.includes('assigning')) return 'ASSIGNED';
+  if (lower.includes('blocked')) return 'BLOCKED';
+  if (lower.includes('review')) return 'REVIEW';
+  if (lower.includes('message') || lower.includes('chat') || lower.includes('respond')) return 'MESSAGE';
+  return 'EVENT';
+}
+
+function inferAgentFromText(lower: string): string {
+  for (const [pattern, name] of AGENT_NAME_MAP) {
+    if (lower.includes(pattern)) return name;
+  }
+  return 'System';
+}
+
 function parseActivityLine(line: string): ActivityEvent | null {
   if (!line || !line.trim()) return null;
   try {
     const parsed = JSON.parse(line) as ActivityEvent;
+    // Normalize agent slug to display name
+    if (parsed.agent) {
+      parsed.agent = normalizeAgent(parsed.agent);
+    }
     return parsed;
   } catch {
-    // Try to parse as a simple text event: "timestamp | agent | action | detail"
+    // Try pipe-delimited: "timestamp | agent | action | detail"
     const parts = line.split('|').map((s) => s.trim());
     if (parts.length >= 3) {
       return {
         timestamp: parts[0] || new Date().toISOString(),
-        agent: parts[1] || 'System',
+        agent: normalizeAgent(parts[1] || 'System'),
         action: parts[2] || 'EVENT',
         detail: parts[3] || line,
       };
     }
+    // Fallback: infer from raw text content
+    const lower = line.toLowerCase();
     return {
       timestamp: new Date().toISOString(),
-      agent: 'System',
-      action: 'EVENT',
+      agent: inferAgentFromText(lower),
+      action: inferActionFromText(lower),
       detail: line,
     };
   }
@@ -61,7 +129,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('overview');
 
   // Config / setup state
-  const [, setConfig] = useState<AppConfig | null>(null);
+  const [config, setConfig] = useState<AppConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(true);
   const [showWizard, setShowWizard] = useState(false);
 
@@ -331,6 +399,9 @@ export default function App() {
     }
   };
 
+  const ceoName = config?.agents?.['ceo'] || 'CEO';
+  const userName = config?.user?.name || 'You';
+
   return (
     <>
       <Layout
@@ -345,6 +416,7 @@ export default function App() {
           });
         }}
         chatHasUnread={chatHasUnread}
+        ceoName={ceoName}
         chatPanel={
           <ChatPanel
             floating
@@ -352,6 +424,8 @@ export default function App() {
             onNewCeoMessage={() => {
               if (!chatOpen) setChatHasUnread(true);
             }}
+            ceoName={ceoName}
+            userName={userName}
           />
         }
       >

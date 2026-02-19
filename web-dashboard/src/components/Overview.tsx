@@ -53,16 +53,32 @@ function modelColor(model: string): string {
   return 'var(--tf-text-secondary)';
 }
 
+// ---- Recent activity helpers ----
+function isAgentRecentlyActive(agentId: string, agentName: string, events: ActivityEvent[]): boolean {
+  const now = Date.now();
+  const WINDOW_MS = 90_000;
+  const idLower = agentId.toLowerCase();
+  const nameLower = agentName.toLowerCase();
+  return events.some((evt) => {
+    if (!evt.timestamp) return false;
+    const evtTime = new Date(evt.timestamp).getTime();
+    if (now - evtTime > WINDOW_MS) return false;
+    const evtAgent = (evt.agent ?? '').toLowerCase();
+    return evtAgent === idLower || evtAgent === nameLower || evtAgent.includes(nameLower);
+  });
+}
+
 // ---- Org hierarchy node ----
 interface OrgNodeProps {
   agent: Agent;
   displayRole?: string;
   onAgentClick?: (agent: Agent) => void;
+  recentlyActive?: boolean;
 }
-function OrgNode({ agent, displayRole, onAgentClick }: OrgNodeProps) {
+function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false }: OrgNodeProps) {
   const color = modelColor(agent.model);
   const initial = agent.name.charAt(0).toUpperCase();
-  const isActive = agent.status === 'active' || agent.status === 'permanent' ||
+  const isActive = recentlyActive || agent.status === 'active' ||
     (agent.recent_activity && agent.recent_activity.length > 0);
 
   return (
@@ -70,10 +86,11 @@ function OrgNode({ agent, displayRole, onAgentClick }: OrgNodeProps) {
       className="flex flex-col items-center gap-1 px-3 py-2 rounded-xl"
       style={{
         backgroundColor: 'var(--tf-surface-raised)',
-        border: '1px solid var(--tf-border)',
+        border: `1px solid ${isActive ? 'var(--tf-success)' : 'var(--tf-border)'}`,
         minWidth: '96px',
         cursor: onAgentClick ? 'pointer' : 'default',
-        transition: 'border-color 0.15s',
+        transition: 'border-color 0.2s, box-shadow 0.2s',
+        boxShadow: isActive ? '0 0 8px rgba(var(--tf-success-rgb, 107,186,92), 0.25)' : 'none',
       }}
       onClick={() => onAgentClick?.(agent)}
       onMouseEnter={(e) => {
@@ -83,7 +100,7 @@ function OrgNode({ agent, displayRole, onAgentClick }: OrgNodeProps) {
       }}
       onMouseLeave={(e) => {
         if (onAgentClick) {
-          (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--tf-border)';
+          (e.currentTarget as HTMLDivElement).style.borderColor = isActive ? 'var(--tf-success)' : 'var(--tf-border)';
         }
       }}
       role={onAgentClick ? 'button' : undefined}
@@ -102,7 +119,7 @@ function OrgNode({ agent, displayRole, onAgentClick }: OrgNodeProps) {
             inset: '-3px',
             borderRadius: '50%',
             border: '2px solid var(--tf-success)',
-            opacity: 0.6,
+            opacity: 0.7,
             animation: 'pulse-ring 2s ease-out infinite',
           }} />
         )}
@@ -267,9 +284,10 @@ interface TreeNodeProps {
   node: OrgTreeNode;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
+  events: ActivityEvent[];
 }
 
-function TreeNode({ node, agentMap, onAgentClick }: TreeNodeProps) {
+function TreeNode({ node, agentMap, onAgentClick, events }: TreeNodeProps) {
   const agent = agentMap.get(node.id);
   const children = node.children ?? [];
 
@@ -277,6 +295,7 @@ function TreeNode({ node, agentMap, onAgentClick }: TreeNodeProps) {
   if (!agent) return null;
 
   const hasChildren = children.length > 0;
+  const recentlyActive = isAgentRecentlyActive(node.id, agent.name, events);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -286,16 +305,17 @@ function TreeNode({ node, agentMap, onAgentClick }: TreeNodeProps) {
           agent={agent}
           displayRole={node.displayRole}
           onAgentClick={onAgentClick}
+          recentlyActive={recentlyActive}
         />
       </Tooltip>
 
       {hasChildren && (
         <>
-          {/* Vertical connector from node down to horizontal bar */}
+          {/* Vertical connector from node down to children group */}
           <div style={{ width: '2px', height: '24px', backgroundColor: 'var(--tf-border)' }} />
 
           {/* Row of children with connecting lines */}
-          <ChildrenGroup node={node} agentMap={agentMap} onAgentClick={onAgentClick} />
+          <ChildrenGroup node={node} agentMap={agentMap} onAgentClick={onAgentClick} events={events} />
         </>
       )}
     </div>
@@ -306,9 +326,10 @@ interface ChildrenGroupProps {
   node: OrgTreeNode;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
+  events: ActivityEvent[];
 }
 
-function ChildrenGroup({ node, agentMap, onAgentClick }: ChildrenGroupProps) {
+function ChildrenGroup({ node, agentMap, onAgentClick, events }: ChildrenGroupProps) {
   const children = node.children ?? [];
 
   // Filter to only children that exist in agentMap
@@ -321,59 +342,59 @@ function ChildrenGroup({ node, agentMap, onAgentClick }: ChildrenGroupProps) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <div style={{ width: '2px', height: '20px', backgroundColor: 'var(--tf-border)' }} />
-        <TreeNode node={visibleChildren[0]} agentMap={agentMap} onAgentClick={onAgentClick} />
+        <TreeNode node={visibleChildren[0]} agentMap={agentMap} onAgentClick={onAgentClick} events={events} />
       </div>
     );
   }
 
+  // Multiple children: draw horizontal connector lines using border approach.
+  // Each child column renders:
+  //   - first child:  border-top from center (50%) to right edge (100%)
+  //   - last child:   border-top from left edge (0%) to center (50%)
+  //   - middle child: border-top spanning full width (0% to 100%)
+  // This produces a correct T-connector regardless of column width.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      {/* Horizontal spanning bar — rendered as a relative container */}
-      <div style={{ position: 'relative', display: 'flex', flexDirection: 'row', alignItems: 'flex-start' }}>
-        {/* The horizontal line is positioned absolutely, spanning between the centers of the first and last child */}
-        <HorizontalBar />
-
-        {/* Children row */}
-        {visibleChildren.map((child) => (
+    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start' }}>
+      {visibleChildren.map((child, idx) => {
+        const isFirst = idx === 0;
+        const isLast = idx === visibleChildren.length - 1;
+        return (
           <div
             key={child.id}
-            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 12px' }}
+            style={{
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              padding: '0 10px',
+            }}
           >
-            {/* Vertical stub from horizontal bar down to child card */}
-            <div style={{ width: '2px', height: '20px', backgroundColor: 'var(--tf-border)' }} />
-            <TreeNode node={child} agentMap={agentMap} onAgentClick={onAgentClick} />
+            {/* Horizontal connector segment */}
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              left: isFirst ? '50%' : 0,
+              right: isLast ? '50%' : 0,
+              height: '2px',
+              backgroundColor: 'var(--tf-border)',
+            }} />
+            {/* Vertical stub from horizontal line down to child */}
+            <div style={{ width: '2px', height: '20px', backgroundColor: 'var(--tf-border)', marginTop: 0 }} />
+            <TreeNode node={child} agentMap={agentMap} onAgentClick={onAgentClick} events={events} />
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
-  );
-}
-
-function HorizontalBar() {
-  // Spans from the center of the first child column to the center of the last child column.
-  // Each child column has padding: 0 12px around a ~96px min-width card, making each
-  // column ~120px wide. The center of the first column from the left edge is 60px.
-  // The center of the last column from the right edge is also 60px.
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        top: 0,
-        left: '60px',
-        right: '60px',
-        height: '2px',
-        backgroundColor: 'var(--tf-border)',
-      }}
-    />
   );
 }
 
 interface OrgChartProps {
   agents: Agent[];
   loading: boolean;
+  events: ActivityEvent[];
 }
 
-function OrgChart({ agents, loading }: OrgChartProps) {
+function OrgChart({ agents, loading, events }: OrgChartProps) {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
 
   const agentMap = useMemo(() => {
@@ -433,7 +454,7 @@ function OrgChart({ agents, loading }: OrgChartProps) {
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <TreeNode node={ORG_TREE} agentMap={agentMap} onAgentClick={handleAgentClick} />
+          <TreeNode node={ORG_TREE} agentMap={agentMap} onAgentClick={handleAgentClick} events={events} />
         </div>
       </div>
 
@@ -490,62 +511,6 @@ function ProjectProgress({ project }: ProjectProgressProps) {
   );
 }
 
-// ---- Activity event row ----
-interface ActivityRowProps {
-  event: ActivityEvent;
-}
-function actionBadgeStyle(action: string): { bg: string; text: string } {
-  const a = action.toUpperCase();
-  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
-  if (a.includes('COMPLETED') || a.includes('DONE') || a.includes('FINISH')) return { bg: '#1a2e25', text: 'var(--tf-success)' };
-  if (a.includes('BLOCKED') || a.includes('ERROR') || a.includes('FAIL')) return { bg: '#2d1519', text: 'var(--tf-error)' };
-  if (a.includes('ASSIGNED') || a.includes('ASSIGN')) return { bg: '#1c2233', text: 'var(--tf-accent)' };
-  if (a.includes('UPDATED') || a.includes('UPDATE')) return { bg: '#2d2213', text: 'var(--tf-warning)' };
-  if (a.includes('CREATED') || a.includes('CREATE')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
-  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)' };
-}
-
-function ActivityRow({ event }: ActivityRowProps) {
-  const badge = actionBadgeStyle(event.action);
-  const initial = event.agent ? event.agent.charAt(0).toUpperCase() : '?';
-  const agentColor = modelColor('');
-
-  return (
-    <div className="flex items-start gap-3 py-2" style={{ borderBottom: '1px solid var(--tf-bg)' }}>
-      <div
-        className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5"
-        style={{ backgroundColor: agentColor, color: 'var(--tf-bg)' }}
-      >
-        {initial}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>
-            {event.agent || 'System'}
-          </span>
-          <span
-            className="text-xs px-1.5 py-0.5 rounded-full font-medium"
-            style={{ backgroundColor: badge.bg, color: badge.text }}
-          >
-            {event.action}
-          </span>
-          <span className="text-xs ml-auto flex-shrink-0" style={{ color: 'var(--tf-text-muted)' }}>
-            {event.timestamp
-              ? new Date(event.timestamp).toLocaleTimeString('en-US', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              : ''}
-          </span>
-        </div>
-        <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--tf-text-secondary)' }}>
-          {event.detail}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 // ---- Task status summary ----
 function taskStatusColor(status: string): string {
   const s = status.toLowerCase();
@@ -572,8 +537,6 @@ export default function Overview({
   for (const t of tasks) {
     statusCounts[t.status] = (statusCounts[t.status] ?? 0) + 1;
   }
-
-  const recentEvents = events.slice(-20).reverse();
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -605,50 +568,15 @@ export default function Overview({
         />
       </div>
 
-      {/* Org chart + Activity row */}
-      <div className="grid gap-6" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        {/* Org hierarchy */}
-        <div
-          className="rounded-xl p-5"
-          style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
-        >
-          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
-            Organization Hierarchy
-          </h3>
-          <OrgChart agents={agents} loading={loadingAgents} />
-        </div>
-
-        {/* Recent Activity */}
-        <div
-          className="rounded-xl p-5 flex flex-col"
-          style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
-        >
-          <h3 className="text-xs font-semibold uppercase tracking-widest mb-3 flex-shrink-0" style={{ color: 'var(--tf-text-muted)' }}>
-            Recent Activity
-          </h3>
-          <div className="flex-1 overflow-y-auto" style={{ maxHeight: '280px' }}>
-            {recentEvents.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 gap-3">
-                <div className="flex gap-1.5">
-                  {[0, 1, 2].map((i) => (
-                    <span
-                      key={i}
-                      className="w-2 h-2 rounded-full animate-pulse-dot"
-                      style={{ backgroundColor: 'var(--tf-border)', animationDelay: `${i * 0.2}s` }}
-                    />
-                  ))}
-                </div>
-                <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-                  Waiting for events...
-                </p>
-              </div>
-            ) : (
-              recentEvents.map((e, i) => (
-                <ActivityRow key={`${e.timestamp}-${i}`} event={e} />
-              ))
-            )}
-          </div>
-        </div>
+      {/* Org chart — full width */}
+      <div
+        className="rounded-xl p-5"
+        style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
+      >
+        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
+          Organization Hierarchy
+        </h3>
+        <OrgChart agents={agents} loading={loadingAgents} events={events} />
       </div>
 
       {/* Task status + Project progress row */}

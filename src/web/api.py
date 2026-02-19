@@ -990,7 +990,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if full_response:
                 async with _chat_lock:
                     _append_chat_message("ceo", full_response)
-                await websocket.send_json({"type": "done", "content": full_response})
+            await websocket.send_json({"type": "done", "content": full_response or ""})
 
     except WebSocketDisconnect:
         pass

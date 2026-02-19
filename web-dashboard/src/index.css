@@ -91,6 +91,26 @@
   --tf-scrollbar-hover: #8b949e;
 }
 
+[data-theme="claude"] {
+  --tf-bg:             #1a1715;
+  --tf-surface:        #221f1c;
+  --tf-surface-raised: #2d2924;
+  --tf-border:         #3d3830;
+  --tf-border-subtle:  #2d2924;
+  --tf-text:           #ede6df;
+  --tf-text-secondary: #b8afa7;
+  --tf-text-muted:     #7a716a;
+  --tf-accent:         #d97757;
+  --tf-accent-blue:    #7aadce;
+  --tf-accent-dim:     #a0562e;
+  --tf-success:        #6bba5e;
+  --tf-warning:        #e09a44;
+  --tf-error:          #d45c4c;
+  --tf-scrollbar-track: #1a1715;
+  --tf-scrollbar-thumb: #3d3830;
+  --tf-scrollbar-hover: #7a716a;
+}
+
 *,
 *::before,
 *::after {
