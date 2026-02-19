@@ -368,6 +368,12 @@ export default function App() {
 
   useKeyboardShortcuts(shortcuts);
 
+  // Must be declared before any early returns to satisfy Rules of Hooks
+  const pendingApprovalProjects = useMemo(
+    () => projects.filter((p) => p.plan_approved !== true && p.status === 'planning'),
+    [projects]
+  );
+
   // ---- Loading / wizard screens ----
 
   if (configLoading) {
@@ -468,12 +474,6 @@ export default function App() {
 
   const ceoName = config?.agents?.['ceo'] || 'CEO';
   const userName = config?.user?.name || 'You';
-
-  // Projects waiting for chairman approval (planning state, not yet approved)
-  const pendingApprovalProjects = useMemo(
-    () => projects.filter((p) => p.plan_approved !== true && p.status === 'planning'),
-    [projects]
-  );
 
   return (
     <>
