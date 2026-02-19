@@ -12,7 +12,7 @@ function formatTime(ts: string): string {
       minute: '2-digit',
     });
   } catch {
-    return ts;
+    return 'Invalid time';
   }
 }
 
@@ -800,6 +800,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
             cursor: isWaiting || !input.trim() ? 'not-allowed' : 'pointer',
           }}
           title="Send message (Enter)"
+          aria-label="Send message"
         >
           <svg
             className="w-5 h-5"

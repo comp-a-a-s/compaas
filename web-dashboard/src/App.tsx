@@ -428,6 +428,7 @@ export default function App() {
             tasksByProject={tasksByProject}
             initialProjectId={pendingProjectId}
             onProjectIdConsumed={() => setPendingProjectId(null)}
+            onRefresh={loadProjects}
           />
         );
 

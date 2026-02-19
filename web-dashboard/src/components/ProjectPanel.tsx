@@ -8,6 +8,7 @@ interface ProjectPanelProps {
   tasksByProject: Record<string, Task[]>;
   initialProjectId?: string | null;
   onProjectIdConsumed?: () => void;
+  onRefresh?: () => void;
 }
 
 type ProjectTab = 'tasks' | 'plan' | 'discussions' | 'team' | 'info';
@@ -843,7 +844,7 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
 }
 
 // ---- Main ProjectPanel ----
-export default function ProjectPanel({ projects, loading, tasksByProject, initialProjectId, onProjectIdConsumed }: ProjectPanelProps) {
+export default function ProjectPanel({ projects, loading, tasksByProject, initialProjectId, onProjectIdConsumed, onRefresh }: ProjectPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [initialTab, setInitialTab] = useState<ProjectTab | undefined>(undefined);
 
@@ -884,10 +885,19 @@ export default function ProjectPanel({ projects, loading, tasksByProject, initia
 
   if (projects.length === 0) {
     return (
-      <div className="flex items-center justify-center py-16">
+      <div className="flex flex-col items-center justify-center py-16 gap-3">
         <p className="text-sm" style={{ color: 'var(--tf-text-muted)' }}>
-          No projects found. Make sure the backend is running.
+          No projects found. Ask the CEO to start a project, or check the backend is running.
         </p>
+        {onRefresh && (
+          <button
+            onClick={onRefresh}
+            className="text-xs px-4 py-2 rounded-lg transition-colors"
+            style={{ backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-text)', border: '1px solid var(--tf-border)', cursor: 'pointer' }}
+          >
+            Retry
+          </button>
+        )}
       </div>
     );
   }

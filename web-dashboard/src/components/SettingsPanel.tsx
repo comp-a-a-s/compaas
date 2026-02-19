@@ -245,11 +245,14 @@ function AgentNameRow({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  const MAX_AGENT_NAME_LENGTH = 50;
+
   const handleSave = async () => {
     if (!draft.trim() || draft === currentName) {
       setEditing(false);
       return;
     }
+    if (draft.trim().length > MAX_AGENT_NAME_LENGTH) return;
     setSaving(true);
     try {
       const config = await fetchConfig();
@@ -305,19 +308,27 @@ function AgentNameRow({
 
       {/* Name field */}
       {editing ? (
-        <input
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') handleSave();
-            if (e.key === 'Escape') { setEditing(false); setDraft(currentName); }
-          }}
-          autoFocus
-          style={{ ...inputStyle(), flex: 1 }}
-          onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-          onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-        />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value.slice(0, MAX_AGENT_NAME_LENGTH))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSave();
+              if (e.key === 'Escape') { setEditing(false); setDraft(currentName); }
+            }}
+            autoFocus
+            maxLength={MAX_AGENT_NAME_LENGTH}
+            style={{ ...inputStyle() }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+          />
+          {draft.length >= MAX_AGENT_NAME_LENGTH - 5 && (
+            <span style={{ fontSize: '10px', color: draft.length >= MAX_AGENT_NAME_LENGTH ? C.error : C.textMuted }}>
+              {draft.length}/{MAX_AGENT_NAME_LENGTH}
+            </span>
+          )}
+        </div>
       ) : (
         <div style={{ flex: 1, fontSize: '13px', fontWeight: 500, color: C.textPrimary }}>
           {currentName}

@@ -236,7 +236,7 @@ async def _tail_activity_log(activity_log_path: str) -> AsyncGenerator[str, None
             else:
                 yield ": keep-alive\n\n"
     finally:
-        _active_sse_connections -= 1
+        _active_sse_connections = max(0, _active_sse_connections - 1)
 
 
 @app.get("/api/activity/stream", summary="SSE stream of activity.log changes")
@@ -661,14 +661,20 @@ def list_project_specs(project_id: str) -> list[dict]:
     specs_dir = safe_path_join(DATA_DIR, "projects", project_id, "specs")
     if not os.path.exists(specs_dir):
         return []
+    real_specs_dir = os.path.realpath(specs_dir)
     files = []
     for fname in sorted(os.listdir(specs_dir)):
         fpath = os.path.join(specs_dir, fname)
-        if os.path.isfile(fpath) and not fname.startswith("."):
+        # Resolve symlinks and ensure file stays within specs_dir
+        real_fpath = os.path.realpath(fpath)
+        if not real_fpath.startswith(real_specs_dir + os.sep):
+            continue
+        if os.path.isfile(real_fpath) and not fname.startswith("."):
             try:
-                with open(fpath) as f:
+                with open(real_fpath) as f:
                     content = f.read()
-            except OSError:
+            except OSError as e:
+                logger.warning("Failed to read spec file %s: %s", real_fpath, e)
                 content = ""
             files.append({"filename": fname, "content": content})
     return files
@@ -1037,6 +1043,10 @@ async def _handle_ceo_openai(
     system_prompt = llm_cfg.get("system_prompt") or None
 
     response_parts: list[str] = []
+    first_token = True
+
+    # Show an action entry immediately so the ActionLog appears while connecting
+    await websocket.send_json({"type": "action", "content": f"Connecting to {model}…"})
 
     # Background task: send periodic "thinking" pings while we wait for tokens
     thinking_event = asyncio.Event()
@@ -1051,7 +1061,7 @@ async def _handle_ceo_openai(
             try:
                 await websocket.send_json({
                     "type": "thinking",
-                    "content": f"{ceo_name} is thinking... ({count * 5}s elapsed)",
+                    "content": f"{ceo_name} is thinking… ({count * 5}s elapsed)",
                 })
             except Exception:
                 break
@@ -1065,7 +1075,11 @@ async def _handle_ceo_openai(
             api_key=api_key,
             system_prompt=system_prompt,
         ):
-            thinking_event.set()   # first token arrived — stop pings
+            if first_token:
+                first_token = False
+                thinking_event.set()  # stop pings
+                await websocket.send_json({"type": "action_result", "content": ""})
+                await websocket.send_json({"type": "action", "content": "Generating response…"})
             response_parts.append(chunk)
             await websocket.send_json({"type": "chunk", "content": chunk})
     except RuntimeError as exc:
