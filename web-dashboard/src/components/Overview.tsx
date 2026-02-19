@@ -68,6 +68,48 @@ function isAgentRecentlyActive(agentId: string, agentName: string, events: Activ
   });
 }
 
+// ---- Animated connector line ----
+// Shows a flowing green signal when the connected child (or its subtree) is active.
+
+interface ConnectorProps {
+  vertical?: boolean;
+  active?: boolean;
+  size: number; // px: height for vertical, width for horizontal
+}
+
+function Connector({ vertical = true, active = false, size }: ConnectorProps) {
+  const baseColor = active ? 'rgba(63,185,80,0.35)' : 'var(--tf-border)';
+  return (
+    <div
+      style={{
+        position: 'relative',
+        overflow: 'hidden',
+        ...(vertical
+          ? { width: '2px', height: `${size}px` }
+          : { height: '2px', width: `${size}px` }),
+        backgroundColor: baseColor,
+        transition: 'background-color 0.4s',
+        borderRadius: '1px',
+      }}
+    >
+      {active && (
+        <div
+          className={vertical ? 'anim-flow-down' : 'anim-flow-right'}
+          style={{
+            position: 'absolute',
+            ...(vertical
+              ? { left: 0, right: 0, height: '50%' }
+              : { top: 0, bottom: 0, width: '50%' }),
+            background: vertical
+              ? 'linear-gradient(to bottom, transparent, var(--tf-success), transparent)'
+              : 'linear-gradient(to right, transparent, var(--tf-success), transparent)',
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 // ---- Org hierarchy node ----
 interface OrgNodeProps {
   agent: Agent;
@@ -81,16 +123,19 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false }: O
   const isActive = recentlyActive || agent.status === 'active' ||
     (agent.recent_activity && agent.recent_activity.length > 0);
 
+  // Latest activity detail for tooltip
+  const latestActivity = agent.recent_activity?.[0];
+
   return (
     <div
       className="flex flex-col items-center gap-1 px-3 py-2 rounded-xl"
       style={{
-        backgroundColor: 'var(--tf-surface-raised)',
+        backgroundColor: isActive ? 'rgba(63,185,80,0.06)' : 'var(--tf-surface-raised)',
         border: `1px solid ${isActive ? 'var(--tf-success)' : 'var(--tf-border)'}`,
         minWidth: '96px',
         cursor: onAgentClick ? 'pointer' : 'default',
-        transition: 'border-color 0.2s, box-shadow 0.2s',
-        boxShadow: isActive ? '0 0 8px rgba(var(--tf-success-rgb, 107,186,92), 0.25)' : 'none',
+        transition: 'border-color 0.3s, background-color 0.3s, box-shadow 0.3s',
+        boxShadow: isActive ? '0 0 10px rgba(63,185,80,0.2)' : 'none',
       }}
       onClick={() => onAgentClick?.(agent)}
       onMouseEnter={(e) => {
@@ -111,16 +156,16 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false }: O
         }
       }}
     >
-      {/* Avatar with optional pulse ring */}
+      {/* Avatar with pulse ring when active */}
       <div style={{ position: 'relative' }}>
         {isActive && (
           <div style={{
             position: 'absolute',
-            inset: '-3px',
+            inset: '-4px',
             borderRadius: '50%',
             border: '2px solid var(--tf-success)',
-            opacity: 0.7,
-            animation: 'pulse-ring 2s ease-out infinite',
+            opacity: 0.6,
+            animation: 'pulse-ring 1.8s ease-out infinite',
           }} />
         )}
         <div
@@ -129,6 +174,19 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false }: O
         >
           {initial}
         </div>
+        {/* Small green dot indicator */}
+        {isActive && (
+          <div style={{
+            position: 'absolute',
+            bottom: 0,
+            right: 0,
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            backgroundColor: 'var(--tf-success)',
+            border: '1.5px solid var(--tf-surface-raised)',
+          }} />
+        )}
       </div>
       <p className="text-xs font-medium text-center leading-tight" style={{ color: 'var(--tf-text)' }}>
         {agent.name}
@@ -136,6 +194,16 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false }: O
       <p className="text-xs text-center leading-tight" style={{ color: 'var(--tf-text-muted)' }}>
         {displayRole ?? agent.role}
       </p>
+      {/* Show live activity label when working */}
+      {isActive && latestActivity && (
+        <p
+          className="text-xs text-center leading-tight animate-pulse-dot"
+          style={{ color: 'var(--tf-success)', maxWidth: '90px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          title={latestActivity.detail || latestActivity.action}
+        >
+          {latestActivity.action}
+        </p>
+      )}
     </div>
   );
 }
@@ -280,26 +348,33 @@ const ORG_TREE: OrgTreeNode = {
   ],
 };
 
+// Check if a subtree contains any active agent
+function subtreeHasActive(node: OrgTreeNode, activeIds: Set<string>): boolean {
+  if (activeIds.has(node.id)) return true;
+  return (node.children ?? []).some((c) => subtreeHasActive(c, activeIds));
+}
+
 interface TreeNodeProps {
   node: OrgTreeNode;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
   events: ActivityEvent[];
+  activeIds: Set<string>;
 }
 
-function TreeNode({ node, agentMap, onAgentClick, events }: TreeNodeProps) {
+function TreeNode({ node, agentMap, onAgentClick, events, activeIds }: TreeNodeProps) {
   const agent = agentMap.get(node.id);
   const children = node.children ?? [];
 
-  // If this agent is not in the data, skip rendering
   if (!agent) return null;
 
   const hasChildren = children.length > 0;
   const recentlyActive = isAgentRecentlyActive(node.id, agent.name, events);
+  // The vertical stem from this node to its children is active if ANY descendant is active
+  const childSubtreeActive = children.some((c) => subtreeHasActive(c, activeIds));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      {/* The node card wrapped in a Tooltip */}
       <Tooltip content={`${node.displayRole ?? agent.role} · ${agent.model}`} position="top">
         <OrgNode
           agent={agent}
@@ -311,11 +386,9 @@ function TreeNode({ node, agentMap, onAgentClick, events }: TreeNodeProps) {
 
       {hasChildren && (
         <>
-          {/* Vertical connector from node down to children group */}
-          <div style={{ width: '2px', height: '24px', backgroundColor: 'var(--tf-border)' }} />
-
-          {/* Row of children with connecting lines */}
-          <ChildrenGroup node={node} agentMap={agentMap} onAgentClick={onAgentClick} events={events} />
+          {/* Vertical stem: animated if any child's subtree is active */}
+          <Connector vertical size={24} active={childSubtreeActive} />
+          <ChildrenGroup node={node} agentMap={agentMap} onAgentClick={onAgentClick} events={events} activeIds={activeIds} />
         </>
       )}
     </div>
@@ -327,60 +400,65 @@ interface ChildrenGroupProps {
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
   events: ActivityEvent[];
+  activeIds: Set<string>;
 }
 
-function ChildrenGroup({ node, agentMap, onAgentClick, events }: ChildrenGroupProps) {
+function ChildrenGroup({ node, agentMap, onAgentClick, events, activeIds }: ChildrenGroupProps) {
   const children = node.children ?? [];
-
-  // Filter to only children that exist in agentMap
-  const visibleChildren = children.filter(c => agentMap.has(c.id));
+  const visibleChildren = children.filter((c) => agentMap.has(c.id));
 
   if (visibleChildren.length === 0) return null;
 
   if (visibleChildren.length === 1) {
-    // Single child: just a vertical stub + the child node
+    const childActive = subtreeHasActive(visibleChildren[0], activeIds);
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <div style={{ width: '2px', height: '20px', backgroundColor: 'var(--tf-border)' }} />
-        <TreeNode node={visibleChildren[0]} agentMap={agentMap} onAgentClick={onAgentClick} events={events} />
+        <Connector vertical size={20} active={childActive} />
+        <TreeNode node={visibleChildren[0]} agentMap={agentMap} onAgentClick={onAgentClick} events={events} activeIds={activeIds} />
       </div>
     );
   }
 
-  // Multiple children: draw horizontal connector lines using border approach.
-  // Each child column renders:
-  //   - first child:  border-top from center (50%) to right edge (100%)
-  //   - last child:   border-top from left edge (0%) to center (50%)
-  //   - middle child: border-top spanning full width (0% to 100%)
-  // This produces a correct T-connector regardless of column width.
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start' }}>
       {visibleChildren.map((child, idx) => {
         const isFirst = idx === 0;
         const isLast = idx === visibleChildren.length - 1;
+        const childActive = subtreeHasActive(child, activeIds);
+
         return (
           <div
             key={child.id}
-            style={{
-              position: 'relative',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              padding: '0 10px',
-            }}
+            style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 10px' }}
           >
-            {/* Horizontal connector segment */}
+            {/* Horizontal connector segment — animated when this branch leads to active agent */}
             <div style={{
               position: 'absolute',
               top: 0,
               left: isFirst ? '50%' : 0,
               right: isLast ? '50%' : 0,
               height: '2px',
-              backgroundColor: 'var(--tf-border)',
-            }} />
-            {/* Vertical stub from horizontal line down to child */}
-            <div style={{ width: '2px', height: '20px', backgroundColor: 'var(--tf-border)', marginTop: 0 }} />
-            <TreeNode node={child} agentMap={agentMap} onAgentClick={onAgentClick} events={events} />
+              overflow: 'hidden',
+              backgroundColor: childActive ? 'rgba(63,185,80,0.35)' : 'var(--tf-border)',
+              transition: 'background-color 0.4s',
+            }}>
+              {childActive && (
+                <div
+                  className="anim-flow-right"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    bottom: 0,
+                    width: '50%',
+                    background: 'linear-gradient(to right, transparent, var(--tf-success), transparent)',
+                  }}
+                />
+              )}
+            </div>
+
+            {/* Vertical stub to child */}
+            <Connector vertical size={20} active={childActive} />
+            <TreeNode node={child} agentMap={agentMap} onAgentClick={onAgentClick} events={events} activeIds={activeIds} />
           </div>
         );
       })}
@@ -404,6 +482,17 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
     }
     return map;
   }, [agents]);
+
+  // Set of currently active agent IDs for connector animations
+  const activeIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const agent of agents) {
+      if (isAgentRecentlyActive(agent.id, agent.name, events)) {
+        s.add(agent.id);
+      }
+    }
+    return s;
+  }, [agents, events]);
 
   const handleAgentClick = (agent: Agent) => {
     setSelectedAgent(prev => prev?.id === agent.id ? null : agent);
@@ -454,7 +543,7 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <TreeNode node={ORG_TREE} agentMap={agentMap} onAgentClick={handleAgentClick} events={events} />
+          <TreeNode node={ORG_TREE} agentMap={agentMap} onAgentClick={handleAgentClick} events={events} activeIds={activeIds} />
         </div>
       </div>
 

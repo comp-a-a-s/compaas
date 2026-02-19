@@ -1,11 +1,16 @@
 import { useEffect, useCallback, useState } from 'react';
 
 const STORAGE_KEY = 'thunderflow_theme';
-const VALID_THEMES = ['midnight', 'twilight', 'dawn', 'claude'] as const;
+const VALID_THEMES = ['midnight', 'twilight', 'dawn', 'sahara'] as const;
 export type ThemeName = (typeof VALID_THEMES)[number];
 
 function getStoredTheme(): ThemeName {
   const stored = localStorage.getItem(STORAGE_KEY);
+  // Migrate old 'claude' key to 'sahara'
+  if (stored === 'claude') {
+    localStorage.setItem(STORAGE_KEY, 'sahara');
+    return 'sahara';
+  }
   if (stored && (VALID_THEMES as readonly string[]).includes(stored)) return stored as ThemeName;
   return 'midnight';
 }

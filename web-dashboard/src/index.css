@@ -94,7 +94,7 @@
   --tf-user-bubble:    #dbeafe;
 }
 
-[data-theme="claude"] {
+[data-theme="sahara"] {
   --tf-bg:             #1a1715;
   --tf-surface:        #221f1c;
   --tf-surface-raised: #2d2924;
@@ -248,4 +248,60 @@ body {
   background-size: 400px 100%;
   animation: shimmer 1.4s ease infinite;
   border-radius: 4px;
+}
+
+/* ---- Typewriter cursor blink ---- */
+@keyframes blink-cursor {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.blink-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background-color: var(--tf-accent);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  animation: blink-cursor 1s step-end infinite;
+}
+
+/* ---- Org chart delegation flow lines ---- */
+@keyframes flow-down {
+  0%   { top: -70%; }
+  100% { top: 170%; }
+}
+
+@keyframes flow-right {
+  0%   { left: -70%; }
+  100% { left: 170%; }
+}
+
+.anim-flow-down {
+  animation: flow-down 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.anim-flow-right {
+  animation: flow-right 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ---- Project approval card entrance ---- */
+@keyframes pop-in {
+  0%   { opacity: 0; transform: translateY(12px) scale(0.97); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-pop-in {
+  animation: pop-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ---- Streaming bubble live border pulse ---- */
+@keyframes live-border {
+  0%, 100% { border-color: var(--tf-accent); opacity: 0.6; }
+  50%       { border-color: var(--tf-accent); opacity: 1; }
+}
+
+.streaming-bubble {
+  animation: live-border 2s ease-in-out infinite;
 }
