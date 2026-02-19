@@ -102,9 +102,14 @@ def get_org_chart() -> dict:
         if "designer" in info.get("role", "").lower()
     }
 
+    # Use config values so that the org chart reflects user-set names
+    cfg = _load_config()
+    chairman_name = cfg.get("user", {}).get("name", "") or "Chairman"
+    ceo_name = cfg.get("agents", {}).get("ceo", "CEO") or "CEO"
+
     org: dict = {
-        "board_head": {"name": "Idan", "role": "Board Head"},
-        "ceo": {"name": "Marcus", "role": "CEO — Central Orchestrator"},
+        "board_head": {"name": chairman_name, "role": "Chairman"},
+        "ceo": {"name": ceo_name, "role": "CEO — Central Orchestrator"},
         "leadership": leadership,
         "engineering": engineering,
         "design": design,
@@ -740,20 +745,36 @@ def _append_chat_message(role: str, content: str) -> dict:
     return msg
 
 
-def _build_context_prompt(user_message: str, history_limit: int = 8, user_name: str = "User") -> str:
-    """Build a prompt that includes recent conversation context."""
+def _build_context_prompt(
+    user_message: str,
+    history_limit: int = 8,
+    user_name: str = "User",
+    ceo_name: str = "CEO",
+    company_name: str = "",
+) -> str:
+    """Build a prompt that includes recent conversation context and persona context."""
     messages = _load_chat_messages()
     recent = messages[-history_limit:] if len(messages) > history_limit else messages
 
-    if not recent:
-        return user_message
-
     parts: list[str] = []
-    parts.append("Recent conversation context:")
-    for msg in recent:
-        speaker = user_name if msg["role"] == "user" else "You (Marcus, CEO)"
-        parts.append(f"{speaker}: {msg['content']}")
+
+    # Inject persona context so the CEO knows its own name and the user's role regardless
+    # of what may be hardcoded in the agent definition file.
+    company_label = f" of {company_name}" if company_name else ""
+    parts.append(
+        f"[CONTEXT: You are {ceo_name}, the CEO{company_label}. "
+        f"The person you are speaking with is {user_name}, the Chairman of the company. "
+        f"Always refer to yourself as {ceo_name} and address the user as {user_name} or 'Chairman'.]"
+    )
     parts.append("")
+
+    if recent:
+        parts.append("Recent conversation context:")
+        for msg in recent:
+            speaker = user_name if msg["role"] == "user" else f"You ({ceo_name}, CEO)"
+            parts.append(f"{speaker}: {msg['content']}")
+        parts.append("")
+
     parts.append(f"{user_name} says now: {user_message}")
     parts.append("")
     parts.append(f"Respond to {user_name}'s latest message. You have full access to your MCP tools for company operations.")
@@ -977,9 +998,15 @@ async def chat_websocket(websocket: WebSocket) -> None:
             config = _load_config()
             llm_cfg = config.get("llm", {})
             provider = llm_cfg.get("provider", "anthropic")
-            user_name = config.get("user", {}).get("name", "User")
-            ceo_name = config.get("agents", {}).get("ceo", "CEO")
-            prompt = _build_context_prompt(user_message, user_name=user_name)
+            user_name = config.get("user", {}).get("name", "User") or "User"
+            ceo_name = config.get("agents", {}).get("ceo", "CEO") or "CEO"
+            company_name = config.get("company", {}).get("name", "") if isinstance(config.get("company"), dict) else ""
+            prompt = _build_context_prompt(
+                user_message,
+                user_name=user_name,
+                ceo_name=ceo_name,
+                company_name=company_name,
+            )
 
             if provider in ("openai", "openai_compat"):
                 full_response = await _handle_ceo_openai(websocket, prompt, llm_cfg, ceo_name)
