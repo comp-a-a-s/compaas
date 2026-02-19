@@ -647,6 +647,47 @@ def recent_activity(limit: int = Query(default=100, ge=1, le=500)) -> list[dict]
 
 
 # ---------------------------------------------------------------------------
+# Project plan and approval
+# ---------------------------------------------------------------------------
+
+@app.get("/api/projects/{project_id}/specs", summary="List spec files for a project")
+def list_project_specs(project_id: str) -> list[dict]:
+    """Return a list of spec/plan files stored under company_data/projects/{id}/specs/."""
+    try:
+        validate_safe_id(project_id, "project_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
+    from src.validators import safe_path_join
+    specs_dir = safe_path_join(DATA_DIR, "projects", project_id, "specs")
+    if not os.path.exists(specs_dir):
+        return []
+    files = []
+    for fname in sorted(os.listdir(specs_dir)):
+        fpath = os.path.join(specs_dir, fname)
+        if os.path.isfile(fpath) and not fname.startswith("."):
+            try:
+                with open(fpath) as f:
+                    content = f.read()
+            except OSError:
+                content = ""
+            files.append({"filename": fname, "content": content})
+    return files
+
+
+@app.post("/api/projects/{project_id}/approve", summary="Approve the project plan")
+def approve_project_plan(project_id: str) -> dict:
+    """Set plan_approved=true on the project, marking the Chairman has approved it."""
+    try:
+        validate_safe_id(project_id, "project_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
+    ok = state_manager.update_project(project_id, {"plan_approved": True, "status": "active"})
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+    return {"status": "approved"}
+
+
+# ---------------------------------------------------------------------------
 # Model settings
 # ---------------------------------------------------------------------------
 
@@ -781,6 +822,40 @@ def _build_context_prompt(
     return "\n".join(parts)
 
 
+def _format_tool_action(tool_name: str, tool_input: dict) -> str:
+    """Convert a Claude tool-use block into a readable single-line action label."""
+    if tool_name == "Bash":
+        cmd = (tool_input.get("command") or "").strip()[:100]
+        return f"Running: {cmd}"
+    if tool_name in ("Write", "Edit", "NotebookEdit"):
+        path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+        return f"{tool_name}: {path}"
+    if tool_name == "Read":
+        path = tool_input.get("file_path") or ""
+        return f"Reading: {path}"
+    if tool_name in ("Glob", "Grep"):
+        pattern = tool_input.get("pattern") or tool_input.get("query") or ""
+        return f"{tool_name}: {pattern}"
+    if tool_name == "Task":
+        desc = (tool_input.get("description") or tool_input.get("prompt") or "")[:60]
+        agent = tool_input.get("subagent_type") or ""
+        if agent:
+            return f"Delegating to {agent}: {desc}"
+        return f"Task: {desc}"
+    if tool_name == "WebFetch":
+        url = (tool_input.get("url") or "")[:60]
+        return f"Fetching: {url}"
+    if tool_name == "WebSearch":
+        q = (tool_input.get("query") or "")[:60]
+        return f"Searching: {q}"
+    if "mcp__" in tool_name:
+        parts = tool_name.split("__")
+        if len(parts) >= 3:
+            scope, action = parts[1], parts[2].replace("_", " ")
+            return f"{scope.capitalize()} → {action}"
+    return f"Using {tool_name}"
+
+
 @app.get("/api/chat/history", summary="Get CEO chat message history")
 def chat_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
     """Return recent chat messages."""
@@ -804,11 +879,15 @@ async def _handle_ceo_claude(
     prompt: str,
     claude_path: str,
     llm_cfg: dict,
+    ceo_name: str = "CEO",
 ) -> str | None:
     """Handle a CEO chat turn using the Claude Code CLI subprocess.
 
-    Injects ANTHROPIC_BASE_URL into the subprocess environment when proxy
-    mode is enabled (Phase 2 — routes the Claude CLI through a LiteLLM proxy).
+    Uses --output-format stream-json so tool-use actions are streamed as they
+    happen.  Text blocks are forwarded as 'chunk' messages; tool_use blocks are
+    forwarded as 'action' messages; tool results are forwarded as
+    'action_result' messages.  Falls back to raw-text mode if the JSON parse
+    fails on a line.
 
     Returns the full response string, or None if an error was sent.
     """
@@ -821,6 +900,7 @@ async def _handle_ceo_claude(
     try:
         process = await asyncio.create_subprocess_exec(
             claude_path, "--agent", "ceo", "-p", prompt,
+            "--output-format", "stream-json", "--verbose",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
@@ -828,34 +908,87 @@ async def _handle_ceo_claude(
         )
 
         response_parts: list[str] = []
+        full_response: str | None = None
         assert process.stdout is not None
+        idle_ticks = 0  # how many 30-s timeouts in a row
 
-        thinking_count = 0
         while True:
             try:
-                chunk = await asyncio.wait_for(process.stdout.read(512), timeout=15.0)
-                if not chunk:
-                    break
-                text = chunk.decode("utf-8", errors="replace")
-                response_parts.append(text)
-                await websocket.send_json({"type": "chunk", "content": text})
+                raw = await asyncio.wait_for(process.stdout.readline(), timeout=30.0)
             except asyncio.TimeoutError:
-                thinking_count += 1
+                idle_ticks += 1
                 await websocket.send_json({
                     "type": "thinking",
-                    "content": f"CEO is thinking... ({thinking_count * 15}s elapsed)",
+                    "content": f"{ceo_name} is working… ({idle_ticks * 30}s)",
                 })
                 if process.returncode is not None:
                     break
+                continue
+
+            if not raw:
+                break  # EOF
+            idle_ticks = 0
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+
+            # Try to parse as a stream-json event
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                # Plain text fallback (shouldn't normally happen with stream-json)
+                response_parts.append(line + "\n")
+                await websocket.send_json({"type": "chunk", "content": line + "\n"})
+                continue
+
+            event_type = event.get("type", "")
+
+            if event_type == "assistant":
+                for block in event.get("message", {}).get("content", []):
+                    btype = block.get("type", "")
+                    if btype == "text":
+                        text = block.get("text", "")
+                        if text:
+                            response_parts.append(text)
+                            await websocket.send_json({"type": "chunk", "content": text})
+                    elif btype == "tool_use":
+                        action_label = _format_tool_action(
+                            block.get("name", "tool"), block.get("input", {})
+                        )
+                        await websocket.send_json({"type": "action", "content": action_label})
+
+            elif event_type == "user":
+                for block in event.get("message", {}).get("content", []):
+                    if block.get("type") == "tool_result":
+                        content = block.get("content", "")
+                        if isinstance(content, list):
+                            content = "\n".join(
+                                c.get("text", "") for c in content
+                                if isinstance(c, dict) and c.get("type") == "text"
+                            )
+                        if content and content.strip():
+                            preview = content.strip()[:200].replace("\n", " ")
+                            await websocket.send_json({"type": "action_result", "content": preview})
+
+            elif event_type == "result":
+                # Final result — use this as the canonical response
+                full_response = event.get("result") or "".join(response_parts)
+                break
+
+            elif event_type == "error":
+                err = event.get("message", "Unknown error")
+                await websocket.send_json({"type": "error", "content": err})
+                return None
+
+        if full_response is None:
+            full_response = "".join(response_parts).strip() or None
 
         try:
-            await asyncio.wait_for(process.wait(), timeout=120.0)
+            await asyncio.wait_for(process.wait(), timeout=10.0)
         except asyncio.TimeoutError:
             process.kill()
 
-        full_response = "".join(response_parts).strip()
-
-        if not full_response:
+        if not full_response and process.returncode and process.returncode != 0:
             stderr_text = ""
             if process.stderr:
                 try:
@@ -863,10 +996,9 @@ async def _handle_ceo_claude(
                     stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
                 except asyncio.TimeoutError:
                     pass
-            if process.returncode != 0:
-                error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
-                await websocket.send_json({"type": "error", "content": error_msg})
-                return None
+            error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
+            await websocket.send_json({"type": "error", "content": error_msg})
+            return None
 
         return full_response
 
@@ -1011,7 +1143,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if provider in ("openai", "openai_compat"):
                 full_response = await _handle_ceo_openai(websocket, prompt, llm_cfg, ceo_name)
             else:
-                full_response = await _handle_ceo_claude(websocket, prompt, claude_path or "", llm_cfg)
+                full_response = await _handle_ceo_claude(
+                    websocket, prompt, claude_path or "", llm_cfg, ceo_name=ceo_name
+                )
 
             if full_response:
                 async with _chat_lock:

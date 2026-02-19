@@ -1166,11 +1166,15 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setSubmitting(true);
     setSubmitError(null);
 
-    // Save Telegram credentials if provided
+    // Save Telegram credentials if provided; clear any stale values if skipped
     if (telegramBotToken && telegramChatId) {
       localStorage.setItem('thunderflow_telegram_token', telegramBotToken);
       localStorage.setItem('thunderflow_telegram_chatid', telegramChatId);
       localStorage.setItem('thunderflow_telegram_configured', 'true');
+    } else {
+      localStorage.removeItem('thunderflow_telegram_token');
+      localStorage.removeItem('thunderflow_telegram_chatid');
+      localStorage.removeItem('thunderflow_telegram_configured');
     }
 
     // Resolve the effective model for OpenAI (custom vs preset)

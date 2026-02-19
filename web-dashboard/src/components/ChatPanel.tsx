@@ -140,7 +140,7 @@ function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You'
       <div
         className="max-w-[75%] rounded-2xl px-4 py-2.5"
         style={{
-          backgroundColor: isUser ? '#1c2940' : 'var(--tf-surface-raised)',
+          backgroundColor: isUser ? 'var(--tf-user-bubble)' : 'var(--tf-surface-raised)',
           borderBottomRightRadius: isUser ? '4px' : undefined,
           borderBottomLeftRadius: !isUser ? '4px' : undefined,
         }}
@@ -243,10 +243,62 @@ function EmptyState({ ceoName = 'CEO' }: { ceoName?: string }) {
   );
 }
 
+// ---- Action log ----
+
+interface ActionEntry {
+  text: string;
+  status: 'running' | 'done';
+}
+
+function ActionLog({ entries, ceoName }: { entries: ActionEntry[]; ceoName: string }) {
+  if (entries.length === 0) return null;
+  return (
+    <div
+      className="mx-1 mb-2 rounded-lg overflow-hidden"
+      style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-bg)' }}
+    >
+      {/* Header */}
+      <div
+        className="flex items-center gap-2 px-3 py-1.5"
+        style={{ borderBottom: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}
+      >
+        <span
+          className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse-dot"
+          style={{ backgroundColor: 'var(--tf-accent)' }}
+        />
+        <span className="text-xs font-medium" style={{ color: 'var(--tf-text-secondary)' }}>
+          {ceoName} is working…
+        </span>
+      </div>
+      {/* Action entries */}
+      <div className="px-3 py-2 space-y-1 max-h-40 overflow-y-auto">
+        {entries.map((entry, i) => (
+          <div key={i} className="flex items-start gap-2">
+            {entry.status === 'done' ? (
+              <span className="text-xs mt-0.5 flex-shrink-0" style={{ color: 'var(--tf-success)' }}>✓</span>
+            ) : (
+              <span
+                className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 animate-pulse-dot"
+                style={{ backgroundColor: 'var(--tf-accent)' }}
+              />
+            )}
+            <span
+              className="text-xs leading-relaxed break-all"
+              style={{ color: entry.status === 'done' ? 'var(--tf-text-muted)' : 'var(--tf-text-secondary)' }}
+            >
+              {entry.text}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---- WebSocket message type ----
 
 interface WsMessage {
-  type: 'user_ack' | 'thinking' | 'chunk' | 'done' | 'error';
+  type: 'user_ack' | 'thinking' | 'chunk' | 'done' | 'error' | 'action' | 'action_result';
   content?: string;
   message?: ChatMessage;
 }
@@ -294,9 +346,11 @@ interface ChatPanelProps {
   onNewCeoMessage?: () => void;
   ceoName?: string;
   userName?: string;
+  onNavigateToProject?: (projectId: string) => void;
+  onNavigateToProjects?: () => void;
 }
 
-export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage, ceoName = 'CEO', userName = 'You' }: ChatPanelProps) {
+export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage, ceoName = 'CEO', userName = 'You', onNavigateToProjects }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isWaiting, setIsWaiting] = useState(false);
@@ -304,6 +358,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [showThinking, setShowThinking] = useState(false);
   const [thinkingContent, setThinkingContent] = useState('');
+  const [actionLog, setActionLog] = useState<ActionEntry[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -368,7 +423,25 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
               setThinkingContent(data.content || `${ceoName} is thinking...`);
               break;
 
+            case 'action':
+              setActionLog((prev) => [...prev, { text: data.content || '', status: 'running' }]);
+              break;
+
+            case 'action_result':
+              setActionLog((prev) =>
+                prev.length > 0
+                  ? [...prev.slice(0, -1), { ...prev[prev.length - 1], status: 'done' }]
+                  : prev
+              );
+              break;
+
             case 'chunk':
+              // Mark last action as done when text starts flowing
+              setActionLog((prev) =>
+                prev.length > 0 && prev[prev.length - 1].status === 'running'
+                  ? [...prev.slice(0, -1), { ...prev[prev.length - 1], status: 'done' }]
+                  : prev
+              );
               setStreamingContent((prev) => prev + (data.content || ''));
               break;
 
@@ -381,6 +454,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
               setMessages((prev) => [...prev, ceoMessage]);
               setStreamingContent('');
               setThinkingContent('');
+              setActionLog([]);
               setIsWaiting(false);
               // Notify parent if chat is not open
               if (!chatOpenRef.current) {
@@ -400,6 +474,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
               ]);
               setStreamingContent('');
               setThinkingContent('');
+              setActionLog([]);
               setIsWaiting(false);
               break;
           }
@@ -454,6 +529,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
     setIsWaiting(true);
     setStreamingContent('');
     setThinkingContent('');
+    setActionLog([]);
 
     ws.send(JSON.stringify({ message: text }));
   }, [input, isWaiting, connectWebSocket]);
@@ -540,7 +616,20 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
       {/* Floating header: status + thinking toggle + clear */}
       {floating && (
         <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
-          <StatusBadge status={connectionStatus} />
+          <div className="flex items-center gap-2">
+            <StatusBadge status={connectionStatus} />
+            {/* Projects quick-link */}
+            {onNavigateToProjects && (
+              <button
+                onClick={onNavigateToProjects}
+                title="Go to Projects"
+                className="text-xs px-2 py-0.5 rounded cursor-pointer"
+                style={{ color: 'var(--tf-accent-blue)', backgroundColor: 'transparent', border: 'none' }}
+              >
+                Projects ↗
+              </button>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             {/* Thinking toggle */}
             <button
@@ -594,6 +683,11 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
               />
             ))}
 
+            {/* Action log — shown while CEO is working (before or during streaming) */}
+            {isWaiting && actionLog.length > 0 && (
+              <ActionLog entries={actionLog} ceoName={ceoName} />
+            )}
+
             {/* Streaming response */}
             {streamingContent && (
               <>
@@ -619,12 +713,14 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
             {/* Waiting indicator (before first chunk arrives) */}
             {isWaiting && !streamingContent && (
               <>
-                {/* Thinking display during wait — always shown when thinkingContent is non-empty */}
-                {thinkingContent && (
+                {/* Thinking display during wait — only when showThinking is on */}
+                {showThinking && thinkingContent && (
                   <div style={{ padding: '8px 12px', backgroundColor: 'var(--tf-bg)', borderRadius: '8px', marginBottom: '4px', borderLeft: '2px solid var(--tf-border)' }}>
                     <p style={{ color: 'var(--tf-text-muted)', fontSize: '11px', fontStyle: 'italic' }}>{thinkingContent}</p>
                   </div>
                 )}
+                {/* Only show the dot-bounce if no action log is showing yet */}
+                {actionLog.length === 0 && (
                 <div className="flex justify-start mb-3">
                   <div
                     className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2"
@@ -650,6 +746,7 @@ export default function ChatPanel({ floating = false, chatOpen, onNewCeoMessage,
                     </div>
                   </div>
                 </div>
+                )}
               </>
             )}
 

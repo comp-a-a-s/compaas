@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Project, Task, Decision } from '../types';
-import { fetchProjectDecisions } from '../api/client';
+import { fetchProjectDecisions, fetchProjectSpecs, approveProjectPlan } from '../api/client';
 
 interface ProjectPanelProps {
   projects: Project[];
   loading: boolean;
   tasksByProject: Record<string, Task[]>;
+  initialProjectId?: string | null;
+  onProjectIdConsumed?: () => void;
 }
 
-type ProjectTab = 'tasks' | 'decisions' | 'team' | 'info';
+type ProjectTab = 'tasks' | 'plan' | 'discussions' | 'team' | 'info';
 
 // ---- Helpers ----
 function statusBadge(status: string): { bg: string; text: string } {
@@ -274,11 +276,198 @@ function KanbanBoard({ tasks }: KanbanProps) {
   );
 }
 
-// ---- Decisions timeline ----
-interface DecisionsTabProps {
+// ---- Plan tab ----
+interface PlanTabProps {
+  project: Project;
+  onApproved: () => void;
+}
+function PlanTab({ project, onApproved }: PlanTabProps) {
+  const [specs, setSpecs] = useState<{ filename: string; content: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [approving, setApproving] = useState(false);
+  const [approved, setApproved] = useState(project.plan_approved ?? false);
+  const [expandedFile, setExpandedFile] = useState<string | null>(null);
+
+  useEffect(() => {
+    setApproved(project.plan_approved ?? false);
+    setLoading(true);
+    fetchProjectSpecs(project.id)
+      .then(setSpecs)
+      .finally(() => setLoading(false));
+  }, [project.id, project.plan_approved]);
+
+  const handleApprove = async () => {
+    setApproving(true);
+    const ok = await approveProjectPlan(project.id);
+    setApproving(false);
+    if (ok) {
+      setApproved(true);
+      onApproved();
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Approval banner */}
+      {approved ? (
+        <div
+          className="flex items-center gap-2 px-4 py-3 rounded-xl"
+          style={{ backgroundColor: 'rgba(63,185,80,0.08)', border: '1px solid rgba(63,185,80,0.25)' }}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M2 8l4 4 8-8" stroke="var(--tf-success)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="text-xs font-medium" style={{ color: 'var(--tf-success)' }}>
+            Plan approved — project is active
+          </span>
+        </div>
+      ) : (
+        <div
+          className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl"
+          style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
+        >
+          <p className="text-xs" style={{ color: 'var(--tf-text-secondary)' }}>
+            Review the plan below and approve it to activate the project.
+          </p>
+          <button
+            onClick={handleApprove}
+            disabled={approving}
+            className="flex-shrink-0 text-xs px-3 py-1.5 rounded-lg font-medium transition-all duration-200 cursor-pointer"
+            style={{
+              backgroundColor: approving ? 'var(--tf-surface)' : 'var(--tf-accent)',
+              color: approving ? 'var(--tf-text-muted)' : 'var(--tf-bg)',
+              border: 'none',
+              cursor: approving ? 'wait' : 'pointer',
+            }}
+          >
+            {approving ? 'Approving…' : '✓ Approve Plan'}
+          </button>
+        </div>
+      )}
+
+      {/* Project description as plan overview */}
+      {project.description && (
+        <div>
+          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
+            Overview
+          </p>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+            {project.description}
+          </p>
+        </div>
+      )}
+
+      {/* Spec files */}
+      {loading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : specs.length === 0 ? (
+        <p className="text-xs py-2" style={{ color: 'var(--tf-text-muted)' }}>
+          No spec files yet. The CEO will generate these after planning is complete.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
+            Spec Files
+          </p>
+          {specs.map((spec) => (
+            <div
+              key={spec.filename}
+              className="rounded-xl overflow-hidden"
+              style={{ border: '1px solid var(--tf-border)' }}
+            >
+              <button
+                onClick={() => setExpandedFile(expandedFile === spec.filename ? null : spec.filename)}
+                className="w-full flex items-center justify-between px-4 py-2.5 cursor-pointer text-left"
+                style={{ backgroundColor: 'var(--tf-surface-raised)' }}
+              >
+                <span className="text-xs font-medium" style={{ color: 'var(--tf-text)' }}>
+                  {spec.filename}
+                </span>
+                <svg
+                  width="12" height="12"
+                  viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+                  style={{
+                    color: 'var(--tf-text-muted)',
+                    transform: expandedFile === spec.filename ? 'rotate(180deg)' : 'none',
+                    transition: 'transform 0.2s',
+                  }}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {expandedFile === spec.filename && (
+                <pre
+                  className="px-4 py-3 text-xs overflow-x-auto"
+                  style={{
+                    color: 'var(--tf-text-secondary)',
+                    backgroundColor: 'var(--tf-bg)',
+                    fontFamily: 'ui-monospace, monospace',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    maxHeight: '300px',
+                    overflowY: 'auto',
+                  }}
+                >
+                  {spec.content}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Discussions tab (decisions grouped as meeting sessions) ----
+interface DiscussionsTabProps {
   projectId: string;
 }
-function DecisionsTab({ projectId }: DecisionsTabProps) {
+
+interface MeetingSession {
+  title: string;
+  date: string;
+  attendees: string[];
+  decisions: Decision[];
+}
+
+function groupDecisionsIntoMeetings(decisions: Decision[]): MeetingSession[] {
+  if (decisions.length === 0) return [];
+  const sorted = [...decisions].sort(
+    (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()
+  );
+  const sessions: MeetingSession[] = [];
+  const GAP_MS = 60 * 60 * 1000; // 1-hour gap = new session
+
+  for (const d of sorted) {
+    const t = new Date(d.timestamp || 0).getTime();
+    const last = sessions[sessions.length - 1];
+    const lastTime = last?.decisions.length
+      ? new Date(last.decisions[last.decisions.length - 1].timestamp || 0).getTime()
+      : -Infinity;
+
+    if (!last || t - lastTime > GAP_MS) {
+      const dateLabel = d.timestamp
+        ? new Date(d.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+        : 'Unknown date';
+      sessions.push({
+        title: `Planning Session — ${dateLabel}`,
+        date: d.timestamp || '',
+        attendees: [],
+        decisions: [],
+      });
+    }
+    const session = sessions[sessions.length - 1];
+    session.decisions.push(d);
+    const agent = d.decided_by;
+    if (agent && !session.attendees.includes(agent)) {
+      session.attendees.push(agent);
+    }
+  }
+  return sessions;
+}
+
+function DiscussionsTab({ projectId }: DiscussionsTabProps) {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -292,79 +481,75 @@ function DecisionsTab({ projectId }: DecisionsTabProps) {
     }
   }, [projectId]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   if (loading) {
-    return (
-      <div className="space-y-3 py-2">
-        {[1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-20 w-full" />
-        ))}
-      </div>
-    );
+    return <div className="space-y-3 py-2">{[1, 2].map((i) => <Skeleton key={i} className="h-24 w-full" />)}</div>;
   }
 
-  if (decisions.length === 0) {
+  const sessions = groupDecisionsIntoMeetings(decisions);
+
+  if (sessions.length === 0) {
     return (
       <p className="text-xs py-4" style={{ color: 'var(--tf-text-muted)' }}>
-        No decisions recorded for this project
+        No internal discussions recorded yet.
       </p>
     );
   }
 
   return (
-    <div className="space-y-3">
-      {decisions.map((d, i) => (
+    <div className="space-y-4">
+      {sessions.map((session, si) => (
         <div
-          key={i}
-          className="rounded-xl p-4 flex flex-col gap-2"
-          style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
+          key={si}
+          className="rounded-xl overflow-hidden"
+          style={{ border: '1px solid var(--tf-border)' }}
         >
-          <div className="flex items-start justify-between gap-3">
-            <h4 className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>
-              {d.title}
-            </h4>
+          {/* Session header */}
+          <div
+            className="px-4 py-3 flex items-start justify-between gap-3"
+            style={{ backgroundColor: 'var(--tf-surface-raised)', borderBottom: '1px solid var(--tf-border)' }}
+          >
+            <div>
+              <h4 className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>
+                {session.title}
+              </h4>
+              {session.attendees.length > 0 && (
+                <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                  <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>Present:</span>
+                  {session.attendees.map((a, i) => (
+                    <span
+                      key={i}
+                      className="text-xs px-2 py-0.5 rounded-full"
+                      style={{ backgroundColor: 'var(--tf-surface)', color: 'var(--tf-accent)', border: '1px solid var(--tf-border)' }}
+                    >
+                      {a}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
             <span className="text-xs flex-shrink-0" style={{ color: 'var(--tf-text-muted)' }}>
-              {d.timestamp
-                ? new Date(d.timestamp).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                  })
-                : ''}
+              {session.decisions.length} decision{session.decisions.length !== 1 ? 's' : ''}
             </span>
           </div>
 
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
-            <span style={{ color: 'var(--tf-accent-blue)' }}>Decision: </span>
-            {d.decision}
-          </p>
-
-          {d.rationale && (
-            <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
-              <span style={{ color: 'var(--tf-accent-blue)' }}>Rationale: </span>
-              {d.rationale}
-            </p>
-          )}
-
-          {d.alternatives && (
-            <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
-              <span style={{ color: 'var(--tf-warning)' }}>Alternatives: </span>
-              {d.alternatives}
-            </p>
-          )}
-
-          <div className="flex items-center gap-1.5 mt-1">
-            <div
-              className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-              style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}
-            >
-              {avatarInitial(d.decided_by)}
-            </div>
-            <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-              {d.decided_by}
-            </span>
+          {/* Decision list */}
+          <div className="divide-y" style={{ borderColor: 'var(--tf-border)' }}>
+            {session.decisions.map((d, di) => (
+              <div key={di} className="px-4 py-3 space-y-1">
+                <p className="text-xs font-medium" style={{ color: 'var(--tf-text)' }}>{d.title}</p>
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+                  <span style={{ color: 'var(--tf-accent-blue)' }}>Decision: </span>{d.decision}
+                </p>
+                {d.rationale && (
+                  <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+                    <span style={{ color: 'var(--tf-text-muted)' }}>Rationale: </span>{d.rationale}
+                  </p>
+                )}
+                <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>— {d.decided_by}</p>
+              </div>
+            ))}
           </div>
         </div>
       ))}
@@ -534,14 +719,26 @@ interface ProjectDetailProps {
   project: Project;
   tasks: Task[];
   onClose: () => void;
+  initialTab?: ProjectTab;
+  onApproved?: () => void;
 }
-function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
-  const [activeTab, setActiveTab] = useState<ProjectTab>('tasks');
-  const sbadge = statusBadge(project.status);
+function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: ProjectDetailProps) {
+  const [activeTab, setActiveTab] = useState<ProjectTab>(initialTab ?? 'tasks');
+  const [localProject, setLocalProject] = useState(project);
+  const sbadge = statusBadge(localProject.status);
+
+  useEffect(() => {
+    setLocalProject(project);
+  }, [project]);
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
 
   const tabs: { id: ProjectTab; label: string }[] = [
     { id: 'tasks', label: 'Tasks' },
-    { id: 'decisions', label: 'Decisions' },
+    { id: 'plan', label: 'Plan' },
+    { id: 'discussions', label: 'Discussions' },
     { id: 'team', label: 'Team' },
     { id: 'info', label: 'Info' },
   ];
@@ -628,22 +825,42 @@ function ProjectDetail({ project, tasks, onClose }: ProjectDetailProps) {
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto p-4" role="tabpanel">
         {activeTab === 'tasks' && <KanbanBoard tasks={tasks} />}
-        {activeTab === 'decisions' && <DecisionsTab projectId={project.id} />}
+        {activeTab === 'plan' && (
+          <PlanTab
+            project={localProject}
+            onApproved={() => {
+              setLocalProject((p) => ({ ...p, plan_approved: true, status: 'active' }));
+              onApproved?.();
+            }}
+          />
+        )}
+        {activeTab === 'discussions' && <DiscussionsTab projectId={project.id} />}
         {activeTab === 'team' && <TeamTab team={team} />}
-        {activeTab === 'info' && <InfoTab project={project} />}
+        {activeTab === 'info' && <InfoTab project={localProject} />}
       </div>
     </div>
   );
 }
 
 // ---- Main ProjectPanel ----
-export default function ProjectPanel({ projects, loading, tasksByProject }: ProjectPanelProps) {
+export default function ProjectPanel({ projects, loading, tasksByProject, initialProjectId, onProjectIdConsumed }: ProjectPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [initialTab, setInitialTab] = useState<ProjectTab | undefined>(undefined);
+
+  // When a navigation request arrives, open the specified project
+  useEffect(() => {
+    if (initialProjectId) {
+      setSelectedId(initialProjectId);
+      setInitialTab('plan');
+      onProjectIdConsumed?.();
+    }
+  }, [initialProjectId, onProjectIdConsumed]);
 
   const selectedProject = projects.find((p) => p.id === selectedId) ?? null;
   const selectedTasks = selectedId ? (tasksByProject[selectedId] ?? []) : [];
 
   const handleSelect = (id: string) => {
+    setInitialTab(undefined);
     setSelectedId((prev) => (prev === id ? null : id));
   };
 
@@ -699,6 +916,8 @@ export default function ProjectPanel({ projects, loading, tasksByProject }: Proj
             project={selectedProject}
             tasks={selectedTasks}
             onClose={() => setSelectedId(null)}
+            initialTab={initialTab}
+            onApproved={() => setInitialTab(undefined)}
           />
         </div>
       )}

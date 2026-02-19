@@ -25,6 +25,7 @@ export interface Project {
   team?: string[];
   task_counts?: Record<string, number>;
   total_tasks?: number;
+  plan_approved?: boolean;
 }
 
 export interface Task {

@@ -186,6 +186,15 @@ export default function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [chatHasUnread, setChatHasUnread] = useState(false);
 
+  // Project navigation from CEO chat
+  const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
+
+  const navigateToProject = (projectId: string) => {
+    setActiveTab('projects');
+    setPendingProjectId(projectId);
+    setChatOpen(false);
+  };
+
   // Shortcuts panel
   const { visible: shortcutsVisible, hide: hideShortcuts } = useShortcutsPanel();
 
@@ -417,6 +426,8 @@ export default function App() {
             projects={projects}
             loading={loadingProjects}
             tasksByProject={tasksByProject}
+            initialProjectId={pendingProjectId}
+            onProjectIdConsumed={() => setPendingProjectId(null)}
           />
         );
 
@@ -481,6 +492,11 @@ export default function App() {
             }}
             ceoName={ceoName}
             userName={userName}
+            onNavigateToProjects={() => {
+              setActiveTab('projects');
+              setChatOpen(false);
+            }}
+            onNavigateToProject={navigateToProject}
           />
         }
       >
