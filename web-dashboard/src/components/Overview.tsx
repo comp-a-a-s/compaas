@@ -612,6 +612,102 @@ function taskStatusColor(status: string): string {
 }
 
 // ---- Main Overview component ----
+// ---- Activity heatmap (GitHub-style) ----
+
+function ActivityHeatmap({ events }: { events: ActivityEvent[] }) {
+  const WEEKS = 15;
+  const DAYS = 7;
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+
+  // Build a map of dateStr → count
+  const countByDay = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const e of events) {
+      if (!e.timestamp) continue;
+      try {
+        const d = new Date(e.timestamp);
+        const key = d.toISOString().slice(0, 10);
+        map[key] = (map[key] ?? 0) + 1;
+      } catch { /* skip */ }
+    }
+    return map;
+  }, [events]);
+
+  // Build grid: WEEKS columns × 7 rows (Mon–Sun)
+  const grid: Array<Array<{ dateStr: string; count: number; inFuture: boolean }>> = [];
+  for (let w = 0; w < WEEKS; w++) {
+    const col: Array<{ dateStr: string; count: number; inFuture: boolean }> = [];
+    for (let d = 0; d < DAYS; d++) {
+      const offset = (WEEKS - 1 - w) * 7 + (DAYS - 1 - d);
+      const date = new Date(today);
+      date.setDate(today.getDate() - offset);
+      const dateStr = date.toISOString().slice(0, 10);
+      const inFuture = date > today;
+      col.push({ dateStr, count: countByDay[dateStr] ?? 0, inFuture });
+    }
+    grid.push(col);
+  }
+
+  const maxCount = Math.max(1, ...Object.values(countByDay));
+
+  function cellColor(count: number, inFuture: boolean): string {
+    if (inFuture || count === 0) return 'var(--tf-surface-raised)';
+    const intensity = Math.min(count / maxCount, 1);
+    if (intensity < 0.25) return 'rgba(63,185,80,0.2)';
+    if (intensity < 0.5)  return 'rgba(63,185,80,0.45)';
+    if (intensity < 0.75) return 'rgba(63,185,80,0.7)';
+    return 'rgba(63,185,80,0.95)';
+  }
+
+  const DAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+  return (
+    <div className="rounded-xl p-5" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--tf-text-muted)' }}>
+          Activity Heatmap
+        </h3>
+        <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>{events.length} events · past {WEEKS} weeks</span>
+      </div>
+      <div style={{ display: 'flex', gap: '3px', alignItems: 'flex-start' }}>
+        {/* Day labels */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginRight: '4px', paddingTop: '0px' }}>
+          {DAY_LABELS.map((l, i) => (
+            <div key={i} style={{ width: '12px', height: '12px', fontSize: '9px', color: 'var(--tf-text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{l}</div>
+          ))}
+        </div>
+        {/* Weeks */}
+        {grid.map((col, w) => (
+          <div key={w} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+            {col.map((cell, d) => (
+              <div
+                key={d}
+                title={cell.count > 0 ? `${cell.dateStr}: ${cell.count} event${cell.count !== 1 ? 's' : ''}` : cell.dateStr}
+                style={{
+                  width: '12px', height: '12px', borderRadius: '2px',
+                  backgroundColor: cellColor(cell.count, cell.inFuture),
+                  cursor: 'default', transition: 'transform 0.1s',
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.transform = 'scale(1.3)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = 'scale(1)'; }}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      {/* Legend */}
+      <div className="flex items-center gap-1.5 mt-3">
+        <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>Less</span>
+        {['var(--tf-surface-raised)', 'rgba(63,185,80,0.2)', 'rgba(63,185,80,0.45)', 'rgba(63,185,80,0.7)', 'rgba(63,185,80,0.95)'].map((c, i) => (
+          <div key={i} style={{ width: '12px', height: '12px', borderRadius: '2px', backgroundColor: c }} />
+        ))}
+        <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>More</span>
+      </div>
+    </div>
+  );
+}
+
 export default function Overview({
   agents,
   projects,
@@ -748,6 +844,9 @@ export default function Overview({
           )}
         </div>
       </div>
+
+      {/* Activity heatmap */}
+      <ActivityHeatmap events={events} />
     </div>
   );
 }

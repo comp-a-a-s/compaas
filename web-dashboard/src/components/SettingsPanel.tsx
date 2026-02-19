@@ -839,6 +839,23 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
   const [pollInterval, setPollInterval] = useState(5000);
   const [autoOpen, setAutoOpen] = useState(true);
 
+  // Display / integrations (localStorage-based)
+  const [compactMode, setCompactMode] = useState(() => localStorage.getItem('tf_compact_mode') === '1');
+  const [agentModels, setAgentModels] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('tf_agent_models') ?? '{}'); } catch { return {}; }
+  });
+  const [agentPersonas, setAgentPersonas] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('tf_agent_personas') ?? '{}'); } catch { return {}; }
+  });
+  const [githubToken, setGithubToken] = useState(() => localStorage.getItem('tf_github_token') ?? '');
+  const [slackToken, setSlackToken] = useState(() => localStorage.getItem('tf_slack_token') ?? '');
+  const [webhookUrl, setWebhookUrl] = useState(() => localStorage.getItem('tf_webhook_url') ?? '');
+
+  useEffect(() => {
+    // Apply compact mode on mount
+    document.body.classList.toggle('compact-mode', compactMode);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     fetchConfig().then((cfg) => {
       if (cfg) {
@@ -983,6 +1000,135 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
           Create a bot via @BotFather, then paste the credentials below.
         </p>
         <TelegramSection />
+      </Section>
+
+      {/* Display */}
+      <Section title="Display">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <Toggle
+            value={compactMode}
+            onChange={(v) => {
+              setCompactMode(v);
+              localStorage.setItem('tf_compact_mode', v ? '1' : '0');
+              document.body.classList.toggle('compact-mode', v);
+            }}
+            label="Compact mode"
+            description="Reduce spacing for a denser, information-rich layout"
+          />
+        </div>
+      </Section>
+
+      {/* Per-agent models */}
+      <Section title="Agent Models">
+        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
+          Override the model used for individual agents. Leave blank to use the global provider setting.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {AGENT_ROSTER.slice(0, 6).map((agent) => (
+            <div key={agent.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+              <div style={{ flex: '0 0 130px', fontSize: '12px', fontWeight: 500, color: C.textSecondary }}>{agent.role}</div>
+              <input
+                type="text"
+                value={agentModels[agent.id] ?? ''}
+                onChange={(e) => {
+                  const next = { ...agentModels, [agent.id]: e.target.value };
+                  setAgentModels(next);
+                  localStorage.setItem('tf_agent_models', JSON.stringify(next));
+                }}
+                placeholder="(global default)"
+                style={{ ...inputStyle(), flex: 1, fontSize: '12px', padding: '5px 10px' }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              />
+            </div>
+          ))}
+          <p style={{ fontSize: '11px', color: C.textMuted }}>
+            Examples: <code style={{ fontSize: '10px' }}>claude-opus-4-6</code>, <code style={{ fontSize: '10px' }}>gpt-4o</code>, <code style={{ fontSize: '10px' }}>llama3.2</code>
+          </p>
+        </div>
+      </Section>
+
+      {/* Agent personas */}
+      <Section title="Agent Personas">
+        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
+          Set a custom system prompt for each agent to shape their personality and focus.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {AGENT_ROSTER.slice(0, 4).map((agent) => (
+            <div key={agent.id}>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{agent.role}</label>
+              <textarea
+                value={agentPersonas[agent.id] ?? ''}
+                onChange={(e) => {
+                  const next = { ...agentPersonas, [agent.id]: e.target.value };
+                  setAgentPersonas(next);
+                  localStorage.setItem('tf_agent_personas', JSON.stringify(next));
+                }}
+                placeholder={`Custom system prompt for ${agent.role}…`}
+                rows={2}
+                style={{ ...inputStyle(), resize: 'vertical', fontFamily: 'inherit', fontSize: '12px', lineHeight: '1.5' }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              />
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* Integrations */}
+      <Section title="Integrations">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* GitHub */}
+          <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>GitHub</div>
+                <div style={{ fontSize: '11px', color: C.textSecondary }}>CEO creates PRs, issues, and reviews diffs</div>
+              </div>
+              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(255,180,0,0.12)', color: C.warning, border: `1px solid rgba(255,180,0,0.3)` }}>Coming soon</span>
+            </div>
+            <input type="password" value={githubToken} onChange={(e) => { setGithubToken(e.target.value); localStorage.setItem('tf_github_token', e.target.value); }}
+              placeholder="ghp_xxxx (Personal access token)"
+              style={{ ...inputStyle({ maxWidth: '380px', fontSize: '12px' }) }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+
+          {/* Slack */}
+          <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Slack Bot</div>
+                <div style={{ fontSize: '11px', color: C.textSecondary }}>Two-way Slack integration for CEO conversations</div>
+              </div>
+              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(255,180,0,0.12)', color: C.warning, border: `1px solid rgba(255,180,0,0.3)` }}>Coming soon</span>
+            </div>
+            <input type="password" value={slackToken} onChange={(e) => { setSlackToken(e.target.value); localStorage.setItem('tf_slack_token', e.target.value); }}
+              placeholder="xoxb-xxxx (Bot token)"
+              style={{ ...inputStyle({ maxWidth: '380px', fontSize: '12px' }) }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+
+          {/* Webhooks */}
+          <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Outbound Webhooks</div>
+                <div style={{ fontSize: '11px', color: C.textSecondary }}>POST to a URL on project/task events</div>
+              </div>
+              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(255,180,0,0.12)', color: C.warning, border: `1px solid rgba(255,180,0,0.3)` }}>Coming soon</span>
+            </div>
+            <input type="url" value={webhookUrl} onChange={(e) => { setWebhookUrl(e.target.value); localStorage.setItem('tf_webhook_url', e.target.value); }}
+              placeholder="https://your-server.com/webhook"
+              style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+        </div>
       </Section>
 
       {/* Save button */}

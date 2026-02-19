@@ -305,3 +305,19 @@ body {
 .streaming-bubble {
   animation: live-border 2s ease-in-out infinite;
 }
+
+/* ---- Compact mode ---- */
+body.compact-mode .rounded-xl { border-radius: 8px !important; }
+body.compact-mode .rounded-2xl { border-radius: 10px !important; }
+body.compact-mode .px-4 { padding-left: 10px !important; padding-right: 10px !important; }
+body.compact-mode .py-4 { padding-top: 10px !important; padding-bottom: 10px !important; }
+body.compact-mode .py-3 { padding-top: 6px !important; padding-bottom: 6px !important; }
+body.compact-mode .mb-3 { margin-bottom: 6px !important; }
+body.compact-mode .gap-4 { gap: 10px !important; }
+body.compact-mode .gap-3 { gap: 6px !important; }
+body.compact-mode .text-sm { font-size: 12px !important; }
+body.compact-mode .text-xs { font-size: 10px !important; }
+body.compact-mode .w-8 { width: 28px !important; }
+body.compact-mode .h-8 { height: 28px !important; }
+body.compact-mode .w-10 { width: 32px !important; }
+body.compact-mode .h-10 { height: 32px !important; }
