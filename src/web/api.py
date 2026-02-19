@@ -4,6 +4,7 @@ FastAPI application exposing live company state — org chart, projects,
 tasks, activity stream, token metrics, agents, and model settings.
 """
 
+import logging
 import os
 import json
 import shutil
@@ -12,7 +13,9 @@ import yaml
 from typing import AsyncGenerator
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+logger = logging.getLogger(__name__)
+
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 
@@ -368,6 +371,7 @@ def token_budgets(
 # ---------------------------------------------------------------------------
 
 CONFIG_PATH = os.path.join(DATA_DIR, "config.yaml")
+MEMORY_PATH = os.path.join(DATA_DIR, "ceo_memory.md")
 
 DEFAULT_CONFIG: dict = {
     "setup_complete": False,
@@ -815,6 +819,14 @@ def _build_context_prompt(
     )
     parts.append("")
 
+    # Inject persistent CEO memories if any exist
+    if os.path.exists(MEMORY_PATH):
+        with open(MEMORY_PATH) as _mf:
+            _mem = _mf.read().strip()
+        if _mem:
+            parts.append(f"[YOUR PERSISTENT MEMORIES from previous sessions:\n{_mem}]")
+            parts.append("")
+
     if recent:
         parts.append("Recent conversation context:")
         for msg in recent:
@@ -1173,6 +1185,211 @@ async def chat_websocket(websocket: WebSocket) -> None:
             await websocket.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# CEO Memory
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/memory", summary="Get CEO persistent memories")
+def get_memory() -> dict:
+    """Return all stored CEO memories as a list of entries."""
+    if not os.path.exists(MEMORY_PATH):
+        return {"entries": [], "raw": ""}
+    with open(MEMORY_PATH) as f:
+        raw = f.read()
+    entries = [line[2:].strip() for line in raw.splitlines() if line.startswith("- ")]
+    return {"entries": entries, "raw": raw}
+
+
+@app.post("/api/memory", summary="Add a CEO memory entry")
+def add_memory(body: dict) -> dict:
+    """Append a new memory entry (bullet point) to the CEO memory file."""
+    entry = (body.get("entry") or "").strip()
+    if not entry:
+        raise HTTPException(status_code=400, detail="entry required")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    existing = ""
+    if os.path.exists(MEMORY_PATH):
+        with open(MEMORY_PATH) as f:
+            existing = f.read()
+    if entry in existing:
+        return {"status": "already_exists"}
+    with open(MEMORY_PATH, "a") as f:
+        if existing and not existing.endswith("\n"):
+            f.write("\n")
+        f.write(f"- {entry}\n")
+    return {"status": "added"}
+
+
+@app.delete("/api/memory", summary="Clear all CEO memories")
+def clear_memory() -> dict:
+    """Delete the CEO memory file."""
+    if os.path.exists(MEMORY_PATH):
+        os.remove(MEMORY_PATH)
+    return {"status": "cleared"}
+
+
+# ---------------------------------------------------------------------------
+# Context auto-summary
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/chat/summarize", summary="Compress chat history to a summary")
+async def summarize_chat() -> dict:
+    """Summarise the last 30 messages into a system note and truncate history."""
+    messages = await asyncio.to_thread(_load_chat_messages)
+    if len(messages) < 6:
+        return {"status": "too_short", "messages_kept": len(messages)}
+
+    history_text = "\n".join(
+        f"{'Chairman' if m['role'] == 'user' else 'CEO'}: {m['content'][:300]}"
+        for m in messages[-30:]
+    )
+    summary_note = (
+        f"[AUTO-SUMMARY at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}] "
+        f"Earlier conversation covered:\n{history_text[:800]}"
+    )
+    summary_msg: dict = {
+        "role": "system",
+        "content": summary_note,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    compressed = [summary_msg] + messages[-5:]
+    await asyncio.to_thread(_save_chat_messages, compressed)
+    return {"status": "ok", "messages_kept": len(compressed)}
+
+
+# ---------------------------------------------------------------------------
+# Integration: GitHub inbound webhook
+# ---------------------------------------------------------------------------
+
+
+def _append_activity_event(event: dict) -> None:
+    """Append a JSON-encoded event to activity.log."""
+    activity_log_path = os.path.join(DATA_DIR, "activity.log")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(activity_log_path, "a") as f:
+        f.write(json.dumps(event) + "\n")
+
+    # Dispatch outbound webhook (fire-and-forget)
+    webhook_url = _load_config().get("integrations", {}).get("webhook_url", "")
+    if webhook_url:
+        import threading
+        import urllib.request
+
+        def _post() -> None:
+            try:
+                data = json.dumps(event).encode()
+                req = urllib.request.Request(
+                    webhook_url,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=5)
+            except Exception:
+                pass
+
+        threading.Thread(target=_post, daemon=True).start()
+
+
+@app.post("/api/integrations/github/webhook", summary="GitHub inbound webhook")
+async def github_webhook(request: Request) -> dict:
+    """Receive GitHub webhook events and append them to the activity log."""
+    try:
+        body = await request.body()
+        payload = json.loads(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    event_type = request.headers.get("X-GitHub-Event", "ping")
+    if event_type == "ping":
+        return {"status": "pong"}
+
+    repo = payload.get("repository", {}).get("full_name", "unknown/repo")
+
+    if event_type == "push":
+        commits = payload.get("commits", [])
+        msg = commits[-1].get("message", "")[:80] if commits else "no commits"
+        detail = f"Push to {repo}: {msg}"
+        action = "PUSH"
+    elif event_type == "pull_request":
+        pr = payload.get("pull_request", {})
+        detail = f"PR #{pr.get('number')}: {pr.get('title', '')[:80]}"
+        action = "PULL_REQUEST"
+    elif event_type == "issues":
+        issue = payload.get("issue", {})
+        detail = f"Issue #{issue.get('number')}: {issue.get('title', '')[:80]}"
+        action = "ISSUE"
+    elif event_type == "issue_comment":
+        issue = payload.get("issue", {})
+        detail = f"Comment on #{issue.get('number')}: {issue.get('title', '')[:60]}"
+        action = "COMMENT"
+    else:
+        detail = f"GitHub {event_type} on {repo}"
+        action = "GITHUB"
+
+    _append_activity_event({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "agent": "GitHub",
+        "action": action,
+        "detail": detail,
+    })
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Integration: Slack inbound events
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/integrations/slack/events", summary="Slack events API endpoint")
+async def slack_events(request: Request) -> dict:
+    """Handle Slack Events API payloads (URL verification + messages)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    # Slack URL verification challenge
+    if body.get("type") == "url_verification":
+        return {"challenge": body.get("challenge", "")}
+
+    event = body.get("event", {})
+    if event.get("type") == "message" and not event.get("bot_id"):
+        text = (event.get("text") or "").strip()
+        user = event.get("user", "slack-user")
+        if text:
+            async with _chat_lock:
+                await asyncio.to_thread(_append_chat_message, "user", f"[Slack from {user}] {text}")
+            _append_activity_event({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "agent": "Slack",
+                "action": "MESSAGE",
+                "detail": f"From {user}: {text[:120]}",
+            })
+
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Integration: save integration settings
+# ---------------------------------------------------------------------------
+
+
+@app.patch("/api/integrations", summary="Save integration settings (tokens, webhook URL)")
+def save_integrations(body: dict) -> dict:
+    """Persist integration settings under config.integrations."""
+    config = _load_config()
+    integrations = config.get("integrations", {})
+    for key in ("github_token", "slack_token", "webhook_url"):
+        if key in body:
+            integrations[key] = body[key]
+    config["integrations"] = integrations
+    _save_config(config)
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

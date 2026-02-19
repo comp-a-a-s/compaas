@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { fetchConfig, updateConfig, testLlmConnection } from '../api/client';
+import { fetchConfig, updateConfig, testLlmConnection, saveIntegrations } from '../api/client';
 import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
@@ -874,12 +874,16 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
 
     const patch: Partial<AppConfig> = {
       user: { name: userName.trim() },
-      ui: { theme: config?.ui?.theme ?? 'midnight', ...(config?.ui ?? {}), poll_interval_ms: pollInterval },
+      ui: { theme: 'midnight', ...(config?.ui ?? {}), poll_interval_ms: pollInterval },
       server: { host: config?.server?.host ?? '', port: config?.server?.port ?? 3000, ...(config?.server ?? {}), auto_open_browser: autoOpen },
     };
 
     try {
       await updateConfig(patch);
+      // Persist integrations — only if at least one value is set
+      if (githubToken || slackToken || webhookUrl) {
+        await saveIntegrations({ github_token: githubToken, slack_token: slackToken, webhook_url: webhookUrl });
+      }
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
       onConfigUpdated?.();
@@ -1085,7 +1089,7 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
                 <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>GitHub</div>
                 <div style={{ fontSize: '11px', color: C.textSecondary }}>CEO creates PRs, issues, and reviews diffs</div>
               </div>
-              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(255,180,0,0.12)', color: C.warning, border: `1px solid rgba(255,180,0,0.3)` }}>Coming soon</span>
+              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Inbound webhook ready</span>
             </div>
             <input type="password" value={githubToken} onChange={(e) => { setGithubToken(e.target.value); localStorage.setItem('tf_github_token', e.target.value); }}
               placeholder="ghp_xxxx (Personal access token)"
@@ -1093,6 +1097,7 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
               onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
               onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
             />
+            <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>Webhook URL: <code style={{ color: C.accent }}>/api/integrations/github/webhook</code></p>
           </div>
 
           {/* Slack */}
@@ -1102,7 +1107,7 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
                 <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Slack Bot</div>
                 <div style={{ fontSize: '11px', color: C.textSecondary }}>Two-way Slack integration for CEO conversations</div>
               </div>
-              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(255,180,0,0.12)', color: C.warning, border: `1px solid rgba(255,180,0,0.3)` }}>Coming soon</span>
+              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Events API ready</span>
             </div>
             <input type="password" value={slackToken} onChange={(e) => { setSlackToken(e.target.value); localStorage.setItem('tf_slack_token', e.target.value); }}
               placeholder="xoxb-xxxx (Bot token)"
@@ -1110,6 +1115,7 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
               onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
               onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
             />
+            <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>Events URL: <code style={{ color: C.accent }}>/api/integrations/slack/events</code></p>
           </div>
 
           {/* Webhooks */}
@@ -1117,9 +1123,9 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
               <div>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Outbound Webhooks</div>
-                <div style={{ fontSize: '11px', color: C.textSecondary }}>POST to a URL on project/task events</div>
+                <div style={{ fontSize: '11px', color: C.textSecondary }}>POST to a URL on every activity event</div>
               </div>
-              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(255,180,0,0.12)', color: C.warning, border: `1px solid rgba(255,180,0,0.3)` }}>Coming soon</span>
+              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Active</span>
             </div>
             <input type="url" value={webhookUrl} onChange={(e) => { setWebhookUrl(e.target.value); localStorage.setItem('tf_webhook_url', e.target.value); }}
               placeholder="https://your-server.com/webhook"

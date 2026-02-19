@@ -708,6 +708,26 @@ function ActivityHeatmap({ events }: { events: ActivityEvent[] }) {
   );
 }
 
+// ---- Widget configuration ----
+const WIDGETS_STORAGE_KEY = 'tf_overview_widgets';
+const ALL_WIDGETS = ['stats', 'orgchart', 'tasks', 'projects', 'heatmap'] as const;
+type WidgetId = typeof ALL_WIDGETS[number];
+const WIDGET_LABELS: Record<WidgetId, string> = {
+  stats:    'Stat Cards',
+  orgchart: 'Org Chart',
+  tasks:    'Task Status',
+  projects: 'Project Progress',
+  heatmap:  'Activity Heatmap',
+};
+
+function loadWidgets(): Record<WidgetId, boolean> {
+  try {
+    const stored = localStorage.getItem(WIDGETS_STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch { /* ignore */ }
+  return { stats: true, orgchart: true, tasks: true, projects: true, heatmap: true };
+}
+
 export default function Overview({
   agents,
   projects,
@@ -717,7 +737,18 @@ export default function Overview({
   loadingProjects,
   loadingTasks,
 }: OverviewProps) {
-  // Compute task status distribution — memoized so it only recomputes when tasks change
+  const [widgets, setWidgets] = useState<Record<WidgetId, boolean>>(loadWidgets);
+  const [showWidgetMenu, setShowWidgetMenu] = useState(false);
+
+  const toggleWidget = (id: WidgetId) => {
+    setWidgets((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      localStorage.setItem(WIDGETS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  // Compute task status distribution
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const t of tasks) {
@@ -728,125 +759,124 @@ export default function Overview({
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 gap-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <StatCard
-          label="Agents"
-          value={agents.length.toString()}
-          color="var(--tf-accent)"
-          loading={loadingAgents}
-        />
-        <StatCard
-          label="Projects"
-          value={projects.length.toString()}
-          color="var(--tf-accent-blue)"
-          loading={loadingProjects}
-        />
-        <StatCard
-          label="Tasks"
-          value={tasks.length.toString()}
-          color="var(--tf-success)"
-          loading={loadingTasks}
-        />
-        <StatCard
-          label="Live Events"
-          value={events.length.toString()}
-          color="var(--tf-warning)"
-          loading={false}
-        />
+      {/* Widget config toolbar */}
+      <div className="flex justify-end">
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowWidgetMenu((v) => !v)}
+            className="text-xs px-3 py-1.5 rounded-lg cursor-pointer flex items-center gap-1.5 transition-all"
+            style={{
+              backgroundColor: showWidgetMenu ? 'var(--tf-surface-raised)' : 'var(--tf-surface)',
+              color: 'var(--tf-text-secondary)',
+              border: '1px solid var(--tf-border)',
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+            Widgets
+          </button>
+          {showWidgetMenu && (
+            <div
+              className="absolute right-0 top-full mt-1 rounded-xl overflow-hidden z-20"
+              style={{ minWidth: '180px', backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}
+            >
+              <p className="px-3 py-2 text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--tf-text-muted)', borderBottom: '1px solid var(--tf-border)' }}>
+                Toggle Widgets
+              </p>
+              {ALL_WIDGETS.map((id) => (
+                <button
+                  key={id}
+                  onClick={() => toggleWidget(id)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-xs cursor-pointer transition-all"
+                  style={{ color: 'var(--tf-text)', backgroundColor: 'transparent' }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)'; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                >
+                  {WIDGET_LABELS[id]}
+                  <span style={{ color: widgets[id] ? 'var(--tf-success)' : 'var(--tf-text-muted)' }}>
+                    {widgets[id] ? '✓' : '○'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Org chart — full width */}
-      <div
-        className="rounded-xl p-5"
-        style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
-      >
-        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
-          Organization Hierarchy
-        </h3>
-        <OrgChart agents={agents} loading={loadingAgents} events={events} />
-      </div>
+      {/* Stat cards */}
+      {widgets.stats && (
+        <div className="grid grid-cols-2 gap-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+          <StatCard label="Agents"      value={agents.length.toString()}  color="var(--tf-accent)"       loading={loadingAgents} />
+          <StatCard label="Projects"    value={projects.length.toString()} color="var(--tf-accent-blue)"  loading={loadingProjects} />
+          <StatCard label="Tasks"       value={tasks.length.toString()}    color="var(--tf-success)"      loading={loadingTasks} />
+          <StatCard label="Live Events" value={events.length.toString()}   color="var(--tf-warning)"      loading={false} />
+        </div>
+      )}
+
+      {/* Org chart */}
+      {widgets.orgchart && (
+        <div className="rounded-xl p-5" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
+          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
+            Organization Hierarchy
+          </h3>
+          <OrgChart agents={agents} loading={loadingAgents} events={events} />
+        </div>
+      )}
 
       {/* Task status + Project progress row */}
-      <div className="grid gap-6" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        {/* Task status summary */}
-        <div
-          className="rounded-xl p-5"
-          style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
-        >
-          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
-            Task Status Summary
-          </h3>
-          {loadingTasks ? (
-            <div className="space-y-2">
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-6 w-full" />
-              ))}
-            </div>
-          ) : Object.keys(statusCounts).length === 0 ? (
-            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-              No tasks loaded
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {Object.entries(statusCounts)
-                .sort((a, b) => b[1] - a[1])
-                .map(([status, count]) => {
-                  const pct = tasks.length > 0 ? Math.round((count / tasks.length) * 100) : 0;
-                  const color = taskStatusColor(status);
-                  return (
-                    <div key={status} className="flex flex-col gap-1">
-                      <div className="flex justify-between">
-                        <span className="text-xs capitalize" style={{ color: 'var(--tf-text)' }}>
-                          {status.replace(/_/g, ' ')}
-                        </span>
-                        <span className="text-xs" style={{ color }}>
-                          {count} ({pct}%)
-                        </span>
+      {(widgets.tasks || widgets.projects) && (
+        <div className="grid gap-6" style={{ gridTemplateColumns: widgets.tasks && widgets.projects ? '1fr 1fr' : '1fr' }}>
+          {widgets.tasks && (
+            <div className="rounded-xl p-5" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
+              <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
+                Task Status Summary
+              </h3>
+              {loadingTasks ? (
+                <div className="space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-6 w-full" />)}</div>
+              ) : Object.keys(statusCounts).length === 0 ? (
+                <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>No tasks loaded</p>
+              ) : (
+                <div className="space-y-3">
+                  {Object.entries(statusCounts).sort((a, b) => b[1] - a[1]).map(([status, count]) => {
+                    const pct = tasks.length > 0 ? Math.round((count / tasks.length) * 100) : 0;
+                    const color = taskStatusColor(status);
+                    return (
+                      <div key={status} className="flex flex-col gap-1">
+                        <div className="flex justify-between">
+                          <span className="text-xs capitalize" style={{ color: 'var(--tf-text)' }}>{status.replace(/_/g, ' ')}</span>
+                          <span className="text-xs" style={{ color }}>{count} ({pct}%)</span>
+                        </div>
+                        <div className="h-1.5 rounded-full" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
+                          <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+                        </div>
                       </div>
-                      <div className="h-1.5 rounded-full" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
-                        <div
-                          className="h-full rounded-full"
-                          style={{ width: `${pct}%`, backgroundColor: color }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
-        </div>
 
-        {/* Project progress */}
-        <div
-          className="rounded-xl p-5"
-          style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
-        >
-          <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
-            Project Progress
-          </h3>
-          {loadingProjects ? (
-            <div className="space-y-2">
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-8 w-full" />
-              ))}
-            </div>
-          ) : projects.length === 0 ? (
-            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-              No projects found
-            </p>
-          ) : (
-            <div className="space-y-4">
-              {projects.map((p) => (
-                <ProjectProgress key={p.id} project={p} />
-              ))}
+          {widgets.projects && (
+            <div className="rounded-xl p-5" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
+              <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
+                Project Progress
+              </h3>
+              {loadingProjects ? (
+                <div className="space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+              ) : projects.length === 0 ? (
+                <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>No projects found</p>
+              ) : (
+                <div className="space-y-4">{projects.map((p) => <ProjectProgress key={p.id} project={p} />)}</div>
+              )}
             </div>
           )}
         </div>
-      </div>
+      )}
 
       {/* Activity heatmap */}
-      <ActivityHeatmap events={events} />
+      {widgets.heatmap && <ActivityHeatmap events={events} />}
     </div>
   );
 }

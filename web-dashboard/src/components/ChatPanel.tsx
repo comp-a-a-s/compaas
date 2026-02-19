@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { ChatMessage, Project } from '../types';
-import { fetchChatHistory, clearChatHistory, createChatWebSocket, approveProjectPlan } from '../api/client';
+import { fetchChatHistory, clearChatHistory, createChatWebSocket, approveProjectPlan, fetchMemory, addMemory, clearMemory, summarizeChat } from '../api/client';
 
 // ---- Tone presets ----
 
@@ -523,8 +523,12 @@ export default function ChatPanel({
   const [actionLog, setActionLog] = useState<ActionEntry[]>([]);
   const [dismissedProjectIds, setDismissedProjectIds] = useState<Set<string>>(new Set());
 
-  // Feature: Tone presets
-  const [tone, setTone] = useState<ToneId>(() => (localStorage.getItem('tf_chat_tone') as ToneId) || 'default');
+  // Feature: Tone presets — validate stored value is a known ToneId
+  const [tone, setTone] = useState<ToneId>(() => {
+    const stored = localStorage.getItem('tf_chat_tone');
+    const valid = TONE_OPTIONS.map((t) => t.id as string);
+    return stored && valid.includes(stored) ? (stored as ToneId) : 'default';
+  });
   const [showToneMenu, setShowToneMenu] = useState(false);
 
   // Feature: Conversation search
@@ -542,6 +546,16 @@ export default function ChatPanel({
     } catch { return new Set(); }
   });
   const [showPinned, setShowPinned] = useState(false);
+
+  // Feature: CEO Memory
+  const [memoryEntries, setMemoryEntries] = useState<string[]>([]);
+  const [showMemory, setShowMemory] = useState(false);
+  const [newMemoryText, setNewMemoryText] = useState('');
+  const [memorySaving, setMemorySaving] = useState(false);
+
+  // Feature: Session token estimate + context summary
+  const [showSummaryConfirm, setShowSummaryConfirm] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -604,6 +618,44 @@ export default function ChatPanel({
       if (Array.isArray(history) && history.length > 0) setMessages(history);
     }).catch(() => {});
   }, []);
+
+  // Load CEO memories
+  useEffect(() => {
+    fetchMemory().then((m) => setMemoryEntries(m.entries)).catch(() => {});
+  }, []);
+
+  const handleAddMemory = async () => {
+    const text = newMemoryText.trim();
+    if (!text) return;
+    setMemorySaving(true);
+    await addMemory(text);
+    setNewMemoryText('');
+    const m = await fetchMemory();
+    setMemoryEntries(m.entries);
+    setMemorySaving(false);
+  };
+
+  const handleClearMemory = async () => {
+    await clearMemory();
+    setMemoryEntries([]);
+  };
+
+  const handleSummarize = async () => {
+    setSummarizing(true);
+    setShowSummaryConfirm(false);
+    const result = await summarizeChat();
+    setSummarizing(false);
+    if (result.status === 'ok') {
+      // Reload history to see compressed version
+      fetchChatHistory(100).then((h) => { if (Array.isArray(h)) setMessages(h); }).catch(() => {});
+    }
+  };
+
+  // Rough session token estimate: ~1.3 tokens per word
+  const sessionTokenEstimate = useMemo(() => {
+    const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+    return Math.round(totalChars / 4); // ~4 chars per token
+  }, [messages]);
 
   // WebSocket
   const connectWebSocket = useCallback(() => {
@@ -779,6 +831,86 @@ export default function ChatPanel({
         </div>
       )}
 
+      {/* Session token estimate */}
+      {sessionTokenEstimate > 0 && (
+        <span
+          title={`Estimated session tokens: ${sessionTokenEstimate.toLocaleString()}`}
+          style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '5px', backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-text-muted)', border: '1px solid var(--tf-border)', whiteSpace: 'nowrap' }}
+        >
+          ~{sessionTokenEstimate >= 1000 ? `${(sessionTokenEstimate / 1000).toFixed(1)}k` : sessionTokenEstimate} tok
+        </span>
+      )}
+
+      {/* Context summary button */}
+      {messages.length >= 6 && (
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowSummaryConfirm((v) => !v)}
+            title="Compress conversation to summary"
+            disabled={summarizing}
+            style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '11px', cursor: summarizing ? 'wait' : 'pointer', border: '1px solid var(--tf-border)', backgroundColor: 'transparent', color: 'var(--tf-text-muted)' }}
+          >
+            {summarizing ? '…' : '⬡'}
+          </button>
+          {showSummaryConfirm && (
+            <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50, backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', borderRadius: '8px', padding: '10px 12px', minWidth: '200px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }}>
+              <p style={{ fontSize: '12px', color: 'var(--tf-text)', marginBottom: '8px' }}>Compress history to summary?</p>
+              <p style={{ fontSize: '11px', color: 'var(--tf-text-muted)', marginBottom: '8px' }}>Keeps last 5 messages + auto-summary. Saves context space.</p>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button onClick={handleSummarize} style={{ flex: 1, padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: 'none', backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}>Compress</button>
+                <button onClick={() => setShowSummaryConfirm(false)} style={{ flex: 1, padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: '1px solid var(--tf-border)', backgroundColor: 'transparent', color: 'var(--tf-text-muted)' }}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* CEO Memory button */}
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={(e) => { e.stopPropagation(); setShowMemory((v) => !v); }}
+          title={`CEO Memory (${memoryEntries.length} entries)`}
+          style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: `1px solid ${memoryEntries.length > 0 ? 'var(--tf-accent)' : 'var(--tf-border)'}`, backgroundColor: memoryEntries.length > 0 ? 'rgba(88,166,255,0.1)' : 'transparent', color: memoryEntries.length > 0 ? 'var(--tf-accent)' : 'var(--tf-text-muted)' }}
+        >
+          🧠{memoryEntries.length > 0 ? ` ${memoryEntries.length}` : ''}
+        </button>
+        {showMemory && (
+          <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50, backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', borderRadius: '8px', padding: '12px', minWidth: '260px', maxWidth: '320px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <p style={{ fontSize: '12px', fontWeight: 600, color: 'var(--tf-text)' }}>CEO Memory</p>
+              {memoryEntries.length > 0 && (
+                <button onClick={handleClearMemory} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer', border: '1px solid var(--tf-error)', backgroundColor: 'transparent', color: 'var(--tf-error)' }}>
+                  Clear all
+                </button>
+              )}
+            </div>
+            {memoryEntries.length === 0 ? (
+              <p style={{ fontSize: '12px', color: 'var(--tf-text-muted)', marginBottom: '8px' }}>No memories saved yet. Add a note the CEO should always remember.</p>
+            ) : (
+              <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 8px', maxHeight: '140px', overflowY: 'auto' }}>
+                {memoryEntries.map((e, i) => (
+                  <li key={i} style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', padding: '3px 0', borderBottom: '1px solid var(--tf-border)', lineHeight: 1.4 }}>
+                    · {e}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div style={{ display: 'flex', gap: '4px' }}>
+              <input
+                value={newMemoryText}
+                onChange={(e) => setNewMemoryText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAddMemory(); }}
+                placeholder="Add a memory…"
+                style={{ flex: 1, fontSize: '11px', padding: '4px 8px', borderRadius: '5px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-text)', outline: 'none' }}
+              />
+              <button onClick={handleAddMemory} disabled={memorySaving || !newMemoryText.trim()} style={{ padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: 'none', backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}>
+                {memorySaving ? '…' : '+'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Thinking toggle */}
       <button onClick={() => setShowThinking((t) => !t)} title={showThinking ? 'Hide thinking' : 'Show thinking'}
         style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: '1px solid var(--tf-border)', backgroundColor: showThinking ? 'var(--tf-surface-raised)' : 'transparent', color: 'var(--tf-text-muted)' }}>
@@ -884,7 +1016,9 @@ export default function ChatPanel({
               <MessageBubble message={{ role: 'ceo', content: streamingContent, timestamp: new Date().toISOString() }}
                 isStreaming ceoName={ceoName} userName={userName} />
             )}
-            {isWaiting && !streamingContent && <ThinkingIndicator ceoName={ceoName} customText={thinkingContent || undefined} />}
+            {isWaiting && !streamingContent && actionLog.length === 0 && showThinking && (
+              <ThinkingIndicator ceoName={ceoName} customText={thinkingContent || undefined} />
+            )}
             {isWaiting && actionLog.length > 0 && <ActionLog entries={actionLog} ceoName={ceoName} />}
 
             {/* Approval cards */}

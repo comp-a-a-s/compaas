@@ -18,6 +18,24 @@ async function safeFetch<T>(url: string, fallback: T, options?: RequestInit): Pr
   }
 }
 
+/** Shared helper for POST/PATCH/DELETE mutations with timeout. Returns true on success. */
+async function safeMutate(url: string, method: string, body?: unknown): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method,
+      signal: controller.signal,
+      ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function fetchAgents(): Promise<Agent[]> {
   return safeFetch<Agent[]>(`${BASE}/agents`, []);
 }
@@ -75,15 +93,7 @@ export async function fetchChatHistory(limit = 50): Promise<ChatMessage[]> {
 }
 
 export async function clearChatHistory(): Promise<void> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    await fetch(`${BASE}/chat/history`, { method: 'DELETE', signal: controller.signal });
-  } catch {
-    // ignore
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  await safeMutate(`${BASE}/chat/history`, 'DELETE');
 }
 
 export function createChatWebSocket(): WebSocket {
@@ -136,19 +146,7 @@ export async function fetchProjectSpecs(id: string): Promise<{ filename: string;
 }
 
 export async function approveProjectPlan(id: string): Promise<boolean> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(`${BASE}/projects/${encodeURIComponent(id)}/approve`, {
-      method: 'POST',
-      signal: controller.signal,
-    });
-    return res.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return safeMutate(`${BASE}/projects/${encodeURIComponent(id)}/approve`, 'POST');
 }
 
 export async function testLlmConnection(opts: {
@@ -156,15 +154,55 @@ export async function testLlmConnection(opts: {
   model: string;
   api_key: string;
 }): Promise<{ status: 'ok' | 'error'; message: string }> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS * 2); // 30s for LLM test
   try {
     const res = await fetch(`${BASE}/llm/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts),
+      signal: controller.signal,
     });
     if (!res.ok) return { status: 'error', message: `HTTP ${res.status}` };
     return res.json();
   } catch (err) {
     return { status: 'error', message: String(err) };
+  } finally {
+    clearTimeout(timeoutId);
   }
+}
+
+// ---- CEO Memory ----
+
+export async function fetchMemory(): Promise<{ entries: string[]; raw: string }> {
+  return safeFetch(`${BASE}/memory`, { entries: [], raw: '' });
+}
+
+export async function addMemory(entry: string): Promise<boolean> {
+  return safeMutate(`${BASE}/memory`, 'POST', { entry });
+}
+
+export async function clearMemory(): Promise<boolean> {
+  return safeMutate(`${BASE}/memory`, 'DELETE');
+}
+
+// ---- Context auto-summary ----
+
+export async function summarizeChat(): Promise<{ status: 'ok' | 'error' | 'too_short'; messages_kept: number }> {
+  const result = await safeFetch<{ status: 'ok' | 'error' | 'too_short'; messages_kept: number }>(
+    `${BASE}/chat/summarize`,
+    { status: 'error', messages_kept: 0 },
+    { method: 'POST' },
+  );
+  return result;
+}
+
+// ---- Integrations ----
+
+export async function saveIntegrations(data: {
+  github_token?: string;
+  slack_token?: string;
+  webhook_url?: string;
+}): Promise<boolean> {
+  return safeMutate(`${BASE}/integrations`, 'PATCH', data);
 }

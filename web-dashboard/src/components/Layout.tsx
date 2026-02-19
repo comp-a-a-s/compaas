@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Tooltip from './Tooltip';
 
 interface LayoutProps {
@@ -10,46 +10,38 @@ interface LayoutProps {
   chatPanel?: React.ReactNode;
   chatHasUnread?: boolean;
   ceoName?: string;
+  /** If true, embed chat panel inline in a split-view layout */
+  splitView?: boolean;
 }
 
-const NAV_ITEMS = [
-  {
-    id: 'overview',
-    label: 'Overview',
-    shortcut: '1',
-    iconPath: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6',
-  },
-  {
-    id: 'agents',
-    label: 'Agents',
-    shortcut: '2',
-    iconPath: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z',
-  },
-  {
-    id: 'projects',
-    label: 'Projects',
-    shortcut: '3',
-    iconPath: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z',
-  },
-  {
-    id: 'activity',
-    label: 'Activity',
-    shortcut: '4',
-    iconPath: 'M13 10V3L4 14h7v7l9-11h-7z',
-  },
-  {
-    id: 'metrics',
-    label: 'Metrics',
-    shortcut: '5',
-    iconPath: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z',
-  },
-  {
-    id: 'settings',
-    label: 'Settings',
-    shortcut: '6',
-    iconPath: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z',
-  },
+const DEFAULT_NAV_ITEMS = [
+  { id: 'overview',  label: 'Overview',  shortcut: '1', iconPath: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+  { id: 'agents',    label: 'Agents',    shortcut: '2', iconPath: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z' },
+  { id: 'projects',  label: 'Projects',  shortcut: '3', iconPath: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' },
+  { id: 'activity',  label: 'Activity',  shortcut: '4', iconPath: 'M13 10V3L4 14h7v7l9-11h-7z' },
+  { id: 'metrics',   label: 'Metrics',   shortcut: '5', iconPath: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+  { id: 'settings',  label: 'Settings',  shortcut: '6', iconPath: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
 ];
+
+const NAV_ORDER_KEY = 'tf_sidebar_order';
+
+function loadNavOrder(): string[] {
+  try {
+    const s = localStorage.getItem(NAV_ORDER_KEY);
+    if (s) {
+      const order: string[] = JSON.parse(s);
+      // Ensure all default items are present
+      const defaultIds = DEFAULT_NAV_ITEMS.map((i) => i.id);
+      const validOrder = order.filter((id) => defaultIds.includes(id));
+      // Append any new items not in stored order
+      for (const id of defaultIds) {
+        if (!validOrder.includes(id)) validOrder.push(id);
+      }
+      return validOrder;
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_NAV_ITEMS.map((i) => i.id);
+}
 
 const PAGE_LABELS: Record<string, string> = {
   overview: 'Overview',
@@ -60,18 +52,43 @@ const PAGE_LABELS: Record<string, string> = {
   settings: 'Settings',
 };
 
-export default function Layout({ activeTab, onTabChange, children, chatOpen, onChatToggle, chatPanel, chatHasUnread, ceoName = 'CEO' }: LayoutProps) {
+export default function Layout({ activeTab, onTabChange, children, chatOpen, onChatToggle, chatPanel, chatHasUnread, ceoName = 'CEO', splitView: splitViewProp = false }: LayoutProps) {
   const [chatFullscreen, setChatFullscreen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     return localStorage.getItem('thunderflow_sidebar_collapsed') === 'true';
   });
+  const [navOrder, setNavOrder] = useState<string[]>(loadNavOrder);
+  const [editingSidebar, setEditingSidebar] = useState(false);
+  const [splitView, setSplitView] = useState(splitViewProp);
 
-  const today = new Date().toLocaleDateString('en-US', {
+  // Sync if parent changes the prop
+  useEffect(() => { setSplitView(splitViewProp); }, [splitViewProp]);
+
+  const NAV_ITEMS = useMemo(() => {
+    return navOrder
+      .map((id) => DEFAULT_NAV_ITEMS.find((item) => item.id === id))
+      .filter(Boolean) as typeof DEFAULT_NAV_ITEMS;
+  }, [navOrder]);
+
+  const moveNav = (id: string, dir: -1 | 1) => {
+    setNavOrder((prev) => {
+      const idx = prev.indexOf(id);
+      if (idx < 0) return prev;
+      const next = [...prev];
+      const target = idx + dir;
+      if (target < 0 || target >= next.length) return prev;
+      [next[idx], next[target]] = [next[target], next[idx]];
+      localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const today = useMemo(() => new Date().toLocaleDateString('en-US', {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
     year: 'numeric',
-  });
+  }), []);
 
   const handleChatToggle = () => {
     if (chatOpen) {
@@ -200,51 +217,72 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
             </Tooltip>
           )}
 
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.map((item, idx) => {
             const isActive = activeTab === item.id;
             return (
-              <Tooltip key={item.id} content={`${item.label} (${item.shortcut})`} position="right">
-                <button
-                  onClick={() => onTabChange(item.id)}
-                  aria-current={isActive ? 'page' : undefined}
-                  className="w-full flex items-center rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer"
-                  style={{
-                    gap: sidebarCollapsed ? 0 : '12px',
-                    padding: sidebarCollapsed ? '8px 0' : '8px 12px',
-                    justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
-                    backgroundColor: isActive ? 'var(--tf-surface-raised)' : 'transparent',
-                    color: isActive ? 'var(--tf-accent)' : 'var(--tf-text-secondary)',
-                    borderLeft: isActive && !sidebarCollapsed ? '2px solid var(--tf-accent)' : '2px solid transparent',
-                    marginBottom: '2px',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isActive) {
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-bg)';
-                      (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isActive) {
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-                      (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-secondary)';
-                    }
-                  }}
-                >
-                  <svg
-                    className="w-4 h-4 flex-shrink-0"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.6}
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
+              <div key={item.id} className="flex items-center" style={{ marginBottom: '2px' }}>
+                <Tooltip content={`${item.label} (${item.shortcut})`} position="right">
+                  <button
+                    onClick={() => { if (!editingSidebar) onTabChange(item.id); }}
+                    aria-current={isActive ? 'page' : undefined}
+                    className="flex-1 flex items-center rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer"
+                    style={{
+                      gap: sidebarCollapsed ? 0 : '12px',
+                      padding: sidebarCollapsed ? '8px 0' : '8px 12px',
+                      justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+                      backgroundColor: isActive ? 'var(--tf-surface-raised)' : 'transparent',
+                      color: isActive ? 'var(--tf-accent)' : 'var(--tf-text-secondary)',
+                      borderLeft: isActive && !sidebarCollapsed ? '2px solid var(--tf-accent)' : '2px solid transparent',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isActive) {
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-bg)';
+                        (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isActive) {
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                        (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-secondary)';
+                      }
+                    }}
                   >
-                    <path strokeLinecap="round" strokeLinejoin="round" d={item.iconPath} />
-                  </svg>
-                  {!sidebarCollapsed && item.label}
-                </button>
-              </Tooltip>
+                    <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.6} viewBox="0 0 24 24" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d={item.iconPath} />
+                    </svg>
+                    {!sidebarCollapsed && item.label}
+                  </button>
+                </Tooltip>
+                {/* Reorder controls — shown only when editing sidebar and not collapsed */}
+                {editingSidebar && !sidebarCollapsed && (
+                  <div className="flex flex-col" style={{ marginLeft: '2px' }}>
+                    <button
+                      onClick={() => moveNav(item.id, -1)}
+                      disabled={idx === 0}
+                      style={{ background: 'none', border: 'none', color: idx === 0 ? 'var(--tf-border)' : 'var(--tf-text-muted)', cursor: idx === 0 ? 'default' : 'pointer', padding: '1px', lineHeight: 1, fontSize: '10px' }}
+                    >▲</button>
+                    <button
+                      onClick={() => moveNav(item.id, 1)}
+                      disabled={idx === NAV_ITEMS.length - 1}
+                      style={{ background: 'none', border: 'none', color: idx === NAV_ITEMS.length - 1 ? 'var(--tf-border)' : 'var(--tf-text-muted)', cursor: idx === NAV_ITEMS.length - 1 ? 'default' : 'pointer', padding: '1px', lineHeight: 1, fontSize: '10px' }}
+                    >▼</button>
+                  </div>
+                )}
+              </div>
             );
           })}
+          {/* Edit sidebar toggle */}
+          {!sidebarCollapsed && (
+            <button
+              onClick={() => setEditingSidebar((v) => !v)}
+              className="w-full text-left text-xs mt-2 px-3 py-1 rounded-lg cursor-pointer transition-all"
+              style={{ color: editingSidebar ? 'var(--tf-accent)' : 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = editingSidebar ? 'var(--tf-accent)' : 'var(--tf-text-muted)'; }}
+            >
+              {editingSidebar ? '✓ Done Reordering' : '⋮ Reorder'}
+            </button>
+          )}
         </nav>
 
         {/* Status footer */}
@@ -332,26 +370,87 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
               ThunderFlow — AI Virtual Company
             </p>
           </div>
-          <div
-            className="text-xs px-3 py-1.5 rounded-full"
-            style={{
-              color: 'var(--tf-text-secondary)',
-              backgroundColor: 'var(--tf-surface-raised)',
-              border: '1px solid var(--tf-border)',
-            }}
-          >
-            {today}
+          <div className="flex items-center gap-2">
+            {/* Split view toggle */}
+            <Tooltip content={splitView ? 'Disable split view' : 'Enable split view (chat alongside content)'} position="bottom">
+              <button
+                onClick={() => setSplitView((v) => !v)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer transition-all"
+                style={{
+                  backgroundColor: splitView ? 'var(--tf-accent-blue)' : 'transparent',
+                  color: splitView ? 'var(--tf-bg)' : 'var(--tf-text-muted)',
+                  border: `1px solid ${splitView ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+                }}
+                onMouseEnter={(e) => { if (!splitView) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)'; }}
+                onMouseLeave={(e) => { if (!splitView) (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 3H5a2 2 0 00-2 2v14a2 2 0 002 2h4M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M9 3v18M15 3v18" />
+                </svg>
+              </button>
+            </Tooltip>
+            <div
+              className="text-xs px-3 py-1.5 rounded-full"
+              style={{ color: 'var(--tf-text-secondary)', backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
+            >
+              {today}
+            </div>
           </div>
         </header>
 
-        {/* Page content */}
-        <main
-          id="main-content"
-          className="flex-1 overflow-y-auto p-6"
-          style={{ backgroundColor: 'var(--tf-bg)' }}
-        >
-          {children}
-        </main>
+        {/* Page content (normal or split-view) */}
+        {splitView ? (
+          <div className="flex-1 flex overflow-hidden">
+            <main
+              id="main-content"
+              className="flex-1 overflow-y-auto p-6"
+              style={{ backgroundColor: 'var(--tf-bg)' }}
+            >
+              {children}
+            </main>
+            {/* Inline chat panel */}
+            <div
+              className="flex-shrink-0 flex flex-col overflow-hidden"
+              style={{
+                width: '380px',
+                borderLeft: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-surface)',
+              }}
+            >
+              <div
+                className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+                style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
+              >
+                <span className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>
+                  {ceoName} — CEO
+                </span>
+                <button
+                  onClick={() => setSplitView(false)}
+                  className="w-6 h-6 rounded flex items-center justify-center cursor-pointer"
+                  style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)'; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                  aria-label="Close split view"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                {chatPanel}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <main
+            id="main-content"
+            className="flex-1 overflow-y-auto p-6"
+            style={{ backgroundColor: 'var(--tf-bg)' }}
+          >
+            {children}
+          </main>
+        )}
       </div>
 
       {/* Floating CEO Chat — always mounted to preserve in-flight state; toggled via display */}
