@@ -12,6 +12,7 @@ interface LayoutProps {
   chatHasUnread?: boolean;
   ceoName?: string;
   pollIntervalMs?: number;
+  microProjectMode?: boolean;
 }
 
 const NAV_ITEMS = [
@@ -47,7 +48,7 @@ function formatPollInterval(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s poll`;
 }
 
-function CeoBadge({ ceoName }: { ceoName: string }) {
+function CeoBadge({ ceoName, microProjectMode = false }: { ceoName: string; microProjectMode?: boolean }) {
   return (
     <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
       <div
@@ -64,8 +65,24 @@ function CeoBadge({ ceoName }: { ceoName: string }) {
         <div className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>
           CEO Chat
         </div>
-        <div className="text-[10px]" style={{ color: 'var(--tf-text-muted)' }}>
-          {ceoName}
+        <div className="text-[10px] flex items-center gap-1.5" style={{ color: 'var(--tf-text-muted)' }}>
+          <span>{ceoName}</span>
+          {microProjectMode && (
+            <span
+              style={{
+                padding: '1px 5px',
+                borderRadius: '999px',
+                border: '1px solid rgba(240,170,74,0.45)',
+                color: 'var(--tf-warning)',
+                backgroundColor: 'rgba(240,170,74,0.1)',
+                fontSize: '9px',
+                fontWeight: 600,
+                letterSpacing: '0.02em',
+              }}
+            >
+              MICRO
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -82,6 +99,7 @@ export default function Layout({
   chatHasUnread,
   ceoName = 'CEO',
   pollIntervalMs = 5000,
+  microProjectMode = false,
 }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getStoredBoolean(SIDEBAR_COLLAPSED_KEY));
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -441,6 +459,21 @@ export default function Layout({
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.4-4 8-9 8a9.9 9.9 0 01-4.3-.9L3 20l1.4-3.7C3.5 15 3 13.6 3 12c0-4.4 4-8 9-8s9 3.6 9 8z" />
                 </svg>
                 {!isMobileViewport && <span className="text-xs font-semibold">CEO Chat</span>}
+                {microProjectMode && !isMobileViewport && (
+                  <span
+                    className="text-[10px] font-semibold"
+                    style={{
+                      color: 'var(--tf-warning)',
+                      border: '1px solid rgba(240,170,74,0.45)',
+                      backgroundColor: 'rgba(240,170,74,0.1)',
+                      borderRadius: '999px',
+                      padding: '1px 5px',
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    MICRO
+                  </span>
+                )}
                 {chatHasUnread && !chatOpen && (
                   <span
                     style={{
@@ -478,7 +511,7 @@ export default function Layout({
                 className="flex items-center justify-between px-4 py-3 flex-shrink-0"
                 style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
               >
-                <CeoBadge ceoName={ceoName} />
+                <CeoBadge ceoName={ceoName} microProjectMode={microProjectMode} />
                 <button
                   onClick={onChatToggle}
                   className="w-6 h-6 rounded flex items-center justify-center cursor-pointer"
@@ -533,7 +566,7 @@ export default function Layout({
                 className="flex items-center justify-between px-4 py-3 flex-shrink-0"
                 style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
               >
-                <CeoBadge ceoName={ceoName} />
+                <CeoBadge ceoName={ceoName} microProjectMode={microProjectMode} />
                 <button
                   onClick={onChatToggle}
                   className="w-6 h-6 rounded flex items-center justify-center cursor-pointer"

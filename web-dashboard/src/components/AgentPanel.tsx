@@ -5,6 +5,7 @@ import type { Agent, ActivityEvent, TaskWithProject } from '../types';
 interface AgentPanelProps {
   agents: Agent[];
   loading: boolean;
+  microProjectMode?: boolean;
 }
 
 // ---- Helpers ----
@@ -71,8 +72,9 @@ interface AgentCardProps {
   agent: Agent;
   selected: boolean;
   onSelect: () => void;
+  disabled?: boolean;
 }
-function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
+function AgentCard({ agent, selected, onSelect, disabled = false }: AgentCardProps) {
   const badge = modelBadge(agent.model);
   const color = avatarColor(agent.model);
   const status = statusStyle(agent.status);
@@ -80,20 +82,25 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
 
   return (
     <button
-      onClick={onSelect}
+      onClick={() => {
+        if (!disabled) onSelect();
+      }}
       className="w-full text-left rounded-xl p-4 flex flex-col gap-3 transition-all duration-200 cursor-pointer"
       style={{
         backgroundColor: selected ? 'var(--tf-surface-raised)' : 'var(--tf-surface)',
         border: `1px solid ${selected ? 'var(--tf-accent)' : 'var(--tf-border)'}`,
+        opacity: disabled ? 0.48 : 1,
+        filter: disabled ? 'grayscale(35%)' : 'none',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         outline: 'none',
       }}
       onMouseEnter={(e) => {
-        if (!selected) {
+        if (!selected && !disabled) {
           (e.currentTarget as HTMLButtonElement).style.borderColor = '#6e7681';
         }
       }}
       onMouseLeave={(e) => {
-        if (!selected) {
+        if (!selected && !disabled) {
           (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
         }
       }}
@@ -142,6 +149,14 @@ function AgentCard({ agent, selected, onSelect }: AgentCardProps) {
             style={{ backgroundColor: 'var(--tf-bg)', color: 'var(--tf-text-muted)', border: '1px solid var(--tf-border)' }}
           >
             {agent.team}
+          </span>
+        )}
+        {disabled && (
+          <span
+            className="text-xs px-2 py-0.5 rounded-full"
+            style={{ backgroundColor: 'rgba(240,170,74,0.15)', color: 'var(--tf-warning)', border: '1px solid rgba(240,170,74,0.45)' }}
+          >
+            Paused in Micro mode
           </span>
         )}
       </div>
@@ -394,7 +409,7 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
 }
 
 // ---- Main AgentPanel ----
-export default function AgentPanel({ agents, loading }: AgentPanelProps) {
+export default function AgentPanel({ agents, loading, microProjectMode = false }: AgentPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailedAgent, setDetailedAgent] = useState<Agent | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -443,6 +458,13 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
       return next;
     });
   };
+
+  useEffect(() => {
+    if (microProjectMode && selectedId && selectedId !== 'ceo') {
+      setSelectedId(null);
+      setDetailedAgent(null);
+    }
+  }, [microProjectMode, selectedId]);
 
   if (loading) {
     return (
@@ -497,6 +519,11 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
           onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--tf-accent)'; }}
           onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--tf-border)'; }}
         />
+        {microProjectMode && (
+          <p className="text-xs mt-2" style={{ color: 'var(--tf-warning)' }}>
+            Micro Project mode is active: only the CEO is active for fast solo execution.
+          </p>
+        )}
       </div>
 
       <div className="flex gap-5 flex-1" style={{ minHeight: 0, flexDirection: isNarrowViewport ? 'column' : 'row' }}>
@@ -526,14 +553,18 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
                   : 'repeat(3, 1fr)',
               }}
             >
-              {filteredAgents.map((agent) => (
-                <AgentCard
-                  key={agent.id}
-                  agent={agent}
-                  selected={selectedId === agent.id}
-                  onSelect={() => handleSelect(agent.id)}
-                />
-              ))}
+              {filteredAgents.map((agent) => {
+                const disabled = microProjectMode && agent.id !== 'ceo';
+                return (
+                  <AgentCard
+                    key={agent.id}
+                    agent={agent}
+                    selected={selectedId === agent.id}
+                    disabled={disabled}
+                    onSelect={() => handleSelect(agent.id)}
+                  />
+                );
+              })}
             </div>
           )}
         </div>

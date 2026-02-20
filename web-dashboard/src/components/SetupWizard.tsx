@@ -81,10 +81,10 @@ const NAME_TEMPLATES: Record<string, Record<string, string>> = {
 
 // Theme options
 const THEMES = [
-  { id: 'midnight', label: 'Midnight', description: 'Deep dark — easy on the eyes', preview: ['#0d1117', '#161b22', '#e6edf3'] },
-  { id: 'twilight', label: 'Twilight', description: 'Softer dark with blue tones', preview: ['#0f1923', '#1a2332', '#d0d8e4'] },
-  { id: 'dawn', label: 'Dawn', description: 'Light mode — clean and bright', preview: ['#f8fcff', '#f2f8ff', '#3f5768'] },
-  { id: 'sahara', label: 'Sahara', description: 'Warm desert sand — soft on eyes', preview: ['#1a1715', '#2d2924', '#d97757'] },
+  { id: 'midnight', label: 'Midnight', description: 'Deep dark — high contrast', preview: ['#08131a', '#183548', '#edf5fb'] },
+  { id: 'twilight', label: 'Twilight', description: 'Softer dark with clearer text', preview: ['#121425', '#272b42', '#f2f4ff'] },
+  { id: 'dawn', label: 'Dawn', description: 'Ultra-light daytime palette', preview: ['#fcfeff', '#f7fbff', '#384f61'] },
+  { id: 'sahara', label: 'Sahara', description: 'Warm dusk with stronger readability', preview: ['#1d1711', '#362a20', '#f6eadf'] },
 ];
 
 // ---- Colours (CSS variables only) ----
@@ -1559,6 +1559,76 @@ function StepComplete({
   );
 }
 
+function WizardBackdrop() {
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        overflow: 'hidden',
+        pointerEvents: 'none',
+      }}
+    >
+      <div
+        className="wizard-orb wizard-orb-a"
+        style={{
+          position: 'absolute',
+          width: '48vw',
+          height: '48vw',
+          minWidth: '360px',
+          minHeight: '360px',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--tf-accent-blue) 32%, transparent) 0%, transparent 72%)',
+          top: '-22%',
+          left: '-12%',
+          filter: 'blur(8px)',
+        }}
+      />
+      <div
+        className="wizard-orb wizard-orb-b"
+        style={{
+          position: 'absolute',
+          width: '42vw',
+          height: '42vw',
+          minWidth: '320px',
+          minHeight: '320px',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle at 68% 38%, color-mix(in srgb, var(--tf-accent) 30%, transparent) 0%, transparent 74%)',
+          bottom: '-18%',
+          right: '-10%',
+          filter: 'blur(10px)',
+        }}
+      />
+      <div
+        className="wizard-grid-glow"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          opacity: 0.2,
+          backgroundImage:
+            'linear-gradient(to right, color-mix(in srgb, var(--tf-border) 60%, transparent) 1px, transparent 1px), ' +
+            'linear-gradient(to bottom, color-mix(in srgb, var(--tf-border) 60%, transparent) 1px, transparent 1px)',
+          backgroundSize: '44px 44px',
+          maskImage: 'radial-gradient(circle at 50% 20%, black, transparent 72%)',
+        }}
+      />
+      <div
+        className="wizard-scanline"
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          height: '140px',
+          background: 'linear-gradient(180deg, transparent, color-mix(in srgb, var(--tf-accent-blue) 20%, transparent), transparent)',
+          filter: 'blur(16px)',
+          opacity: 0.45,
+        }}
+      />
+    </div>
+  );
+}
+
 // ---- Main component ----
 
 export default function SetupWizard({ onComplete }: SetupWizardProps) {
@@ -1694,6 +1764,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     <div
       style={{
         minHeight: '100vh',
+        position: 'relative',
+        overflow: 'hidden',
         backgroundColor: C.bg,
         display: 'flex',
         alignItems: 'center',
@@ -1702,10 +1774,13 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       }}
       role="main"
     >
+      <WizardBackdrop />
       <div
         style={{
           width: '100%',
           maxWidth: '640px',
+          position: 'relative',
+          zIndex: 1,
         }}
       >
         {/* Card */}
@@ -1965,6 +2040,28 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
         }
+        @keyframes wizardFloatA {
+          0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+          50% { transform: translate3d(24px, 18px, 0) scale(1.06); }
+        }
+        @keyframes wizardFloatB {
+          0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+          50% { transform: translate3d(-22px, -20px, 0) scale(1.05); }
+        }
+        @keyframes wizardGridPulse {
+          0%, 100% { opacity: 0.16; }
+          50% { opacity: 0.28; }
+        }
+        @keyframes wizardScan {
+          0% { transform: translateY(-30vh); opacity: 0; }
+          20% { opacity: 0.42; }
+          70% { opacity: 0.38; }
+          100% { transform: translateY(130vh); opacity: 0; }
+        }
+        .wizard-orb-a { animation: wizardFloatA 12s ease-in-out infinite; }
+        .wizard-orb-b { animation: wizardFloatB 14s ease-in-out infinite; }
+        .wizard-grid-glow { animation: wizardGridPulse 8s ease-in-out infinite; }
+        .wizard-scanline { animation: wizardScan 9.5s linear infinite; }
       `}</style>
     </div>
   );

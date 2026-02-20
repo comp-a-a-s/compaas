@@ -34,6 +34,7 @@ const MIN_POLL_INTERVAL_MS = 3000;
 const MAX_POLL_INTERVAL_MS = 30000;
 const TASK_POLL_MULTIPLIER = 3;
 const MIN_TASK_POLL_INTERVAL_MS = 15000;
+const MICRO_PROJECT_MODE_KEY = 'compaas_micro_project_mode';
 
 // Agent slug/name → display name for activity tagging (Map for O(1) exact lookups)
 const AGENT_SLUG_MAP = new Map<string, string>([
@@ -190,6 +191,13 @@ export default function App() {
   // Floating chat state
   const [chatOpen, setChatOpen] = useState(false);
   const [chatHasUnread, setChatHasUnread] = useState(false);
+  const [microProjectMode, setMicroProjectMode] = useState(() => {
+    try {
+      return localStorage.getItem(MICRO_PROJECT_MODE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
@@ -449,6 +457,14 @@ export default function App() {
     });
   }, [loadAgents]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(MICRO_PROJECT_MODE_KEY, microProjectMode ? 'true' : 'false');
+    } catch {
+      // ignore localStorage failures
+    }
+  }, [microProjectMode]);
+
   // ---- Loading / wizard screens ----
 
   if (configLoading) {
@@ -493,6 +509,7 @@ export default function App() {
           <AgentPanel
             agents={agents}
             loading={loadingAgents}
+            microProjectMode={microProjectMode}
           />
         );
 
@@ -561,6 +578,7 @@ export default function App() {
         chatHasUnread={chatHasUnread}
         ceoName={ceoName}
         pollIntervalMs={pollIntervalMs}
+        microProjectMode={microProjectMode}
         chatPanel={
           <ChatPanel
             floating
@@ -570,6 +588,8 @@ export default function App() {
             }}
             ceoName={ceoName}
             userName={userName}
+            microProjectMode={microProjectMode}
+            onMicroProjectModeChange={setMicroProjectMode}
             onNavigateToProjects={() => {
               setActiveTab('projects');
               setChatOpen(false);
