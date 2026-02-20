@@ -55,10 +55,10 @@ const POLL_INTERVAL_OPTIONS = [
 ];
 
 const THEMES = [
-  { id: 'midnight', label: 'Midnight', description: 'Deep dark', preview: ['#0d1117', '#161b22', '#e6edf3'] },
-  { id: 'twilight', label: 'Twilight', description: 'Soft blue dark', preview: ['#0f1923', '#1a2332', '#d0d8e4'] },
-  { id: 'dawn', label: 'Dawn', description: 'Bright daylight', preview: ['#f8fcff', '#f2f8ff', '#3f5768'] },
-  { id: 'sahara', label: 'Sahara', description: 'Warm desert sand', preview: ['#1a1715', '#2d2924', '#d97757'] },
+  { id: 'midnight', label: 'Midnight', description: 'Deep dark', preview: ['#08131a', '#183548', '#edf5fb'] },
+  { id: 'twilight', label: 'Twilight', description: 'Soft blue dark', preview: ['#121425', '#272b42', '#f2f4ff'] },
+  { id: 'dawn', label: 'Dawn', description: 'Bright daylight', preview: ['#fcfeff', '#f7fbff', '#384f61'] },
+  { id: 'sahara', label: 'Sahara', description: 'Warm desert sand', preview: ['#1d1711', '#362a20', '#f6eadf'] },
 ];
 
 type SettingsTab = 'general' | 'ai' | 'agents' | 'integrations' | 'appearance';

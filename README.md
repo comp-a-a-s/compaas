@@ -28,10 +28,10 @@ Leadership  Engineering  On-Demand     Dashboards
 
 - **Python 3.10+** (required)
 - **Node.js 18+** (optional, for web dashboard)
-- **Claude Code CLI** (`npm install -g @anthropic-ai/claude-code`)
+- **Claude Code CLI** (`npm install -g @anthropic-ai/claude-code`) for Anthropic CLI runtime mode
 - **Codex CLI** (`npm install -g @openai/codex`) for OpenAI Codex runtime mode
 - **Ollama** (optional, for local `openai_compat` mode)
-- **Anthropic API key**
+- **Cloud API key(s)** (optional, only if using Anthropic/OpenAI API-key modes)
 
 ## Quick Start
 
@@ -77,7 +77,7 @@ cd ..
 **Step 3: Environment configuration**
 ```bash
 cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY
+# Edit .env and set keys only for cloud API modes
 ```
 
 **Step 4: Initialize directories**
@@ -97,20 +97,21 @@ pytest tests/ -v
 
 ## Usage
 
-### Working with the CEO Agent
+### Working with the CEO
 
-The CEO is the central orchestrator. Start it with Claude Code:
+Use the Web Dashboard chat as the primary interface:
 
 ```bash
-claude --agent ceo
+compaas-web
 ```
 
-Then give it instructions like:
+Then open **CEO Chat** and give instructions like:
 - "Build me a task management API with a React frontend"
-- "Research the best tech stack for a real-time chat application"
-- "Create a project plan for an e-commerce platform"
+- "Create a simple landing page with one signup form"
+- "Set up a project plan for an e-commerce platform"
 
-The CEO will delegate to specialized agents (CTO, engineers, designers, etc.) and manage the full development lifecycle.
+The CEO can delegate to specialized agents (CTO, engineers, designers, etc.) for full-crew execution.
+For very small tasks, enable **Micro Project mode** in chat to run a fast solo response path.
 
 ### Web Dashboard
 
@@ -126,6 +127,7 @@ Features:
 - Real-time activity feed (SSE)
 - Token usage metrics and budget tracking
 - CEO Chat — talk directly to Marcus from the dashboard (WebSocket-based, with streaming responses)
+- Micro Project mode — optional fast solo CEO mode for very small tasks, with complexity guardrails and explicit quality warning
 - Setup wizard — guided first-run configuration for team names, theme, and preferences
 - Telegram integration — hand off sessions to your phone
 - Keyboard shortcuts — press `?` to see all shortcuts
@@ -206,7 +208,8 @@ A terminal-based dashboard with org chart, project summary, task board, and acti
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | (required) | Your Anthropic API key |
+| `ANTHROPIC_API_KEY` | (optional) | Used for Anthropic API-key mode (or CLI auth fallback) |
+| `OPENAI_API_KEY` | (optional) | Used for OpenAI API-key mode and optional Codex CLI auth |
 | `COMPAAS_DATA_DIR` | `./company_data` | Company state directory |
 | `PROJECTS_OUTPUT_DIR` | `~/projects` | Where generated project code is written |
 | `COMPAAS_API_HOST` | `127.0.0.1` | Web dashboard host |
@@ -259,7 +262,7 @@ COMPaaS supports three providers and explicit runtime modes:
 
 | Provider | Runtime mode | Backend behavior |
 |----------|--------------|------------------|
-| `anthropic` | `cli` | Runs `claude --agent ceo` using local CLI auth |
+| `anthropic` | `cli` | Runs Claude Code CLI with local auth (`--agent ceo` in full-crew mode) |
 | `anthropic` | `apikey` | Runs Claude CLI with `ANTHROPIC_API_KEY` injected from config |
 | `openai` | `apikey` | Uses OpenAI-compatible chat completions API |
 | `openai` | `codex` | Runs local `codex exec --json` and streams response |
@@ -269,6 +272,16 @@ These values are stored in config as:
 - `llm.provider`
 - `llm.anthropic_mode`
 - `llm.openai_mode`
+
+## Micro Project Mode
+
+`Micro Project` is a chat toggle for fast solo execution on very small tasks.
+
+- CEO runs in a solo path with no planned delegation
+- chat shows explicit quality-tradeoff warning and requires user approval on enable
+- non-CEO agents are visually dimmed in the Agents panel while mode is active
+- complex requests trigger a guardrail prompt: switch to full crew or continue anyway
+- toggle is reversible in one click
 
 ## Provider Smoke Test
 
@@ -295,6 +308,15 @@ Run selected scenarios only:
 python3 scripts/provider_smoke_test.py \
   --base-url http://127.0.0.1:8421 \
   --scenarios anthropic_cli,openai_api,openai_codex,ollama_local
+```
+
+Run the same checks in Micro Project mode:
+
+```bash
+python3 scripts/provider_smoke_test.py \
+  --base-url http://127.0.0.1:8421 \
+  --scenarios anthropic_cli,openai_codex,ollama_local \
+  --micro-project
 ```
 
 ## Development
@@ -354,11 +376,13 @@ npm run lint   # Run ESLint
 
 **"Claude Code CLI not found"** — Install with: `npm install -g @anthropic-ai/claude-code`
 
-**"ANTHROPIC_API_KEY not set"** — Add your key to `.env`: `ANTHROPIC_API_KEY=sk-ant-...`
+**"ANTHROPIC_API_KEY not set"** — Needed only for Anthropic API-key mode. Add to `.env`: `ANTHROPIC_API_KEY=sk-ant-...`
+
+**"OPENAI_API_KEY not set"** — Needed for OpenAI API-key mode (and optional for Codex auth): `OPENAI_API_KEY=sk-...`
 
 **Web dashboard not loading** — Ensure Node.js 18+ is installed and run `cd web-dashboard && npm install && npm run build`
 
-**CEO Chat not connecting** — Ensure the backend is running (`compaas-web`) and the Claude Code CLI is installed. The chat uses WebSocket at `/api/chat/ws`.
+**CEO Chat not connecting** — Ensure the backend is running (`compaas-web`) and the configured runtime is installed (`claude`, `codex`, or local OpenAI-compatible endpoint). Chat uses WebSocket at `/api/chat/ws`.
 
 **Tests failing** — Run `pip install -e ".[dev]"` to ensure all dev dependencies are installed
 

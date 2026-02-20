@@ -72,14 +72,25 @@ else
     HAS_NODE=false
 fi
 
-# 3. Check Claude Code CLI
-echo -e "${YELLOW}[3/8] Checking Claude Code CLI...${NC}"
+# 3. Check optional AI CLIs
+echo -e "${YELLOW}[3/8] Checking AI runtime CLIs (optional)...${NC}"
 if command -v claude &>/dev/null; then
     echo -e "${GREEN}  ✓ Claude Code CLI found${NC}"
 else
-    echo -e "${YELLOW}  ⚠ Claude Code CLI not found${NC}"
+    echo -e "${YELLOW}  ⚠ Claude Code CLI not found (needed for Anthropic CLI mode)${NC}"
     echo -e "${YELLOW}    Install: npm install -g @anthropic-ai/claude-code${NC}"
-    echo -e "${YELLOW}    COMPaaS needs Claude Code to run agents${NC}"
+fi
+if command -v codex &>/dev/null; then
+    echo -e "${GREEN}  ✓ Codex CLI found${NC}"
+else
+    echo -e "${YELLOW}  ⚠ Codex CLI not found (needed for OpenAI Codex mode)${NC}"
+    echo -e "${YELLOW}    Install: npm install -g @openai/codex${NC}"
+fi
+if command -v ollama &>/dev/null; then
+    echo -e "${GREEN}  ✓ Ollama found${NC}"
+else
+    echo -e "${YELLOW}  ⚠ Ollama not found (optional for local model mode)${NC}"
+    echo -e "${YELLOW}    Install: https://ollama.com/download${NC}"
 fi
 
 # 4. Create Python virtual environment
@@ -119,8 +130,9 @@ mkdir -p ~/projects
 if [ ! -f .env ]; then
     cp .env.example .env 2>/dev/null || cat > .env << 'ENVEOF'
 # COMPaaS Configuration
-# Required: Your Anthropic API key
+# Optional: Your cloud provider API keys
 ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
 
 # Optional: Override data directory (default: ./company_data)
 # COMPAAS_DATA_DIR=./company_data
@@ -128,7 +140,7 @@ ANTHROPIC_API_KEY=
 # Optional: Override project output directory (default: ~/projects)
 # PROJECTS_OUTPUT_DIR=~/projects
 ENVEOF
-    echo -e "${YELLOW}  ⚠ Created .env file — please set your ANTHROPIC_API_KEY${NC}"
+    echo -e "${YELLOW}  ⚠ Created .env file — set provider keys if you use cloud models${NC}"
 else
     echo -e "${GREEN}  ✓ .env already exists${NC}"
 fi
@@ -153,11 +165,10 @@ echo -e "${PURPLE}════════════════════�
 echo ""
 echo -e "  ${BLUE}Getting started:${NC}"
 echo ""
-echo -e "  1. Set your API key:   ${YELLOW}echo 'ANTHROPIC_API_KEY=sk-...' >> .env${NC}"
-echo -e "  2. Activate venv:      ${YELLOW}source .venv/bin/activate${NC}"
-echo -e "  3. Start the CEO:      ${YELLOW}claude --agent ceo${NC}"
-echo -e "  4. Web dashboard:      ${YELLOW}compaas-web${NC}   (opens at http://localhost:8420)"
-echo -e "  5. TUI dashboard:      ${YELLOW}compaas-tui${NC}   (in a separate terminal)"
+echo -e "  1. Activate venv:      ${YELLOW}source .venv/bin/activate${NC}"
+echo -e "  2. Start dashboard:    ${YELLOW}compaas-web${NC}   (opens at http://localhost:8420)"
+echo -e "  3. Run setup wizard:   Choose provider (Anthropic / OpenAI / local Ollama)"
+echo -e "  4. TUI dashboard:      ${YELLOW}compaas-tui${NC}   (optional, separate terminal)"
 echo ""
 
 if [ -t 0 ]; then
@@ -172,7 +183,7 @@ if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
     echo "Select startup mode:"
     echo "  1) Web dashboard (recommended)"
     echo "  2) TUI dashboard"
-    echo "  3) CEO agent (Claude Code)"
+    echo "  3) API server only (no browser auto-open)"
     read -r -p "Choice [1-3, default 1]: " START_MODE
     START_MODE=${START_MODE:-1}
 
@@ -186,9 +197,8 @@ if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
             ./.venv/bin/compaas-tui
             ;;
         3)
-            echo -e "${GREEN}Starting CEO agent...${NC}"
-            source .venv/bin/activate
-            claude --agent ceo
+            echo -e "${GREEN}Starting COMPaaS API server (headless)...${NC}"
+            COMPAAS_NO_BROWSER=true ./.venv/bin/compaas-web
             ;;
         *)
             echo -e "${YELLOW}Unknown choice. Skipping auto-start.${NC}"

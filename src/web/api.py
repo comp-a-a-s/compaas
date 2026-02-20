@@ -1048,6 +1048,70 @@ def _build_context_prompt(
     return "\n".join(parts)
 
 
+_MICRO_COMPLEX_KEYWORDS = (
+    "architecture",
+    "benchmark",
+    "ci/cd",
+    "compare",
+    "deployment",
+    "e2e",
+    "end-to-end",
+    "migrate",
+    "migration",
+    "multi-agent",
+    "multi step",
+    "oauth",
+    "performance",
+    "plan",
+    "production",
+    "research",
+    "roadmap",
+    "scale",
+    "security",
+    "strategy",
+    "test every",
+    "tradeoff",
+)
+
+
+def _micro_project_complexity_reason(user_message: str) -> str | None:
+    """Return a reason string when a request appears too complex for micro mode."""
+    text = (user_message or "").strip()
+    lower = text.lower()
+    reasons: list[str] = []
+
+    if len(text) > 260:
+        reasons.append("it is long and likely multi-step")
+    if text.count("\n") >= 3 or lower.count(" and ") >= 3:
+        reasons.append("it combines multiple objectives")
+
+    keyword_hits = [kw for kw in _MICRO_COMPLEX_KEYWORDS if kw in lower]
+    if keyword_hits:
+        preview = ", ".join(keyword_hits[:3])
+        reasons.append(f"it includes advanced scope ({preview})")
+
+    if not reasons:
+        return None
+
+    return (
+        "This request looks too large for Micro Project mode because "
+        + "; ".join(reasons)
+        + ". Switch to full crew mode for stronger planning and execution, or continue in fast solo mode."
+    )
+
+
+def _build_micro_project_prompt(prompt: str, *, user_name: str, ceo_name: str) -> str:
+    """Inject strict micro-project constraints into the prompt."""
+    micro_rules = (
+        f"[MICRO PROJECT MODE: Enabled by {user_name} with explicit quality trade-off approval. "
+        f"You are {ceo_name} working solo for rapid output. "
+        "Do not delegate to any specialist agent. "
+        "Do not run broad research or long planning. "
+        "Deliver the smallest direct solution, note key limitations briefly, and keep responses concise.]"
+    )
+    return f"{micro_rules}\n\n{prompt}"
+
+
 def _format_tool_action(tool_name: str, tool_input: dict) -> str:
     """Convert a Claude tool-use block into a readable single-line action label."""
     if tool_name == "Bash":
@@ -1106,6 +1170,7 @@ async def _handle_ceo_claude(
     claude_path: str,
     llm_cfg: dict,
     ceo_name: str = "CEO",
+    micro_project_mode: bool = False,
 ) -> str | None:
     """Handle a CEO chat turn using the Claude Code CLI subprocess.
 
@@ -1134,10 +1199,17 @@ async def _handle_ceo_claude(
             return None
 
     process = None
+    saw_tool_use = False
     try:
+        cmd = [claude_path]
+        if micro_project_mode:
+            cmd.extend(["-p", prompt])
+        else:
+            cmd.extend(["--agent", "ceo", "-p", prompt])
+        cmd.extend(["--output-format", "stream-json", "--verbose"])
+
         process = await asyncio.create_subprocess_exec(
-            claude_path, "--agent", "ceo", "-p", prompt,
-            "--output-format", "stream-json", "--verbose",
+            *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
@@ -1189,10 +1261,12 @@ async def _handle_ceo_claude(
                             response_parts.append(text)
                             await websocket.send_json({"type": "chunk", "content": text})
                     elif btype == "tool_use":
-                        action_label = _format_tool_action(
-                            block.get("name", "tool"), block.get("input", {})
-                        )
-                        await websocket.send_json({"type": "action", "content": action_label})
+                        saw_tool_use = True
+                        if not micro_project_mode:
+                            action_label = _format_tool_action(
+                                block.get("name", "tool"), block.get("input", {})
+                            )
+                            await websocket.send_json({"type": "action", "content": action_label})
 
             elif event_type == "user":
                 for block in event.get("message", {}).get("content", []):
@@ -1203,7 +1277,7 @@ async def _handle_ceo_claude(
                                 c.get("text", "") for c in content
                                 if isinstance(c, dict) and c.get("type") == "text"
                             )
-                        if content and content.strip():
+                        if content and content.strip() and not micro_project_mode:
                             preview = content.strip()[:200].replace("\n", " ")
                             await websocket.send_json({"type": "action_result", "content": preview})
 
@@ -1236,6 +1310,12 @@ async def _handle_ceo_claude(
             error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
             await websocket.send_json({"type": "error", "content": error_msg})
             return None
+
+        if micro_project_mode and saw_tool_use:
+            await websocket.send_json({
+                "type": "micro_project_warning",
+                "content": "Micro Project mode detected tool/delegation activity. Disable Micro Project mode for full-crew execution quality.",
+            })
 
         return full_response
 
@@ -1502,6 +1582,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if not user_message:
                 await websocket.send_json({"type": "error", "content": "Empty message."})
                 continue
+            micro_project_mode = bool(data.get("micro_project_mode", False))
+            micro_project_override = bool(data.get("micro_project_override", False))
 
             # Store user message
             async with _chat_lock:
@@ -1522,6 +1604,18 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 ceo_name=ceo_name,
                 company_name=company_name,
             )
+            if micro_project_mode:
+                complexity_reason = _micro_project_complexity_reason(user_message)
+                if complexity_reason and not micro_project_override:
+                    await websocket.send_json({"type": "micro_project_warning", "content": complexity_reason})
+                    await websocket.send_json({"type": "done", "content": ""})
+                    continue
+                if complexity_reason and micro_project_override:
+                    await websocket.send_json({
+                        "type": "thinking",
+                        "content": "Micro Project override accepted. Continuing with a fast solo response.",
+                    })
+                prompt = _build_micro_project_prompt(prompt, user_name=user_name, ceo_name=ceo_name)
 
             if provider == "openai" and openai_mode == "codex":
                 full_response = await _handle_ceo_codex(websocket, prompt, llm_cfg, ceo_name=ceo_name)
@@ -1536,7 +1630,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     })
                     continue
                 full_response = await _handle_ceo_claude(
-                    websocket, prompt, claude_path, llm_cfg, ceo_name=ceo_name
+                    websocket, prompt, claude_path, llm_cfg, ceo_name=ceo_name, micro_project_mode=micro_project_mode
                 )
 
             if full_response:

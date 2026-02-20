@@ -74,6 +74,41 @@ function parseActionText(text: string): ActionInfo {
   return { label: clean.length > 72 ? clean.slice(0, 69) + '…' : clean, icon: '◦', color: 'var(--tf-text-muted)' };
 }
 
+const MICRO_COMPLEX_HINTS = [
+  'architecture',
+  'benchmark',
+  'ci/cd',
+  'compare',
+  'deployment',
+  'end-to-end',
+  'integration',
+  'migration',
+  'oauth',
+  'performance',
+  'plan',
+  'production',
+  'research',
+  'roadmap',
+  'scale',
+  'security',
+  'strategy',
+  'tradeoff',
+];
+
+function microComplexityReason(input: string): string | null {
+  const text = input.trim();
+  const lower = text.toLowerCase();
+  const reasons: string[] = [];
+
+  if (text.length > 260) reasons.push('it is long and likely multi-step');
+  if (text.split('\n').length > 3 || lower.split(' and ').length > 3) reasons.push('it combines multiple objectives');
+  const hits = MICRO_COMPLEX_HINTS.filter((kw) => lower.includes(kw));
+  if (hits.length > 0) reasons.push(`it includes advanced scope (${hits.slice(0, 3).join(', ')})`);
+
+  if (reasons.length === 0) return null;
+  return `This request looks too large for Micro Project mode because ${reasons.join('; ')}.`;
+}
+
 // ---- Markdown renderers ----
 
 function renderInlineMarkdown(text: string): React.ReactNode {
@@ -432,7 +467,7 @@ function PinnedPanel({ messages, ceoName, userName, onClose, onUnpin }: {
 // ---- WebSocket types ----
 
 interface WsMessage {
-  type: 'user_ack' | 'thinking' | 'chunk' | 'done' | 'error' | 'action' | 'action_result';
+  type: 'user_ack' | 'thinking' | 'chunk' | 'done' | 'error' | 'action' | 'action_result' | 'micro_project_warning';
   content?: string;
   message?: ChatMessage;
 }
@@ -495,6 +530,8 @@ interface ChatPanelProps {
   onNewCeoMessage?: () => void;
   ceoName?: string;
   userName?: string;
+  microProjectMode?: boolean;
+  onMicroProjectModeChange?: (enabled: boolean) => void;
   onNavigateToProject?: (projectId: string) => void;
   onNavigateToProjects?: () => void;
   pendingApprovalProjects?: Project[];
@@ -507,6 +544,8 @@ export default function ChatPanel({
   onNewCeoMessage,
   ceoName = 'CEO',
   userName = 'You',
+  microProjectMode = false,
+  onMicroProjectModeChange,
   onNavigateToProjects,
   onNavigateToProject,
   pendingApprovalProjects = [],
@@ -537,6 +576,10 @@ export default function ChatPanel({
 
   // Secondary actions menu
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+
+  // Feature: Micro Project mode (fast solo CEO path)
+  const [showMicroApprovalCard, setShowMicroApprovalCard] = useState(false);
+  const [microPendingDecision, setMicroPendingDecision] = useState<{ message: string; reason: string } | null>(null);
 
   // Feature: Pinned messages
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => {
@@ -710,6 +753,13 @@ export default function ChatPanel({
               setMessages((prev) => [...prev, { role: 'ceo', content: `[Error] ${data.content || 'Unknown error'}`, timestamp: new Date().toISOString() }]);
               setStreamingContent(''); setThinkingContent(''); setActionLog([]); setIsWaiting(false);
               break;
+            case 'micro_project_warning':
+              setMessages((prev) => [...prev, {
+                role: 'ceo',
+                content: `⚠️ Micro Project warning: ${data.content || 'This request may need full crew mode.'}`,
+                timestamp: new Date().toISOString(),
+              }]);
+              break;
           }
         } catch { /* ignore */ }
       };
@@ -730,20 +780,56 @@ export default function ChatPanel({
     };
   }, [connectWebSocket]);
 
+  const setMicroMode = useCallback((enabled: boolean) => {
+    onMicroProjectModeChange?.(enabled);
+    if (!enabled) {
+      setShowMicroApprovalCard(false);
+      setMicroPendingDecision(null);
+    }
+  }, [onMicroProjectModeChange]);
+
+  const tryEnableMicroMode = useCallback(() => {
+    setShowMicroApprovalCard(true);
+  }, []);
+
   // Send (with tone prefix)
-  const sendMessage = useCallback(() => {
-    const text = input.trim();
+  const sendMessage = useCallback((opts?: {
+    textOverride?: string;
+    forceMicroMode?: boolean;
+    forceMicroOverride?: boolean;
+  }) => {
+    const text = (opts?.textOverride ?? input).trim();
     if (!text || isWaiting) return;
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) { connectWebSocket(); return; }
+
+    const effectiveMicroMode = opts?.forceMicroMode ?? microProjectMode;
+    const microOverride = opts?.forceMicroOverride ?? false;
+    if (effectiveMicroMode && !microOverride) {
+      const reason = microComplexityReason(text);
+      if (reason) {
+        setMicroPendingDecision({ message: text, reason });
+        return;
+      }
+    }
+
     const toneOption = TONE_OPTIONS.find((t) => t.id === tone);
     const prefix = toneOption?.prefix ?? '';
     setMessages((prev) => [...prev, { role: 'user', content: text, timestamp: new Date().toISOString() }]);
-    setInput(''); setIsWaiting(true); setStreamingContent(''); setThinkingContent(''); setActionLog([]);
+    setInput('');
+    setIsWaiting(true);
+    setStreamingContent('');
+    setThinkingContent('');
+    setActionLog([]);
     streamingAccumRef.current = '';
     turnErroredRef.current = false;
-    ws.send(JSON.stringify({ message: prefix + text }));
-  }, [input, isWaiting, tone, connectWebSocket]);
+    setMicroPendingDecision(null);
+    ws.send(JSON.stringify({
+      message: prefix + text,
+      micro_project_mode: effectiveMicroMode,
+      micro_project_override: microOverride,
+    }));
+  }, [input, isWaiting, tone, connectWebSocket, microProjectMode]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -770,6 +856,31 @@ export default function ChatPanel({
   // ---- Shared header controls ----
   const headerControls = (
     <div className="chat-toolbar flex items-center gap-1" style={{ flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '2px' }}>
+      {/* Micro Project toggle */}
+      <button
+        onClick={() => {
+          if (microProjectMode) {
+            setMicroMode(false);
+          } else {
+            tryEnableMicroMode();
+          }
+        }}
+        title="Micro Project mode (fast solo CEO for simple tasks)"
+        style={{
+          padding: '5px 9px',
+          borderRadius: '6px',
+          fontSize: '12px',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          border: `1px solid ${microProjectMode ? 'var(--tf-warning)' : 'var(--tf-border)'}`,
+          backgroundColor: microProjectMode ? 'rgba(240,170,74,0.14)' : 'transparent',
+          color: microProjectMode ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
+          fontWeight: microProjectMode ? 600 : 500,
+        }}
+      >
+        ⚡ Micro
+      </button>
+
       {/* Tone selector */}
       <div style={{ position: 'relative' }}>
         <button
@@ -1026,6 +1137,111 @@ export default function ChatPanel({
               </div>
             )}
 
+            {microProjectMode && (
+              <div
+                className="mb-3 rounded-xl px-3 py-2 animate-slide-up"
+                style={{
+                  backgroundColor: 'rgba(240,170,74,0.1)',
+                  border: '1px solid rgba(240,170,74,0.35)',
+                }}
+              >
+                <p className="text-xs font-semibold" style={{ color: 'var(--tf-warning)' }}>
+                  Micro Project mode is ON
+                </p>
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
+                  {ceoName} will work solo for speed. Output may be rougher than full-crew execution.
+                </p>
+              </div>
+            )}
+
+            {showMicroApprovalCard && (
+              <div
+                className="mb-3 rounded-xl px-4 py-3 animate-pop-in"
+                style={{
+                  backgroundColor: 'var(--tf-surface)',
+                  border: '1px solid var(--tf-warning)',
+                }}
+              >
+                <p className="text-xs font-semibold" style={{ color: 'var(--tf-warning)' }}>
+                  Enable Micro Project mode?
+                </p>
+                <p className="text-xs mt-1.5" style={{ color: 'var(--tf-text-secondary)', lineHeight: 1.5 }}>
+                  This mode skips delegation and deep planning. It is optimized for very small coding tasks and may produce lower-quality results.
+                </p>
+                <div className="flex items-center gap-2 mt-3">
+                  <button
+                    onClick={() => {
+                      setMicroMode(true);
+                      setShowMicroApprovalCard(false);
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                    style={{ backgroundColor: 'var(--tf-warning)', color: 'var(--tf-bg)', border: 'none', cursor: 'pointer' }}
+                  >
+                    I Understand, Enable
+                  </button>
+                  <button
+                    onClick={() => setShowMicroApprovalCard(false)}
+                    className="text-xs px-3 py-1.5 rounded-lg"
+                    style={{ backgroundColor: 'transparent', color: 'var(--tf-text-muted)', border: '1px solid var(--tf-border)', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {microPendingDecision && (
+              <div
+                className="mb-3 rounded-xl px-4 py-3 animate-pop-in"
+                style={{
+                  backgroundColor: 'var(--tf-surface)',
+                  border: '1px solid var(--tf-accent-blue)',
+                }}
+              >
+                <p className="text-xs font-semibold" style={{ color: 'var(--tf-accent-blue)' }}>
+                  This request may need the full crew
+                </p>
+                <p className="text-xs mt-1.5" style={{ color: 'var(--tf-text-secondary)', lineHeight: 1.5 }}>
+                  {microPendingDecision.reason}
+                </p>
+                <div className="flex items-center gap-2 mt-3 flex-wrap">
+                  <button
+                    onClick={() => {
+                      const queued = microPendingDecision.message;
+                      setMicroMode(false);
+                      setMicroPendingDecision(null);
+                      sendMessage({ textOverride: queued, forceMicroMode: false });
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                    style={{ backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)', border: 'none', cursor: 'pointer' }}
+                  >
+                    Turn Off Micro + Run Full Crew
+                  </button>
+                  <button
+                    onClick={() => {
+                      const queued = microPendingDecision.message;
+                      sendMessage({
+                        textOverride: queued,
+                        forceMicroMode: true,
+                        forceMicroOverride: true,
+                      });
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg"
+                    style={{ backgroundColor: 'transparent', color: 'var(--tf-warning)', border: '1px solid var(--tf-warning)', cursor: 'pointer' }}
+                  >
+                    Continue in Micro Mode
+                  </button>
+                  <button
+                    onClick={() => setMicroPendingDecision(null)}
+                    className="text-xs px-3 py-1.5 rounded-lg"
+                    style={{ backgroundColor: 'transparent', color: 'var(--tf-text-muted)', border: '1px solid var(--tf-border)', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
             {filteredMessages.map((msg, i) => {
               const key = msgKey(msg);
               return (
@@ -1071,7 +1287,7 @@ export default function ChatPanel({
         )}
         <div className="flex-1 rounded-xl overflow-hidden" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
           <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
-            placeholder={isWaiting ? `${ceoName} is working…` : `Message ${ceoName}…`}
+            placeholder={isWaiting ? `${ceoName} is working…` : microProjectMode ? `Message ${ceoName} (Micro Project)…` : `Message ${ceoName}…`}
             disabled={isWaiting} rows={1}
             className="w-full resize-none px-4 py-3 text-sm outline-none"
             style={{ backgroundColor: 'transparent', color: 'var(--tf-text)', maxHeight: '120px', minHeight: '44px' }}
@@ -1081,7 +1297,7 @@ export default function ChatPanel({
               t.style.height = `${Math.min(t.scrollHeight, 120)}px`;
             }} />
         </div>
-        <button onClick={sendMessage} disabled={isWaiting || !input.trim()}
+        <button onClick={() => sendMessage()} disabled={isWaiting || !input.trim()}
           className="flex items-center justify-center w-11 h-11 rounded-xl transition-all duration-200 flex-shrink-0"
           style={{ backgroundColor: isWaiting || !input.trim() ? 'var(--tf-surface-raised)' : 'var(--tf-accent)', color: isWaiting || !input.trim() ? 'var(--tf-border)' : 'var(--tf-bg)', cursor: isWaiting || !input.trim() ? 'not-allowed' : 'pointer' }}
           title="Send message (Enter)" aria-label="Send message">

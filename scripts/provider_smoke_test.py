@@ -24,6 +24,7 @@ class Scenario:
     requires_openai_key: bool = False
     requires_anthropic_key: bool = False
     expect_cli_actions: bool = False
+    micro_project_mode: bool = False
 
 
 def _mask_secret(value: str) -> str:
@@ -40,16 +41,28 @@ def _ws_url(base_url: str) -> str:
     return f"{scheme}://{parsed.netloc}/api/chat/ws"
 
 
-async def _chat_once(base_url: str, message: str, timeout_s: float = 120.0) -> dict[str, Any]:
+async def _chat_once(
+    base_url: str,
+    message: str,
+    *,
+    micro_project_mode: bool = False,
+    micro_project_override: bool = False,
+    timeout_s: float = 120.0,
+) -> dict[str, Any]:
     ws_url = _ws_url(base_url)
     events: list[dict[str, Any]] = []
     chunks: list[str] = []
     actions: list[str] = []
     errors: list[str] = []
+    warnings: list[str] = []
     done_content = ""
 
     async with websockets.connect(ws_url, max_size=4 * 1024 * 1024) as ws:
-        await ws.send(json.dumps({"message": message}))
+        await ws.send(json.dumps({
+            "message": message,
+            "micro_project_mode": micro_project_mode,
+            "micro_project_override": micro_project_override,
+        }))
         while True:
             raw = await asyncio.wait_for(ws.recv(), timeout=timeout_s)
             event = json.loads(raw)
@@ -61,6 +74,8 @@ async def _chat_once(base_url: str, message: str, timeout_s: float = 120.0) -> d
                 actions.append(event.get("content", ""))
             elif event_type == "error":
                 errors.append(event.get("content", ""))
+            elif event_type == "micro_project_warning":
+                warnings.append(event.get("content", ""))
             elif event_type == "done":
                 done_content = event.get("content", "") or ""
                 break
@@ -70,6 +85,7 @@ async def _chat_once(base_url: str, message: str, timeout_s: float = 120.0) -> d
         "response": response_text.strip(),
         "actions": actions,
         "errors": errors,
+        "micro_warnings": warnings,
         "events_count": len(events),
     }
 
@@ -100,19 +116,31 @@ async def _run_scenario(
             "reason": f"/api/config patch failed with HTTP {patch_res.status_code}",
         }
 
-    prompt = (
-        f"Provider validation run `{scenario.token}`. "
-        f"Reply in <=80 words and include the exact token `{scenario.token}`. "
-        "Mention the CEO name and one specialist role. "
-        "If tooling is available, delegate one tiny internal check and report it."
+    if scenario.micro_project_mode:
+        prompt = (
+            f"Micro run `{scenario.token}`. "
+            f"Reply in <=60 words and include exactly `{scenario.token}`. "
+            "Mention the CEO and one limitation."
+        )
+    else:
+        prompt = (
+            f"Provider validation run `{scenario.token}`. "
+            f"Reply in <=80 words and include the exact token `{scenario.token}`. "
+            "Mention the CEO name and one specialist role. "
+            "If tooling is available, delegate one tiny internal check and report it."
+        )
+    chat_result = await _chat_once(
+        base_url,
+        prompt,
+        micro_project_mode=scenario.micro_project_mode,
     )
-    chat_result = await _chat_once(base_url, prompt)
 
     agents_res = await client.get("/api/agents")
     agents_count = len(agents_res.json()) if agents_res.status_code == 200 and isinstance(agents_res.json(), list) else 0
 
     response = chat_result["response"]
     errors = chat_result["errors"]
+    micro_warnings = chat_result.get("micro_warnings", [])
     quota_block = any("exceeded your current quota" in str(err).lower() for err in errors)
     if quota_block:
         return {
@@ -140,6 +168,8 @@ async def _run_scenario(
         failures.append(f"agents_endpoint_unhealthy(count={agents_count})")
     if scenario.expect_cli_actions and not has_actions:
         warnings.append("expected_cli_actions_but_none_seen")
+    if scenario.micro_project_mode and micro_warnings:
+        warnings.append("micro_warning_emitted")
 
     status = "passed" if not failures else "failed"
     return {
@@ -162,12 +192,17 @@ async def main() -> int:
         default="anthropic_cli,openai_api,openai_codex,ollama_local,anthropic_apikey",
         help="Comma-separated scenario IDs to run",
     )
+    parser.add_argument(
+        "--micro-project",
+        action="store_true",
+        help="Run scenarios in Micro Project mode (fast solo CEO mode)",
+    )
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
     openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    scenario_filter = {s.strip() for s in args.scenarios.split(",") if s.strip()}
+    scenario_filter = [s.strip() for s in args.scenarios.split(",") if s.strip()]
 
     scenarios = {
         "anthropic_cli": Scenario(
@@ -230,6 +265,10 @@ async def main() -> int:
             token="PROVIDER_OLLAMA_LOCAL_OK",
         ),
     }
+
+    if args.micro_project:
+        for scenario in scenarios.values():
+            scenario.micro_project_mode = True
 
     selected = [scenarios[s] for s in scenario_filter if s in scenarios]
     if not selected:
