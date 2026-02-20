@@ -101,6 +101,10 @@ export interface ChatMessage {
 export interface LlmConfig {
   /** "anthropic" | "openai" | "openai_compat" */
   provider: 'anthropic' | 'openai' | 'openai_compat';
+  /** Anthropic runtime mode (Claude Code CLI with local login or API key from config) */
+  anthropic_mode?: 'cli' | 'apikey';
+  /** OpenAI runtime mode (direct API or local Codex CLI runtime) */
+  openai_mode?: 'apikey' | 'codex';
   /** Base URL for OpenAI-compatible endpoints (OpenAI, Ollama, LM Studio, …) */
   base_url: string;
   /** Model identifier, e.g. "gpt-4o", "llama3.2", "opus" */

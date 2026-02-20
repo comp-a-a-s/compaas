@@ -26,6 +26,33 @@ def _require_openai():
         )
 
 
+def _extract_stream_delta(event: object) -> str:
+    """Extract text deltas across OpenAI SDK streaming event variants."""
+    # OpenAI >=2 stream helper emits paired events:
+    # - ChunkEvent(type="chunk", chunk=...)
+    # - ContentDeltaEvent(type="content.delta", delta="...")
+    # Consuming both duplicates output, so prefer content.delta and ignore other
+    # typed events here.
+    event_type = getattr(event, "type", "")
+    if event_type == "content.delta":
+        return getattr(event, "delta", "") or ""
+    if event_type:
+        return ""
+
+    # Legacy shape: event.choices[0].delta.content
+    choices = getattr(event, "choices", None)
+    if choices:
+        return getattr(choices[0].delta, "content", "") or ""
+
+    # OpenAI >=2 stream wrapper: ChunkEvent with ChatCompletionChunk at .chunk
+    chunk = getattr(event, "chunk", None)
+    chunk_choices = getattr(chunk, "choices", None)
+    if chunk_choices:
+        return getattr(chunk_choices[0].delta, "content", "") or ""
+
+    return ""
+
+
 async def stream_openai_compat(
     prompt: str,
     base_url: str,
@@ -65,7 +92,7 @@ async def stream_openai_compat(
         messages=messages,
     ) as stream:
         async for event in stream:
-            delta = event.choices[0].delta.content
+            delta = _extract_stream_delta(event)
             if delta:
                 yield delta
 

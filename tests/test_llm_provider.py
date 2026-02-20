@@ -54,6 +54,42 @@ class _FakeAsyncOpenAI:
         _FakeAsyncOpenAI.last_instance = self
 
 
+def test_extract_stream_delta_from_legacy_choices():
+    event = types.SimpleNamespace(
+        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(content="hello"))]
+    )
+    assert llm_provider._extract_stream_delta(event) == "hello"
+
+
+def test_extract_stream_delta_from_chunk_event_shape():
+    event = types.SimpleNamespace(
+        chunk=types.SimpleNamespace(
+            choices=[types.SimpleNamespace(delta=types.SimpleNamespace(content="world"))]
+        )
+    )
+    assert llm_provider._extract_stream_delta(event) == "world"
+
+
+def test_extract_stream_delta_ignores_typed_chunk_event_to_avoid_duplication():
+    event = types.SimpleNamespace(
+        type="chunk",
+        chunk=types.SimpleNamespace(
+            choices=[types.SimpleNamespace(delta=types.SimpleNamespace(content="world"))]
+        ),
+    )
+    assert llm_provider._extract_stream_delta(event) == ""
+
+
+def test_extract_stream_delta_from_content_delta_event_shape():
+    event = types.SimpleNamespace(type="content.delta", delta="delta-text")
+    assert llm_provider._extract_stream_delta(event) == "delta-text"
+
+
+def test_extract_stream_delta_ignores_non_text_events():
+    event = types.SimpleNamespace(type="content.done")
+    assert llm_provider._extract_stream_delta(event) == ""
+
+
 def test_require_openai_raises_helpful_error_when_missing_async_class(monkeypatch):
     fake_openai = types.ModuleType("openai")
     monkeypatch.setitem(sys.modules, "openai", fake_openai)

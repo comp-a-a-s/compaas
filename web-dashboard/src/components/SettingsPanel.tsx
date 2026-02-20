@@ -613,6 +613,8 @@ function AiProviderSection({
   onSaved: () => void;
 }) {
   const [provider, setProvider]         = useState<LlmConfig['provider']>(llm?.provider ?? 'anthropic');
+  const [anthropicMode, setAnthropicMode] = useState<'cli' | 'apikey'>(llm?.anthropic_mode ?? 'cli');
+  const [openaiMode, setOpenaiMode]     = useState<'apikey' | 'codex'>(llm?.openai_mode ?? 'apikey');
   const [baseUrl, setBaseUrl]           = useState(llm?.base_url ?? 'http://localhost:11434/v1');
   const [model, setModel]               = useState(llm?.model ?? 'llama3.2');
   const [apiKey, setApiKey]             = useState(llm?.api_key ?? '');
@@ -631,6 +633,9 @@ function AiProviderSection({
   const [saved, setSaved]             = useState(false);
   const [saveError, setSaveError]     = useState<string | null>(null);
 
+  const showApiProbe =
+    provider === 'openai_compat' || (provider === 'openai' && openaiMode === 'apikey');
+
   const handlePreset = (presetId: string) => {
     const p = LOCAL_PRESETS_SETTINGS.find((x) => x.id === presetId);
     if (p) {
@@ -646,6 +651,11 @@ function AiProviderSection({
   };
 
   const handleTest = async () => {
+    if (!showApiProbe) {
+      setTestStatus('error');
+      setTestMessage('Connection probe is only available for API-backed modes.');
+      return;
+    }
     setTestStatus('testing');
     setTestMessage('');
     const result = await testLlmConnection({ base_url: baseUrl, model, api_key: apiKey });
@@ -666,6 +676,8 @@ function AiProviderSection({
     const patch: Partial<AppConfig> = {
       llm: {
         provider,
+        anthropic_mode: anthropicMode,
+        openai_mode: openaiMode,
         base_url: provider === 'openai' ? 'https://api.openai.com/v1' : baseUrl,
         model: resolvedModel,
         api_key: apiKey,
@@ -740,9 +752,99 @@ function AiProviderSection({
         );
       })}
 
+      {/* Anthropic fields */}
+      {provider === 'anthropic' && (
+        <div style={{ ...rowStyle, marginTop: '4px' }}>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={labelStyle}>Runtime</label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setAnthropicMode('cli')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '5px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  border: `1px solid ${anthropicMode === 'cli' ? C.accent : C.border}`,
+                  backgroundColor: anthropicMode === 'cli' ? 'rgba(88,166,255,0.15)' : C.surface,
+                  color: anthropicMode === 'cli' ? C.accent : C.textSecondary,
+                }}
+              >
+                Claude CLI
+              </button>
+              <button
+                onClick={() => setAnthropicMode('apikey')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '5px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  border: `1px solid ${anthropicMode === 'apikey' ? C.accent : C.border}`,
+                  backgroundColor: anthropicMode === 'apikey' ? 'rgba(88,166,255,0.15)' : C.surface,
+                  color: anthropicMode === 'apikey' ? C.accent : C.textSecondary,
+                }}
+              >
+                API Key
+              </button>
+            </div>
+          </div>
+
+          {anthropicMode === 'apikey' && (
+            <div>
+              <label style={labelStyle}>Anthropic API Key</label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-ant-..."
+                style={inputStyle({ maxWidth: '420px' })}
+                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              />
+              <p style={{ marginTop: '6px', fontSize: '11px', color: C.textMuted }}>
+                Key is injected to Claude CLI for this runtime and stored in config.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* OpenAI fields */}
       {provider === 'openai' && (
         <div style={{ ...rowStyle, marginTop: '4px' }}>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={labelStyle}>Runtime</label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setOpenaiMode('apikey')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '5px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  border: `1px solid ${openaiMode === 'apikey' ? C.accent : C.border}`,
+                  backgroundColor: openaiMode === 'apikey' ? 'rgba(88,166,255,0.15)' : C.surface,
+                  color: openaiMode === 'apikey' ? C.accent : C.textSecondary,
+                }}
+              >
+                API
+              </button>
+              <button
+                onClick={() => setOpenaiMode('codex')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '5px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  border: `1px solid ${openaiMode === 'codex' ? C.accent : C.border}`,
+                  backgroundColor: openaiMode === 'codex' ? 'rgba(88,166,255,0.15)' : C.surface,
+                  color: openaiMode === 'codex' ? C.accent : C.textSecondary,
+                }}
+              >
+                Codex CLI
+              </button>
+            </div>
+          </div>
           <div style={{ marginBottom: '10px' }}>
             <label style={labelStyle}>Model</label>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: openaiPreset === 'custom' ? '6px' : 0 }}>
@@ -766,12 +868,17 @@ function AiProviderSection({
             )}
           </div>
           <div>
-            <label style={labelStyle}>API Key</label>
+            <label style={labelStyle}>{openaiMode === 'codex' ? 'OpenAI API Key (optional)' : 'API Key'}</label>
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-..." style={inputStyle({ maxWidth: '420px' })}
               onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
               onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
             />
+            {openaiMode === 'codex' && (
+              <p style={{ marginTop: '6px', fontSize: '11px', color: C.textMuted }}>
+                Codex CLI uses local login by default; API key is optional fallback.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -820,7 +927,7 @@ function AiProviderSection({
         </div>
       )}
 
-      {/* CEO system prompt (all non-Anthropic providers) */}
+      {/* CEO system prompt (non-Anthropic providers) */}
       {provider !== 'anthropic' && (
         <div style={{ marginBottom: '8px' }}>
           <label style={labelStyle}>CEO System Prompt (optional)</label>
@@ -837,7 +944,7 @@ function AiProviderSection({
       )}
 
       {/* Test connection */}
-      {provider !== 'anthropic' && (
+      {showApiProbe && (
         <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
           <button
             onClick={handleTest}
@@ -874,6 +981,11 @@ function AiProviderSection({
               ×
             </button>
           )}
+        </div>
+      )}
+      {provider === 'openai' && openaiMode === 'codex' && (
+        <div style={{ marginBottom: '12px', fontSize: '11px', color: C.textMuted }}>
+          Codex CLI mode does not use the API probe button. Validate by sending a CEO chat message.
         </div>
       )}
 

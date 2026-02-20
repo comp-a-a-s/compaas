@@ -1652,6 +1652,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
     const llmConfig: LlmConfig = {
       provider: llmProvider,
+      anthropic_mode: anthropicMode,
+      openai_mode: openaiMode,
       base_url: resolvedBaseUrl,
       model: resolvedModel,
       api_key: resolvedApiKey,
