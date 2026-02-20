@@ -31,7 +31,7 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 ```
-Also add support for `CRACKPIE_CORS_ORIGINS` env var to configure additional origins.
+Also add support for `COMPAAS_CORS_ORIGINS` env var to configure additional origins.
 
 ### 1.2 Path Traversal Protection
 **Files affected:** `src/state/project_state.py:15`, `src/state/task_board.py:18`, `src/mcp_server/memory_tools.py:72,100`, `src/web/api.py:150,163`, `src/mcp_server/micro_agent_tools.py:242`
@@ -64,12 +64,12 @@ Apply `validate_safe_id()` to every function that receives `project_id`, agent `
 ### 1.3 Environment Variable Validation
 **File:** `src/utils.py:14-16`
 
-Validate that `CRACKPIE_DATA_DIR` points to a safe, writable location:
+Validate that `COMPAAS_DATA_DIR` points to a safe, writable location:
 ```python
 if env_dir:
     abs_dir = os.path.abspath(env_dir)
     if not os.path.isdir(abs_dir):
-        raise ValueError(f"CRACKPIE_DATA_DIR '{abs_dir}' does not exist or is not a directory")
+        raise ValueError(f"COMPAAS_DATA_DIR '{abs_dir}' does not exist or is not a directory")
     return abs_dir
 ```
 
@@ -79,9 +79,9 @@ if env_dir:
 Remove `reload=True` and bind to `127.0.0.1` by default:
 ```python
 def main():
-    host = os.environ.get("CRACKPIE_API_HOST", "127.0.0.1")
-    port = int(os.environ.get("CRACKPIE_API_PORT", "8420"))
-    debug = os.environ.get("CRACKPIE_DEBUG", "").lower() == "true"
+    host = os.environ.get("COMPAAS_API_HOST", "127.0.0.1")
+    port = int(os.environ.get("COMPAAS_API_PORT", "8420"))
+    debug = os.environ.get("COMPAAS_DEBUG", "").lower() == "true"
     uvicorn.run("src.web.api:app", host=host, port=port, reload=debug)
 ```
 
@@ -517,9 +517,9 @@ import os
 @pytest.fixture
 def temp_data_dir(tmp_path):
     """Provide isolated temp data directory for each test."""
-    os.environ["CRACKPIE_DATA_DIR"] = str(tmp_path / "company_data")
+    os.environ["COMPAAS_DATA_DIR"] = str(tmp_path / "company_data")
     yield tmp_path / "company_data"
-    os.environ.pop("CRACKPIE_DATA_DIR", None)
+    os.environ.pop("COMPAAS_DATA_DIR", None)
 
 @pytest.fixture
 def state_manager(temp_data_dir):
@@ -780,17 +780,17 @@ Add all configuration options:
 ANTHROPIC_API_KEY=
 
 # Data & Output
-CRACKPIE_DATA_DIR=./company_data
+COMPAAS_DATA_DIR=./company_data
 PROJECTS_OUTPUT_DIR=~/projects
 
 # Web Dashboard
-CRACKPIE_API_HOST=127.0.0.1
-CRACKPIE_API_PORT=8420
-CRACKPIE_CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+COMPAAS_API_HOST=127.0.0.1
+COMPAAS_API_PORT=8420
+COMPAAS_CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 
 # Debugging
-CRACKPIE_DEBUG=false
-CRACKPIE_LOG_LEVEL=INFO
+COMPAAS_DEBUG=false
+COMPAAS_LOG_LEVEL=INFO
 ```
 
 ---
@@ -840,7 +840,7 @@ Replace print statements and raw file writes with structured logging:
 import logging
 import json
 
-logger = logging.getLogger("crackpie")
+logger = logging.getLogger("compaas")
 
 class JSONFormatter(logging.Formatter):
     def format(self, record):

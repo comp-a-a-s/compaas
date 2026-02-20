@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import Tooltip from './Tooltip';
+import CompassRoseLogo from './CompassRoseLogo';
 
 interface LayoutProps {
   activeTab: string;
@@ -10,6 +11,7 @@ interface LayoutProps {
   chatPanel?: React.ReactNode;
   chatHasUnread?: boolean;
   ceoName?: string;
+  pollIntervalMs?: number;
   /** If true, embed chat panel inline in a split-view layout */
   splitView?: boolean;
 }
@@ -23,11 +25,20 @@ const DEFAULT_NAV_ITEMS = [
   { id: 'settings',  label: 'Settings',  shortcut: '6', iconPath: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
 ];
 
-const NAV_ORDER_KEY = 'tf_sidebar_order';
+const NAV_ORDER_KEY = 'compaas_sidebar_order';
+const LEGACY_NAV_ORDER_KEY = 'tf_sidebar_order';
+const SIDEBAR_COLLAPSED_KEY = 'compaas_sidebar_collapsed';
+const TELEGRAM_CONFIGURED_KEY = 'compaas_telegram_configured';
+
+function getStoredBoolean(primaryKey: string, fallback = false): boolean {
+  const primary = localStorage.getItem(primaryKey);
+  if (primary !== null) return primary === 'true';
+  return fallback;
+}
 
 function loadNavOrder(): string[] {
   try {
-    const s = localStorage.getItem(NAV_ORDER_KEY);
+    const s = localStorage.getItem(NAV_ORDER_KEY) ?? localStorage.getItem(LEGACY_NAV_ORDER_KEY);
     if (s) {
       const order: string[] = JSON.parse(s);
       // Ensure all default items are present
@@ -37,6 +48,7 @@ function loadNavOrder(): string[] {
       for (const id of defaultIds) {
         if (!validOrder.includes(id)) validOrder.push(id);
       }
+      localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(validOrder));
       return validOrder;
     }
   } catch { /* ignore */ }
@@ -52,17 +64,67 @@ const PAGE_LABELS: Record<string, string> = {
   settings: 'Settings',
 };
 
-export default function Layout({ activeTab, onTabChange, children, chatOpen, onChatToggle, chatPanel, chatHasUnread, ceoName = 'CEO', splitView: splitViewProp = false }: LayoutProps) {
+function formatPollInterval(ms: number): string {
+  if (ms < 1000) return `${ms}ms poll`;
+  if (ms % 1000 === 0) return `${ms / 1000}s poll`;
+  return `${(ms / 1000).toFixed(1)}s poll`;
+}
+
+export default function Layout({
+  activeTab,
+  onTabChange,
+  children,
+  chatOpen,
+  onChatToggle,
+  chatPanel,
+  chatHasUnread,
+  ceoName = 'CEO',
+  pollIntervalMs = 5000,
+  splitView: splitViewProp = false,
+}: LayoutProps) {
   const [chatFullscreen, setChatFullscreen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    return localStorage.getItem('thunderflow_sidebar_collapsed') === 'true';
-  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    getStoredBoolean(SIDEBAR_COLLAPSED_KEY)
+  );
   const [navOrder, setNavOrder] = useState<string[]>(loadNavOrder);
   const [editingSidebar, setEditingSidebar] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [splitView, setSplitView] = useState(splitViewProp);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
 
   // Sync if parent changes the prop
   useEffect(() => { setSplitView(splitViewProp); }, [splitViewProp]);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const isMobileViewport = viewportWidth <= 900;
+
+  useEffect(() => {
+    if (!isMobileViewport) {
+      setMobileSidebarOpen(false);
+    }
+  }, [isMobileViewport]);
+
+  useEffect(() => {
+    if (isMobileViewport) {
+      setMobileSidebarOpen(false);
+    }
+  }, [activeTab, isMobileViewport]);
+
+  useEffect(() => {
+    if (!isMobileViewport) {
+      document.body.style.overflow = '';
+      return;
+    }
+    document.body.style.overflow = mobileSidebarOpen ? 'hidden' : '';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isMobileViewport, mobileSidebarOpen]);
 
   const NAV_ITEMS = useMemo(() => {
     return navOrder
@@ -100,21 +162,41 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
-      localStorage.setItem('thunderflow_sidebar_collapsed', String(next));
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
       return next;
     });
   };
 
+  const isNarrowViewport = viewportWidth <= 1024;
+  const sidebarIsCollapsed = isMobileViewport ? false : sidebarCollapsed;
+  const compactChatLeftPx = isMobileViewport ? 12 : (sidebarIsCollapsed ? 64 : 232);
+
   return (
-    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: 'var(--tf-bg)', color: 'var(--tf-text)' }}>
+    <div className="compaas-shell flex h-screen overflow-hidden" style={{ backgroundColor: 'var(--tf-bg)', color: 'var(--tf-text)' }}>
       {/* Sidebar */}
       <aside
         className="flex flex-col flex-shrink-0 transition-all duration-200"
         style={{
-          width: sidebarCollapsed ? '56px' : '224px',
           backgroundColor: 'var(--tf-bg)',
           borderRight: '1px solid var(--tf-border)',
           overflow: 'hidden',
+          ...(isMobileViewport
+            ? {
+                width: '260px',
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                bottom: 0,
+                zIndex: 60,
+                transform: mobileSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+                boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+              }
+            : {
+                width: sidebarIsCollapsed ? '56px' : '224px',
+                position: 'relative',
+                transform: 'none',
+                boxShadow: 'none',
+              }),
         }}
       >
         {/* Logo */}
@@ -122,46 +204,31 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
           className="flex-shrink-0"
           style={{
             borderBottom: '1px solid var(--tf-surface-raised)',
-            padding: sidebarCollapsed ? '14px 0' : '20px 16px',
+            padding: sidebarIsCollapsed ? '14px 0' : '20px 16px',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: sidebarCollapsed ? 'center' : 'space-between',
+            justifyContent: sidebarIsCollapsed ? 'center' : 'space-between',
           }}
         >
           <div className="flex items-center gap-3" style={{ minWidth: 0 }}>
-            {/* Lightning bolt icon */}
-            <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-              style={{ backgroundColor: 'var(--tf-accent)' }}
-            >
-              <svg
-                className="w-4 h-4"
-                stroke="currentColor"
-                fill="none"
-                strokeWidth={2}
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-                style={{ color: 'var(--tf-bg)' }}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
-            {!sidebarCollapsed && (
+            <CompassRoseLogo size={32} />
+            {!sidebarIsCollapsed && (
               <div style={{ minWidth: 0 }}>
-                <h1 className="text-sm font-bold leading-tight" style={{ color: 'var(--tf-text)' }}>
-                  ThunderFlow
+                <h1 className="text-sm font-bold leading-tight tracking-tight" style={{ color: 'var(--tf-text)' }}>
+                  COMPaaS
                 </h1>
                 <p className="text-xs leading-tight" style={{ color: 'var(--tf-text-muted)' }}>
-                  AI Dashboard
+                  Company as a Service
                 </p>
               </div>
             )}
           </div>
           {/* Collapse toggle (only visible when expanded) */}
-          {!sidebarCollapsed && (
+          {!sidebarIsCollapsed && !isMobileViewport && (
             <button
               onClick={toggleSidebar}
               title="Collapse sidebar"
+              aria-label="Collapse sidebar"
               style={{
                 background: 'none',
                 border: 'none',
@@ -186,15 +253,16 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         {/* Navigation */}
         <nav
           className="flex-1 flex flex-col overflow-y-auto overflow-x-hidden"
-          style={{ padding: sidebarCollapsed ? '12px 0' : '12px 8px' }}
+          style={{ padding: sidebarIsCollapsed ? '12px 0' : '12px 8px' }}
           role="navigation"
           aria-label="Main navigation"
         >
           {/* Expand button when collapsed */}
-          {sidebarCollapsed && (
+          {sidebarIsCollapsed && (
             <Tooltip content="Expand sidebar" position="right">
               <button
                 onClick={toggleSidebar}
+                aria-label="Expand sidebar"
                 style={{
                   width: '100%',
                   display: 'flex',
@@ -223,16 +291,21 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
               <div key={item.id} className="flex items-center" style={{ marginBottom: '2px' }}>
                 <Tooltip content={`${item.label} (${item.shortcut})`} position="right">
                   <button
-                    onClick={() => { if (!editingSidebar) onTabChange(item.id); }}
+                    onClick={() => {
+                      if (!editingSidebar) {
+                        onTabChange(item.id);
+                        if (isMobileViewport) setMobileSidebarOpen(false);
+                      }
+                    }}
                     aria-current={isActive ? 'page' : undefined}
                     className="flex-1 flex items-center rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer"
                     style={{
-                      gap: sidebarCollapsed ? 0 : '12px',
-                      padding: sidebarCollapsed ? '8px 0' : '8px 12px',
-                      justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+                      gap: sidebarIsCollapsed ? 0 : '12px',
+                      padding: sidebarIsCollapsed ? '8px 0' : '8px 12px',
+                      justifyContent: sidebarIsCollapsed ? 'center' : 'flex-start',
                       backgroundColor: isActive ? 'var(--tf-surface-raised)' : 'transparent',
                       color: isActive ? 'var(--tf-accent)' : 'var(--tf-text-secondary)',
-                      borderLeft: isActive && !sidebarCollapsed ? '2px solid var(--tf-accent)' : '2px solid transparent',
+                      borderLeft: isActive && !sidebarIsCollapsed ? '2px solid var(--tf-accent)' : '2px solid transparent',
                     }}
                     onMouseEnter={(e) => {
                       if (!isActive) {
@@ -250,11 +323,11 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                     <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.6} viewBox="0 0 24 24" aria-hidden="true">
                       <path strokeLinecap="round" strokeLinejoin="round" d={item.iconPath} />
                     </svg>
-                    {!sidebarCollapsed && item.label}
+                    {!sidebarIsCollapsed && item.label}
                   </button>
                 </Tooltip>
                 {/* Reorder controls — shown only when editing sidebar and not collapsed */}
-                {editingSidebar && !sidebarCollapsed && (
+                {editingSidebar && !sidebarIsCollapsed && (
                   <div className="flex flex-col" style={{ marginLeft: '2px' }}>
                     <button
                       onClick={() => moveNav(item.id, -1)}
@@ -272,7 +345,7 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
             );
           })}
           {/* Edit sidebar toggle */}
-          {!sidebarCollapsed && (
+          {!sidebarIsCollapsed && (
             <button
               onClick={() => setEditingSidebar((v) => !v)}
               className="w-full text-left text-xs mt-2 px-3 py-1 rounded-lg cursor-pointer transition-all"
@@ -290,10 +363,10 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
           className="flex-shrink-0"
           style={{
             borderTop: '1px solid var(--tf-surface-raised)',
-            padding: sidebarCollapsed ? '12px 0' : '16px',
+            padding: sidebarIsCollapsed ? '12px 0' : '16px',
           }}
         >
-          {sidebarCollapsed ? (
+          {sidebarIsCollapsed ? (
             <div style={{ display: 'flex', justifyContent: 'center' }}>
               <span
                 className="w-2 h-2 rounded-full animate-pulse-dot"
@@ -313,17 +386,18 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                   Live
                 </span>
                 <span className="text-xs ml-auto" style={{ color: 'var(--tf-border)' }}>
-                  5s poll
+                  {formatPollInterval(pollIntervalMs)}
                 </span>
               </div>
               {/* Telegram handoff button */}
               <button
                 onClick={() => {
-                  const configured = localStorage.getItem('thunderflow_telegram_configured') === 'true';
+                  const configured = getStoredBoolean(TELEGRAM_CONFIGURED_KEY);
                   if (configured) {
                     alert('Session handoff to Telegram initiated. Continue the conversation in your Telegram bot.');
                   } else {
                     onTabChange('settings');
+                    if (isMobileViewport) setMobileSidebarOpen(false);
                   }
                 }}
                 title="Continue on Telegram"
@@ -342,7 +416,7 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                   gap: '6px',
                   transition: 'all 0.2s',
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; e.currentTarget.style.color = '#2ca5e0'; }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--tf-accent-blue)'; e.currentTarget.style.color = 'var(--tf-accent-blue)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--tf-border)'; e.currentTarget.style.color = 'var(--tf-text-secondary)'; }}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
@@ -359,22 +433,44 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header bar */}
         <header
-          className="flex items-center justify-between px-6 py-3 flex-shrink-0"
+          className="flex items-center justify-between px-4 md:px-6 py-3 flex-shrink-0"
           style={{ backgroundColor: 'var(--tf-surface)', borderBottom: '1px solid var(--tf-surface-raised)' }}
         >
-          <div>
-            <h2 className="text-base font-semibold" style={{ color: 'var(--tf-text)' }}>
-              {PAGE_LABELS[activeTab] ?? 'Dashboard'}
-            </h2>
-            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-              ThunderFlow — AI Virtual Company
-            </p>
+          <div className="flex items-center gap-2">
+            {isMobileViewport && (
+              <button
+                onClick={() => setMobileSidebarOpen(true)}
+                aria-label="Open navigation menu"
+                className="w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer"
+                style={{
+                  backgroundColor: 'transparent',
+                  color: 'var(--tf-text-secondary)',
+                  border: '1px solid var(--tf-border)',
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+            )}
+            <div>
+              <h2 className="text-base font-semibold" style={{ color: 'var(--tf-text)' }}>
+                {PAGE_LABELS[activeTab] ?? 'Dashboard'}
+              </h2>
+              <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+                COMPaaS — Company as a Service
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {/* Split view toggle */}
-            <Tooltip content={splitView ? 'Disable split view' : 'Enable split view (chat alongside content)'} position="bottom">
+            {!isMobileViewport && (
+              <Tooltip content={splitView ? 'Disable split view' : 'Enable split view (chat alongside content)'} position="bottom">
               <button
                 onClick={() => setSplitView((v) => !v)}
+                aria-label={splitView ? 'Disable split view' : 'Enable split view'}
                 className="w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer transition-all"
                 style={{
                   backgroundColor: splitView ? 'var(--tf-accent-blue)' : 'transparent',
@@ -389,8 +485,9 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
                 </svg>
               </button>
             </Tooltip>
+            )}
             <div
-              className="text-xs px-3 py-1.5 rounded-full"
+              className="text-xs px-2.5 py-1.5 rounded-full"
               style={{ color: 'var(--tf-text-secondary)', backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
             >
               {today}
@@ -399,11 +496,11 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         </header>
 
         {/* Page content (normal or split-view) */}
-        {splitView ? (
+        {splitView && !isMobileViewport ? (
           <div className="flex-1 flex overflow-hidden">
             <main
               id="main-content"
-              className="flex-1 overflow-y-auto p-6"
+              className="flex-1 overflow-y-auto p-4 md:p-6"
               style={{ backgroundColor: 'var(--tf-bg)' }}
             >
               {children}
@@ -445,7 +542,7 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         ) : (
           <main
             id="main-content"
-            className="flex-1 overflow-y-auto p-6"
+            className="flex-1 overflow-y-auto p-4 md:p-6"
             style={{ backgroundColor: 'var(--tf-bg)' }}
           >
             {children}
@@ -453,14 +550,31 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
         )}
       </div>
 
+      {/* Mobile sidebar backdrop */}
+      {isMobileViewport && mobileSidebarOpen && (
+        <button
+          onClick={() => setMobileSidebarOpen(false)}
+          aria-label="Close navigation menu"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 50,
+            backgroundColor: 'rgba(2, 8, 14, 0.5)',
+            border: 'none',
+            cursor: 'pointer',
+          }}
+        />
+      )}
+
       {/* Floating CEO Chat — always mounted to preserve in-flight state; toggled via display */}
       <div
         className="fixed z-50 flex flex-col"
         style={{
           display: chatOpen ? 'flex' : 'none',
           bottom: chatFullscreen ? '5vh' : '80px',
-          right: chatFullscreen ? '2.5vw' : '24px',
-          width: chatFullscreen ? '95vw' : '420px',
+          left: !chatFullscreen && isNarrowViewport ? `${compactChatLeftPx}px` : 'auto',
+          right: !chatFullscreen && isNarrowViewport ? '12px' : (chatFullscreen ? '2.5vw' : '24px'),
+          width: chatFullscreen ? '95vw' : (isNarrowViewport ? 'auto' : '420px'),
           height: chatFullscreen ? '90vh' : '560px',
           backgroundColor: 'var(--tf-surface)',
           border: '1px solid var(--tf-border)',
@@ -491,6 +605,7 @@ export default function Layout({ activeTab, onTabChange, children, chatOpen, onC
               <button
                 onClick={() => setChatFullscreen(f => !f)}
                 title={chatFullscreen ? 'Restore' : 'Expand'}
+                aria-label={chatFullscreen ? 'Restore chat size' : 'Expand chat'}
                 className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer"
                 style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
                 onMouseEnter={(e) => {

@@ -128,5 +128,10 @@ export interface AppConfig {
     port: number;
     auto_open_browser: boolean;
   };
+  integrations?: {
+    github_token?: string;
+    slack_token?: string;
+    webhook_url?: string;
+  };
   llm: LlmConfig;
 }

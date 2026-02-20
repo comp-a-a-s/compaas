@@ -279,7 +279,7 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
   if (loading) {
     return (
       <div className="space-y-6 animate-fade-in">
-        <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
             <div
               key={i}
@@ -322,7 +322,7 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Summary cards */}
-      <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           label="Total Tokens"
           value={formatTokens(totalTokens)}

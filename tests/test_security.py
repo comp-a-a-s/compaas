@@ -284,8 +284,8 @@ class TestCorsConfiguration:
         assert methods == ["GET"], f"CORS should only allow GET, got: {methods}"
 
     def test_default_origins_are_localhost_only(self):
-        """When CRACKPIE_CORS_ORIGINS env var is not set, only localhost origins allowed."""
-        original = os.environ.pop("CRACKPIE_CORS_ORIGINS", None)
+        """When COMPAAS_CORS_ORIGINS env var is not set, only localhost origins allowed."""
+        original = os.environ.pop("COMPAAS_CORS_ORIGINS", None)
         try:
             # Re-evaluate the allowed origins list from the module
             from src.web import api as api_module
@@ -298,4 +298,4 @@ class TestCorsConfiguration:
                 assert origin != "*", "Wildcard origin must not be in default CORS config"
         finally:
             if original is not None:
-                os.environ["CRACKPIE_CORS_ORIGINS"] = original
+                os.environ["COMPAAS_CORS_ORIGINS"] = original

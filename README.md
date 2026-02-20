@@ -1,6 +1,6 @@
-# ThunderFlow
+# COMPaaS
 
-**ThunderFlow** is a Business as a Service (BaaS) platform powered by autonomous AI agents. A virtual software company of 15 specialized agents — CEO, CTO, engineers, designers, researchers, and more — collaborate through an MCP server to manage projects, track tasks, and build software on your behalf.
+**COMPaaS** is a Company as a Service platform powered by autonomous AI agents. A virtual software company of 15 specialized agents — CEO, CTO, engineers, designers, researchers, and more — collaborate through an MCP server to manage projects, track tasks, and build software on your behalf.
 
 ## Architecture
 
@@ -34,32 +34,26 @@ Leadership  Engineering  On-Demand     Dashboards
 ## Quick Start
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/Idanhen26/thunderflow.git
-cd thunderflow
-
-# 2. Run the installer
-./install.sh
-
-# 3. Set your API key
-echo 'ANTHROPIC_API_KEY=sk-ant-...' >> .env
-
-# 4. Activate the virtual environment
-source .venv/bin/activate
-
-# 5. Start the CEO agent
-claude --agent ceo
+# One command: download + install + prompt to start
+bash <(curl -fsSL https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bootstrap.sh)
 ```
+
+The installer clones/updates COMPaaS, installs dependencies, verifies the setup,
+and asks whether you want to start immediately.
 
 ## Installation (Detailed)
 
 ### Automated Installation
 
 ```bash
+# Option A (recommended): one command bootstrap
+bash <(curl -fsSL https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bootstrap.sh)
+
+# Option B: from an existing local checkout
 ./install.sh
 ```
 
-The installer handles all 8 steps: Python check, Node.js check, Claude Code check, virtual environment, Python dependencies, web dashboard build, environment setup, and test verification.
+The installer handles Python checks, web dependencies, environment setup, test verification, and an end-of-install startup prompt.
 
 ### Manual Installation
 
@@ -119,7 +113,7 @@ The CEO will delegate to specialized agents (CTO, engineers, designers, etc.) an
 ### Web Dashboard
 
 ```bash
-thunderflow-web
+compaas-web
 # Opens at http://localhost:8420
 ```
 
@@ -133,12 +127,15 @@ Features:
 - Setup wizard — guided first-run configuration for team names, theme, and preferences
 - Telegram integration — hand off sessions to your phone
 - Keyboard shortcuts — press `?` to see all shortcuts
-- Three themes — Midnight (dark), Twilight (blue-dark), Dawn (light)
+- Four themes — Midnight, Twilight, Dawn, and Sahara
+- Mobile-first navigation — drawer sidebar and stacked detail panels on narrow screens
+- Improved readability — stronger muted-text contrast in Twilight and Dawn themes
+- Perceived-speed tuning — tab-aware polling and reduced forced smooth scrolling during live updates
 
 ### TUI Dashboard
 
 ```bash
-thunderflow-tui
+compaas-tui
 ```
 
 A terminal-based dashboard with org chart, project summary, task board, and activity feed. Refreshes every 3 seconds. Press `r` to force refresh, `q` to quit.
@@ -207,14 +204,18 @@ A terminal-based dashboard with org chart, project summary, task board, and acti
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | (required) | Your Anthropic API key |
-| `THUNDERFLOW_DATA_DIR` | `./company_data` | Company state directory |
+| `COMPAAS_DATA_DIR` | `./company_data` | Company state directory |
 | `PROJECTS_OUTPUT_DIR` | `~/projects` | Where generated project code is written |
-| `THUNDERFLOW_API_HOST` | `127.0.0.1` | Web dashboard host |
-| `THUNDERFLOW_API_PORT` | `8420` | Web dashboard port |
-| `THUNDERFLOW_CORS_ORIGINS` | `localhost:3000,5173,8420` | Allowed CORS origins |
-| `THUNDERFLOW_DEBUG` | `false` | Enable debug mode (hot-reload) |
+| `COMPAAS_API_HOST` | `127.0.0.1` | Web dashboard host |
+| `COMPAAS_API_PORT` | `8420` | Web dashboard port |
+| `COMPAAS_CORS_ORIGINS` | `localhost:3000,5173,8420` | Allowed CORS origins |
+| `COMPAAS_CORS_METHODS` | `GET` | Allowed CORS methods (set to `GET,POST,PATCH,DELETE` for cross-origin dev writes) |
+| `COMPAAS_DEBUG` | `false` | Enable debug mode (hot-reload) |
+| `COMPAAS_ADMIN_TOKEN` | (unset) | Optional admin token for remote-sensitive writes (e.g. `/api/integrations`) |
+| `COMPAAS_GITHUB_WEBHOOK_SECRET` | (unset) | HMAC secret required to validate `X-Hub-Signature-256` on GitHub webhooks |
+| `COMPAAS_SLACK_SIGNING_SECRET` | (unset) | Slack signing secret required to validate `X-Slack-Signature` and timestamp |
 
-> **Note:** The old `CRACKPIE_*` environment variables are still supported for backwards compatibility.
+> **Note:** Use `COMPAAS_*` environment variables.
 
 ### Agent Customization
 
@@ -233,7 +234,7 @@ Your role description here...
 
 ### Telegram Integration
 
-ThunderFlow supports handing off sessions to Telegram so you can continue directing your AI company from your phone.
+COMPaaS supports handing off sessions to Telegram so you can continue directing your AI company from your phone.
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram
 2. Copy the bot token
@@ -243,10 +244,11 @@ ThunderFlow supports handing off sessions to Telegram so you can continue direct
 
 ### Themes
 
-Choose from 3 built-in themes in Settings or during the Setup Wizard:
-- **Midnight** — Deep dark, easy on the eyes (default)
-- **Twilight** — Softer dark with blue tones
-- **Dawn** — Light mode, clean and bright
+Choose from 4 built-in themes in Settings or during the Setup Wizard:
+- **Midnight** — Dark ocean with teal/blue accents (default)
+- **Twilight** — Deep indigo with cool highlights
+- **Dawn** — Clean light mode with improved contrast
+- **Sahara** — Warm earthy palette
 
 ## Development
 
@@ -276,7 +278,7 @@ npm run lint   # Run ESLint
 ### Project Structure
 
 ```
-thunderflow/
+<repo-root>/
 ├── .claude/agents/          # 15 agent definitions (Markdown)
 ├── src/
 │   ├── agents.py            # Centralized agent registry
@@ -309,11 +311,32 @@ thunderflow/
 
 **Web dashboard not loading** — Ensure Node.js 18+ is installed and run `cd web-dashboard && npm install && npm run build`
 
-**CEO Chat not connecting** — Ensure the backend is running (`thunderflow-web`) and the Claude Code CLI is installed. The chat uses WebSocket at `/api/chat/ws`.
+**CEO Chat not connecting** — Ensure the backend is running (`compaas-web`) and the Claude Code CLI is installed. The chat uses WebSocket at `/api/chat/ws`.
 
 **Tests failing** — Run `pip install -e ".[dev]"` to ensure all dev dependencies are installed
 
-**Port 8420 in use** — Set a different port: `THUNDERFLOW_API_PORT=9000 thunderflow-web`
+**Port 8420 in use** — Set a different port: `COMPAAS_API_PORT=9000 compaas-web`
+
+**Cross-origin POST/PATCH blocked** — Set `COMPAAS_CORS_METHODS=GET,POST,PATCH,DELETE` when running frontend on a different origin.
+
+**Integration tokens not visible in Settings/API config** — `/api/config` redacts saved GitHub/Slack tokens by design. Enter a new token only when you want to rotate/replace it.
+
+**GitHub/Slack webhooks return 401/503** — Set `COMPAAS_GITHUB_WEBHOOK_SECRET` and `COMPAAS_SLACK_SIGNING_SECRET` to enable signed webhook verification.
+
+## Quality Snapshot (February 19, 2026)
+
+- Backend regression fixes:
+  - Restored strict built-in model validation (`opus`, `sonnet`, `haiku`) used by hiring/micro-agent tools.
+  - Fixed org chart defaults to `Idan` (board head) and `Marcus` (CEO) when config is empty.
+  - Hardened default CORS method policy to `GET` (configurable via `COMPAAS_CORS_METHODS`).
+- UI modernization:
+  - Rebranded app surfaces to **COMPaaS** with a compass-rose logo (sidebar, setup wizard, favicon).
+  - Refreshed theme tokens and typography (`Space Grotesk` + improved contrast, gradients, motion polish).
+  - Reduced dashboard polling cost by separating lightweight project refreshes from heavier task detail refreshes.
+  - Consolidated chat secondary controls into a single `More` menu (export, memory, summarize, clear) to reduce header clutter.
+  - Split Settings into focused tabs (`General`, `AI`, `Agents`, `Integrations`, `Appearance`) to improve scan speed and reduce cognitive load.
+- Compatibility:
+  - Added `compaas-web` / `compaas-tui` entry points.
 
 ## License
 

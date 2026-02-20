@@ -1,6 +1,10 @@
-"""FastAPI endpoint tests for the CrackPie web dashboard API."""
+"""FastAPI endpoint tests for the COMPaaS web dashboard API."""
 
+import hashlib
+import hmac
+import json
 import os
+import time
 import yaml
 import pytest
 from fastapi.testclient import TestClient
@@ -392,7 +396,7 @@ class TestSettingsModelsEndpoint:
 
     def test_returns_empty_list_when_no_agents_dir(self, client, monkeypatch):
         import src.web.api as api_module
-        monkeypatch.setattr(api_module, "PROJECT_ROOT", "/tmp/nonexistent_crackpie_root")
+        monkeypatch.setattr(api_module, "PROJECT_ROOT", "/tmp/nonexistent_compaas_root")
         response = client.get("/api/settings/models")
         assert response.status_code == 200
         assert response.json() == []
@@ -419,3 +423,198 @@ class TestSettingsModelsEndpoint:
         assert data[0]["id"] == "test-agent"
         assert data[0]["name"] == "Test Agent"
         assert data[0]["model"] == "sonnet"
+
+
+# ---------------------------------------------------------------------------
+# Integration endpoint security
+# ---------------------------------------------------------------------------
+
+class TestIntegrationSecurity:
+    def test_save_integrations_allows_local_client_without_admin_token(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.delenv("COMPAAS_ADMIN_TOKEN", raising=False)
+
+        response = client.patch("/api/integrations", json={"github_token": "ghp_local"})
+        assert response.status_code == 200
+
+    def test_save_integrations_blocks_remote_client_without_admin_token(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.setattr(api_module, "_is_loopback_client", lambda _request: False)
+        monkeypatch.delenv("COMPAAS_ADMIN_TOKEN", raising=False)
+
+        response = client.patch("/api/integrations", json={"github_token": "ghp_remote"})
+        assert response.status_code == 403
+
+    def test_save_integrations_requires_valid_admin_token_when_configured(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.setattr(api_module, "_is_loopback_client", lambda _request: False)
+        monkeypatch.setenv("COMPAAS_ADMIN_TOKEN", "test-admin-token")
+
+        unauthorized = client.patch("/api/integrations", json={"github_token": "ghp_remote"})
+        assert unauthorized.status_code == 401
+
+        authorized = client.patch(
+            "/api/integrations",
+            json={"github_token": "ghp_remote"},
+            headers={"X-COMPAAS-ADMIN-TOKEN": "test-admin-token"},
+        )
+        assert authorized.status_code == 200
+
+    def test_update_config_cannot_bypass_integration_auth(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.setattr(api_module, "_is_loopback_client", lambda _request: False)
+        monkeypatch.setenv("COMPAAS_ADMIN_TOKEN", "test-admin-token")
+
+        blocked = client.patch("/api/config", json={"integrations": {"github_token": "ghp_bypass"}})
+        assert blocked.status_code == 401
+
+        allowed = client.patch(
+            "/api/config",
+            json={"integrations": {"github_token": "ghp_bypass"}},
+            headers={"Authorization": "Bearer test-admin-token"},
+        )
+        assert allowed.status_code == 200
+
+    def test_update_config_non_sensitive_fields_remain_writable(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.setattr(api_module, "_is_loopback_client", lambda _request: False)
+        monkeypatch.setenv("COMPAAS_ADMIN_TOKEN", "test-admin-token")
+
+        response = client.patch("/api/config", json={"ui": {"poll_interval_ms": 10000}})
+        assert response.status_code == 200
+
+    def test_github_webhook_rejects_missing_secret(self, client, monkeypatch):
+        monkeypatch.delenv("COMPAAS_GITHUB_WEBHOOK_SECRET", raising=False)
+        payload = {"repository": {"full_name": "compaas/repo"}, "commits": [{"message": "hello"}]}
+
+        response = client.post("/api/integrations/github/webhook", json=payload)
+        assert response.status_code == 503
+
+    def test_github_webhook_requires_valid_signature(self, client, monkeypatch):
+        monkeypatch.setenv("COMPAAS_GITHUB_WEBHOOK_SECRET", "github-secret")
+        payload = {"repository": {"full_name": "compaas/repo"}, "commits": [{"message": "hello"}]}
+        body = json.dumps(payload).encode("utf-8")
+        signature = "sha256=" + hmac.new(b"github-secret", body, hashlib.sha256).hexdigest()
+
+        ok = client.post(
+            "/api/integrations/github/webhook",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-GitHub-Event": "push",
+                "X-Hub-Signature-256": signature,
+            },
+        )
+        assert ok.status_code == 200
+
+        bad = client.post(
+            "/api/integrations/github/webhook",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-GitHub-Event": "push",
+                "X-Hub-Signature-256": "sha256=bad",
+            },
+        )
+        assert bad.status_code == 401
+
+    def test_slack_events_require_valid_signature_and_timestamp(self, client, monkeypatch):
+        monkeypatch.setenv("COMPAAS_SLACK_SIGNING_SECRET", "slack-secret")
+        payload = {"type": "url_verification", "challenge": "xyz"}
+        body = json.dumps(payload).encode("utf-8")
+
+        ts = str(int(time.time()))
+        base = f"v0:{ts}:{body.decode('utf-8')}".encode("utf-8")
+        signature = "v0=" + hmac.new(b"slack-secret", base, hashlib.sha256).hexdigest()
+
+        ok = client.post(
+            "/api/integrations/slack/events",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Slack-Request-Timestamp": ts,
+                "X-Slack-Signature": signature,
+            },
+        )
+        assert ok.status_code == 200
+        assert ok.json() == {"challenge": "xyz"}
+
+        old_ts = str(int(time.time()) - 1000)
+        old_base = f"v0:{old_ts}:{body.decode('utf-8')}".encode("utf-8")
+        old_sig = "v0=" + hmac.new(b"slack-secret", old_base, hashlib.sha256).hexdigest()
+        stale = client.post(
+            "/api/integrations/slack/events",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Slack-Request-Timestamp": old_ts,
+                "X-Slack-Signature": old_sig,
+            },
+        )
+        assert stale.status_code == 401
+
+    def test_get_config_redacts_saved_integration_tokens(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({
+                "setup_complete": True,
+                "integrations": {
+                    "github_token": "ghp_secret",
+                    "slack_token": "xoxb_secret",
+                    "webhook_url": "https://example.com/hook",
+                },
+            }, f)
+
+        response = client.get("/api/config")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["integrations"]["github_token"] == api_module.REDACTED_SECRET
+        assert data["integrations"]["slack_token"] == api_module.REDACTED_SECRET
+        assert data["integrations"]["webhook_url"] == "https://example.com/hook"
+
+    def test_save_integrations_ignores_redacted_placeholder(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.delenv("COMPAAS_ADMIN_TOKEN", raising=False)
+
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({"integrations": {"github_token": "ghp_secret"}}, f)
+
+        response = client.patch("/api/integrations", json={
+            "github_token": api_module.REDACTED_SECRET,
+            "webhook_url": "https://example.com/updated",
+        })
+        assert response.status_code == 200
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        assert cfg["integrations"]["github_token"] == "ghp_secret"
+        assert cfg["integrations"]["webhook_url"] == "https://example.com/updated"
+
+    def test_update_config_ignores_redacted_placeholder(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.delenv("COMPAAS_ADMIN_TOKEN", raising=False)
+
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({"integrations": {"slack_token": "xoxb_secret"}}, f)
+
+        response = client.patch("/api/config", json={
+            "integrations": {
+                "slack_token": api_module.REDACTED_SECRET,
+                "webhook_url": "https://example.com/config",
+            },
+        })
+        assert response.status_code == 200
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        assert cfg["integrations"]["slack_token"] == "xoxb_secret"
+        assert cfg["integrations"]["webhook_url"] == "https://example.com/config"

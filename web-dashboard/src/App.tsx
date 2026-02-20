@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import './App.css';
 
 import Layout from './components/Layout';
@@ -10,6 +10,7 @@ import MetricsPanel from './components/MetricsPanel';
 import ChatPanel from './components/ChatPanel';
 import SetupWizard from './components/SetupWizard';
 import SettingsPanel from './components/SettingsPanel';
+import CompassRoseLogo from './components/CompassRoseLogo';
 
 import { useThemeInit } from './hooks/useTheme';
 import { useKeyboardShortcuts, useShortcutsPanel, ShortcutsModal } from './hooks/useKeyboardShortcuts';
@@ -28,7 +29,11 @@ import {
 import type { Agent, Project, Task, ActivityEvent, TokenReport, Budget, AppConfig } from './types';
 
 const MAX_EVENTS = 200;
-const POLL_INTERVAL_MS = 5000;
+const DEFAULT_POLL_INTERVAL_MS = 5000;
+const MIN_POLL_INTERVAL_MS = 3000;
+const MAX_POLL_INTERVAL_MS = 30000;
+const TASK_POLL_MULTIPLIER = 3;
+const MIN_TASK_POLL_INTERVAL_MS = 15000;
 
 // Agent slug/name → display name for activity tagging (Map for O(1) exact lookups)
 const AGENT_SLUG_MAP = new Map<string, string>([
@@ -212,6 +217,7 @@ export default function App() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [loadingMetrics, setLoadingMetrics] = useState(true);
+  const previousTabRef = useRef<string>('overview');
 
   // ---- Config check ----
   useEffect(() => {
@@ -234,6 +240,15 @@ export default function App() {
     });
   }, []);
 
+  const pollIntervalMs = useMemo(() => {
+    const configured = config?.ui?.poll_interval_ms ?? DEFAULT_POLL_INTERVAL_MS;
+    return Math.max(MIN_POLL_INTERVAL_MS, Math.min(MAX_POLL_INTERVAL_MS, configured));
+  }, [config?.ui?.poll_interval_ms]);
+
+  const taskPollIntervalMs = useMemo(() => (
+    Math.max(MIN_TASK_POLL_INTERVAL_MS, pollIntervalMs * TASK_POLL_MULTIPLIER)
+  ), [pollIntervalMs]);
+
   // ---- Data loaders ----
 
   const loadAgents = useCallback(async () => {
@@ -247,33 +262,37 @@ export default function App() {
     }
   }, []);
 
-  const loadProjects = useCallback(async () => {
+  const loadProjects = useCallback(async (includeTasks: boolean = true) => {
     try {
       const projectList = await fetchProjects();
       const list = Array.isArray(projectList) ? projectList : [];
       setProjects(list);
 
-      // Fetch tasks for each project in parallel
-      setLoadingTasks(true);
-      const results = await Promise.allSettled(
-        list.map((p) => fetchProjectDetail(p.id).then((r) => ({ id: p.id, tasks: r.tasks ?? [] })))
-      );
+      if (includeTasks) {
+        // Fetch task details only when needed to keep UI responsive on larger project sets.
+        setLoadingTasks(true);
+        const results = await Promise.allSettled(
+          list.map((p) => fetchProjectDetail(p.id).then((r) => ({ id: p.id, tasks: r.tasks ?? [] })))
+        );
 
-      const byProject: Record<string, Task[]> = {};
-      const merged: Task[] = [];
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          byProject[result.value.id] = result.value.tasks;
-          merged.push(...result.value.tasks);
+        const byProject: Record<string, Task[]> = {};
+        const merged: Task[] = [];
+        for (const result of results) {
+          if (result.status === 'fulfilled') {
+            byProject[result.value.id] = result.value.tasks;
+            merged.push(...result.value.tasks);
+          }
         }
+        setTasksByProject(byProject);
+        setAllTasks(merged);
       }
-      setTasksByProject(byProject);
-      setAllTasks(merged);
     } catch {
       // keep previous
     } finally {
       setLoadingProjects(false);
-      setLoadingTasks(false);
+      if (includeTasks) {
+        setLoadingTasks(false);
+      }
     }
   }, []);
 
@@ -292,12 +311,12 @@ export default function App() {
     }
   }, []);
 
-  // ---- Initial load + polling ----
+  // ---- Initial load ----
   useEffect(() => {
     if (showWizard) return; // Don't load data while wizard is shown
 
     loadAgents();
-    loadProjects();
+    loadProjects(true);
     loadMetrics();
 
     // Seed recent activity (deduplicated to avoid duplicates with SSE stream)
@@ -314,14 +333,64 @@ export default function App() {
       // no recent activity endpoint
     });
 
+  }, [loadAgents, loadMetrics, loadProjects, showWizard]);
+
+  // ---- Tab-aware polling ----
+  useEffect(() => {
+    if (showWizard) return;
+
+    const shouldRefreshAgents = activeTab === 'overview' || activeTab === 'agents';
+    const shouldRefreshMetrics = activeTab === 'overview' || activeTab === 'metrics';
+    const shouldRefreshProjectSummaries =
+      chatOpen || activeTab === 'overview' || activeTab === 'projects' || activeTab === 'activity';
+
     const interval = setInterval(() => {
-      loadAgents();
-      loadProjects();
-      loadMetrics();
-    }, POLL_INTERVAL_MS);
+      if (document.visibilityState !== 'visible') return;
+      if (shouldRefreshAgents) loadAgents();
+      if (shouldRefreshProjectSummaries) loadProjects(false);
+      if (shouldRefreshMetrics) loadMetrics();
+    }, pollIntervalMs);
 
     return () => clearInterval(interval);
-  }, [loadAgents, loadProjects, loadMetrics, showWizard]);
+  }, [activeTab, chatOpen, loadAgents, loadMetrics, loadProjects, pollIntervalMs, showWizard]);
+
+  // Fast refresh after tab visibility returns
+  useEffect(() => {
+    if (showWizard) return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (activeTab === 'overview' || activeTab === 'agents') {
+        loadAgents();
+      }
+      if (chatOpen || activeTab === 'overview' || activeTab === 'projects' || activeTab === 'activity') {
+        loadProjects(false);
+      }
+      if (activeTab === 'overview' || activeTab === 'metrics') {
+        loadMetrics();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [activeTab, chatOpen, loadAgents, loadProjects, loadMetrics, showWizard]);
+
+  // Refresh detailed task boards only on project-focused views.
+  useEffect(() => {
+    const wasProjectTab = previousTabRef.current === 'projects';
+    const isProjectTab = activeTab === 'projects';
+    previousTabRef.current = activeTab;
+    if (showWizard || !isProjectTab) return;
+
+    // Initial data load already fetched tasks; refresh immediately only when returning to projects.
+    if (!wasProjectTab) {
+      loadProjects(true);
+    }
+
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      loadProjects(true);
+    }, taskPollIntervalMs);
+    return () => clearInterval(interval);
+  }, [activeTab, loadProjects, showWizard, taskPollIntervalMs]);
 
   // ---- SSE activity stream ----
   useEffect(() => {
@@ -373,6 +442,12 @@ export default function App() {
     () => projects.filter((p) => p.plan_approved !== true && p.status === 'planning'),
     [projects]
   );
+  const handleConfigUpdated = useCallback(() => {
+    loadAgents();
+    fetchConfig().then((cfg) => {
+      if (cfg) setConfig(cfg);
+    });
+  }, [loadAgents]);
 
   // ---- Loading / wizard screens ----
 
@@ -383,15 +458,10 @@ export default function App() {
         style={{ backgroundColor: 'var(--tf-bg)', color: 'var(--tf-text-muted)' }}
       >
         <div className="text-center">
-          <div
-            className="w-10 h-10 rounded-lg flex items-center justify-center mx-auto mb-3"
-            style={{ backgroundColor: 'var(--tf-accent)' }}
-          >
-            <svg className="w-5 h-5" style={{ color: 'var(--tf-bg)' }} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
+          <div className="mx-auto mb-3" style={{ width: '40px' }}>
+            <CompassRoseLogo size={40} />
           </div>
-          <p className="text-sm">Loading ThunderFlow...</p>
+          <p className="text-sm">Loading COMPaaS...</p>
         </div>
       </div>
     );
@@ -455,7 +525,7 @@ export default function App() {
         );
 
       case 'settings':
-        return <SettingsPanel onConfigUpdated={() => { loadAgents(); }} />;
+        return <SettingsPanel onConfigUpdated={handleConfigUpdated} />;
 
       default:
         return (
@@ -490,6 +560,7 @@ export default function App() {
         }}
         chatHasUnread={chatHasUnread}
         ceoName={ceoName}
+        pollIntervalMs={pollIntervalMs}
         chatPanel={
           <ChatPanel
             floating

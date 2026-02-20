@@ -421,23 +421,28 @@ function PlanTab({ project, onApproved }: PlanTabProps) {
   const [specs, setSpecs] = useState<{ filename: string; content: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
-  const [approved, setApproved] = useState(project.plan_approved ?? false);
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
+  const approved = project.plan_approved ?? false;
 
   useEffect(() => {
-    setApproved(project.plan_approved ?? false);
-    setLoading(true);
+    let cancelled = false;
     fetchProjectSpecs(project.id)
-      .then(setSpecs)
-      .finally(() => setLoading(false));
-  }, [project.id, project.plan_approved]);
+      .then((data) => {
+        if (!cancelled) setSpecs(data);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
 
   const handleApprove = async () => {
     setApproving(true);
     const ok = await approveProjectPlan(project.id);
     setApproving(false);
     if (ok) {
-      setApproved(true);
       onApproved();
     }
   };
@@ -699,12 +704,12 @@ interface MilestonesTabProps {
   tasks: Task[];
 }
 function MilestonesTab({ project, tasks }: MilestonesTabProps) {
-  const phases = project.phases ?? [];
   const done   = tasks.filter((t) => t.status.toLowerCase() === 'done').length;
   const total  = tasks.length;
 
   // Derive milestones from phases; if no phases, group by priority tiers
   const milestones = useMemo(() => {
+    const phases = project.phases ?? [];
     if (phases.length > 0) {
       return phases.map((phase, i) => {
         const chunk = Math.ceil(total / phases.length);
@@ -729,7 +734,7 @@ function MilestonesTab({ project, tasks }: MilestonesTabProps) {
       milestoneFor('High Priority (P1)',   p1Tasks),
       milestoneFor('Remaining Work (P2+)', p2Tasks),
     ].filter(Boolean) as { name: string; pct: number; status: string }[];
-  }, [phases, tasks, done, total]);
+  }, [project.phases, tasks, done, total]);
 
   if (milestones.length === 0) {
     return <p className="text-xs py-4" style={{ color: 'var(--tf-text-muted)' }}>No milestones defined. Add phases to the project to see milestones.</p>;
@@ -780,13 +785,21 @@ function BurndownChart({ tasks }: BurndownChartProps) {
 
   const data = useMemo(() => {
     if (tasks.length === 0) return null;
-    const now = Date.now();
-    const startTs = tasks.reduce((min, t) => {
-      const ts = t.created_at ? new Date(t.created_at).getTime() : now;
-      return ts < min ? ts : min;
-    }, now);
     const dayMs = 86400_000;
-    const totalDays = Math.max(DAYS, Math.ceil((now - startTs) / dayMs) + 1);
+    const startTs = tasks.reduce((min, t) => {
+      const created = t.created_at ? new Date(t.created_at).getTime() : Number.POSITIVE_INFINITY;
+      const updated = t.updated_at ? new Date(t.updated_at).getTime() : Number.POSITIVE_INFINITY;
+      const ts = Math.min(created, updated);
+      return ts < min ? ts : min;
+    }, Number.POSITIVE_INFINITY);
+    const safeStartTs = Number.isFinite(startTs) ? startTs : 0;
+    const endTs = tasks.reduce((max, t) => {
+      const created = t.created_at ? new Date(t.created_at).getTime() : Number.NEGATIVE_INFINITY;
+      const updated = t.updated_at ? new Date(t.updated_at).getTime() : Number.NEGATIVE_INFINITY;
+      const ts = Math.max(created, updated);
+      return ts > max ? ts : max;
+    }, safeStartTs);
+    const totalDays = Math.max(DAYS, Math.ceil((endTs - safeStartTs) / dayMs) + 1);
 
     // Ideal burn: linear from total tasks to 0
     const ideal: number[] = [];
@@ -797,7 +810,7 @@ function BurndownChart({ tasks }: BurndownChartProps) {
     // Actual: count tasks NOT done at end of each day
     const actual: number[] = [];
     for (let d = 0; d <= totalDays; d++) {
-      const dayEnd = startTs + d * dayMs;
+      const dayEnd = safeStartTs + d * dayMs;
       const remaining = tasks.filter((t) => {
         const doneAt = t.updated_at ? new Date(t.updated_at).getTime() : null;
         if (!doneAt) return true; // not done yet
@@ -1248,6 +1261,7 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
         )}
         {activeTab === 'plan' && (
           <PlanTab
+            key={localProject.id}
             project={localProject}
             onApproved={() => {
               setLocalProject((p) => ({ ...p, plan_approved: true, status: 'active' }));
@@ -1266,22 +1280,27 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
 // ---- Main ProjectPanel ----
 export default function ProjectPanel({ projects, loading, tasksByProject, initialProjectId, onProjectIdConsumed, onRefresh }: ProjectPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [initialTab, setInitialTab] = useState<ProjectTab | undefined>(undefined);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
 
-  // When a navigation request arrives, open the specified project
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Acknowledge one-shot navigation requests from chat.
   useEffect(() => {
     if (initialProjectId) {
-      setSelectedId(initialProjectId);
-      setInitialTab('plan');
       onProjectIdConsumed?.();
     }
   }, [initialProjectId, onProjectIdConsumed]);
 
-  const selectedProject = projects.find((p) => p.id === selectedId) ?? null;
-  const selectedTasks = selectedId ? (tasksByProject[selectedId] ?? []) : [];
+  const effectiveSelectedId = initialProjectId ?? selectedId;
+  const selectedProject = projects.find((p) => p.id === effectiveSelectedId) ?? null;
+  const selectedTasks = effectiveSelectedId ? (tasksByProject[effectiveSelectedId] ?? []) : [];
+  const isNarrowViewport = viewportWidth <= 1100;
 
   const handleSelect = (id: string) => {
-    setInitialTab(undefined);
     setSelectedId((prev) => (prev === id ? null : id));
   };
 
@@ -1323,17 +1342,21 @@ export default function ProjectPanel({ projects, loading, tasksByProject, initia
   }
 
   return (
-    <div className="flex gap-5 animate-fade-in" style={{ minHeight: '600px' }}>
+    <div className="flex gap-5 animate-fade-in" style={{ minHeight: 0, flexDirection: isNarrowViewport ? 'column' : 'row' }}>
       {/* Project list */}
       <div
         className="flex flex-col gap-3 overflow-y-auto"
-        style={{ flex: '0 0 auto', width: selectedProject ? '300px' : '100%', maxWidth: selectedProject ? '300px' : 'none' }}
+        style={{
+          flex: selectedProject && !isNarrowViewport ? '0 0 auto' : '1',
+          width: selectedProject && !isNarrowViewport ? '300px' : '100%',
+          maxWidth: selectedProject && !isNarrowViewport ? '300px' : 'none',
+        }}
       >
         {projects.map((project) => (
           <ProjectListCard
             key={project.id}
             project={project}
-            selected={selectedId === project.id}
+            selected={effectiveSelectedId === project.id}
             onSelect={() => handleSelect(project.id)}
           />
         ))}
@@ -1341,13 +1364,12 @@ export default function ProjectPanel({ projects, loading, tasksByProject, initia
 
       {/* Detail panel */}
       {selectedProject && (
-        <div className="flex-1 overflow-hidden" style={{ minWidth: 0 }}>
+        <div className="flex-1 overflow-hidden" style={{ minWidth: 0, minHeight: isNarrowViewport ? '520px' : 0 }}>
           <ProjectDetail
             project={selectedProject}
             tasks={selectedTasks}
             onClose={() => setSelectedId(null)}
-            initialTab={initialTab}
-            onApproved={() => setInitialTab(undefined)}
+            initialTab={initialProjectId ? 'plan' : undefined}
           />
         </div>
       )}

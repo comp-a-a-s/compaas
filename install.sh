@@ -12,13 +12,14 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo -e "${PURPLE}"
-echo "  ____                _    ____  _      "
-echo " / ___|_ __ __ _  ___| | _|  _ \\(_) ___ "
-echo "| |   | '__/ _\` |/ __| |/ / |_) | |/ _ \\"
-echo "| |___| | | (_| | (__|   <|  __/| |  __/"
-echo " \\____|_|  \\__,_|\\___|_|\\_\\_|   |_|\\___|"
+echo "   _____ ____  __  __ ____              "
+echo "  / ____/ __ \\|  \\/  |  _ \\             "
+echo " | |   | |  | | \\  / | |_) | __ _  __ _ "
+echo " | |   | |  | | |\\/| |  _ < / _\` |/ _\` |"
+echo " | |___| |__| | |  | | |_) | (_| | (_| |"
+echo "  \\_____\\____/|_|  |_|____/ \\__,_|\\__,_|"
 echo -e "${NC}"
-echo -e "${BLUE}=== CrackPie Virtual Company — Installation ===${NC}"
+echo -e "${BLUE}=== COMPaaS Virtual Company — Installation ===${NC}"
 echo ""
 
 # 1. Check Python 3.10+
@@ -55,7 +56,7 @@ if command -v claude &>/dev/null; then
 else
     echo -e "${YELLOW}  ⚠ Claude Code CLI not found${NC}"
     echo -e "${YELLOW}    Install: npm install -g @anthropic-ai/claude-code${NC}"
-    echo -e "${YELLOW}    CrackPie needs Claude Code to run agents${NC}"
+    echo -e "${YELLOW}    COMPaaS needs Claude Code to run agents${NC}"
 fi
 
 # 4. Create Python virtual environment
@@ -94,12 +95,12 @@ mkdir -p ~/projects
 # Create .env if it doesn't exist
 if [ ! -f .env ]; then
     cp .env.example .env 2>/dev/null || cat > .env << 'ENVEOF'
-# CrackPie Configuration
+# COMPaaS Configuration
 # Required: Your Anthropic API key
 ANTHROPIC_API_KEY=
 
 # Optional: Override data directory (default: ./company_data)
-# CRACKPIE_DATA_DIR=./company_data
+# COMPAAS_DATA_DIR=./company_data
 
 # Optional: Override project output directory (default: ~/projects)
 # PROJECTS_OUTPUT_DIR=~/projects
@@ -132,6 +133,42 @@ echo ""
 echo -e "  1. Set your API key:   ${YELLOW}echo 'ANTHROPIC_API_KEY=sk-...' >> .env${NC}"
 echo -e "  2. Activate venv:      ${YELLOW}source .venv/bin/activate${NC}"
 echo -e "  3. Start the CEO:      ${YELLOW}claude --agent ceo${NC}"
-echo -e "  4. Web dashboard:      ${YELLOW}crackpie-web${NC}  (opens at http://localhost:8420)"
-echo -e "  5. TUI dashboard:      ${YELLOW}crackpie-tui${NC}  (in a separate terminal)"
+echo -e "  4. Web dashboard:      ${YELLOW}compaas-web${NC}   (opens at http://localhost:8420)"
+echo -e "  5. TUI dashboard:      ${YELLOW}compaas-tui${NC}   (in a separate terminal)"
 echo ""
+
+if [ -t 0 ]; then
+    read -r -p "Start COMPaaS now? [Y/n] " START_NOW
+else
+    START_NOW="n"
+fi
+START_NOW=${START_NOW:-Y}
+
+if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
+    echo ""
+    echo "Select startup mode:"
+    echo "  1) Web dashboard (recommended)"
+    echo "  2) TUI dashboard"
+    echo "  3) CEO agent (Claude Code)"
+    read -r -p "Choice [1-3, default 1]: " START_MODE
+    START_MODE=${START_MODE:-1}
+
+    case "$START_MODE" in
+        1)
+            echo -e "${GREEN}Starting COMPaaS web dashboard...${NC}"
+            ./.venv/bin/compaas-web
+            ;;
+        2)
+            echo -e "${GREEN}Starting COMPaaS TUI dashboard...${NC}"
+            ./.venv/bin/compaas-tui
+            ;;
+        3)
+            echo -e "${GREEN}Starting CEO agent...${NC}"
+            source .venv/bin/activate
+            claude --agent ceo
+            ;;
+        *)
+            echo -e "${YELLOW}Unknown choice. Skipping auto-start.${NC}"
+            ;;
+    esac
+fi

@@ -61,6 +61,32 @@ const THEMES = [
   { id: 'sahara', label: 'Sahara', description: 'Warm desert sand', preview: ['#1a1715', '#2d2924', '#d97757'] },
 ];
 
+type SettingsTab = 'general' | 'ai' | 'agents' | 'integrations' | 'appearance';
+
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string }> = [
+  { id: 'general', label: 'General', description: 'Core dashboard and identity settings.' },
+  { id: 'ai', label: 'AI', description: 'Model provider and runtime selection.' },
+  { id: 'agents', label: 'Agents', description: 'Names, model overrides, and agent personas.' },
+  { id: 'integrations', label: 'Integrations', description: 'Telegram, GitHub, Slack, and webhooks.' },
+  { id: 'appearance', label: 'Appearance', description: 'Theme and density preferences.' },
+];
+
+interface IntegrationSettings {
+  github_token: string;
+  slack_token: string;
+  webhook_url: string;
+}
+
+const REDACTED_SECRET = '__COMPAAS_REDACTED__';
+
+function integrationsFromConfig(config: AppConfig | null): IntegrationSettings {
+  return {
+    github_token: config?.integrations?.github_token ?? '',
+    slack_token: config?.integrations?.slack_token ?? '',
+    webhook_url: config?.integrations?.webhook_url ?? '',
+  };
+}
+
 // ---- Shared input style helper ----
 
 function inputStyle(extra?: React.CSSProperties): React.CSSProperties {
@@ -244,6 +270,7 @@ function AgentNameRow({
   const [draft, setDraft] = useState(currentName);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const MAX_AGENT_NAME_LENGTH = 50;
 
@@ -254,18 +281,23 @@ function AgentNameRow({
     }
     if (draft.trim().length > MAX_AGENT_NAME_LENGTH) return;
     setSaving(true);
+    setError(null);
     try {
       const config = await fetchConfig();
       const updatedAgents = { ...(config?.agents ?? {}), [agentId]: draft.trim() };
-      await updateConfig({ agents: updatedAgents });
+      const ok = await updateConfig({ agents: updatedAgents });
+      if (!ok) {
+        setError('Failed to save');
+        return;
+      }
       setSaved(true);
       onSaved?.(agentId, draft.trim());
       setTimeout(() => setSaved(false), 2000);
+      setEditing(false);
     } catch {
-      // silently fail
+      setError('Failed to save');
     } finally {
       setSaving(false);
-      setEditing(false);
     }
   };
 
@@ -339,6 +371,9 @@ function AgentNameRow({
       {saved && (
         <span style={{ fontSize: '11px', color: C.success, flexShrink: 0 }}>Saved!</span>
       )}
+      {error && (
+        <span style={{ fontSize: '11px', color: C.error, flexShrink: 0 }}>{error}</span>
+      )}
 
       {/* Edit / Save / Cancel buttons */}
       {editing ? (
@@ -398,23 +433,31 @@ function AgentNameRow({
 
 // ---- Telegram section ----
 
-function TelegramSection() {
-  const [botToken, setBotToken] = useState('');
-  const [chatId, setChatId] = useState('');
-  const [configured, setConfigured] = useState(false);
-  const [saved, setSaved] = useState(false);
+const TELEGRAM_KEYS = {
+  token: 'compaas_telegram_token',
+  chatId: 'compaas_telegram_chatid',
+  configured: 'compaas_telegram_configured',
+} as const;
 
-  useEffect(() => {
-    setBotToken(localStorage.getItem('thunderflow_telegram_token') ?? '');
-    setChatId(localStorage.getItem('thunderflow_telegram_chatid') ?? '');
-    setConfigured(localStorage.getItem('thunderflow_telegram_configured') === 'true');
-  }, []);
+function readTelegramValue(key: string): string {
+  return localStorage.getItem(key) ?? '';
+}
+
+function readTelegramConfigured(): boolean {
+  return localStorage.getItem(TELEGRAM_KEYS.configured) === 'true';
+}
+
+function TelegramSection() {
+  const [botToken, setBotToken] = useState(() => readTelegramValue(TELEGRAM_KEYS.token));
+  const [chatId, setChatId] = useState(() => readTelegramValue(TELEGRAM_KEYS.chatId));
+  const [configured, setConfigured] = useState(() => readTelegramConfigured());
+  const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
     if (botToken && chatId) {
-      localStorage.setItem('thunderflow_telegram_token', botToken);
-      localStorage.setItem('thunderflow_telegram_chatid', chatId);
-      localStorage.setItem('thunderflow_telegram_configured', 'true');
+      localStorage.setItem(TELEGRAM_KEYS.token, botToken);
+      localStorage.setItem(TELEGRAM_KEYS.chatId, chatId);
+      localStorage.setItem(TELEGRAM_KEYS.configured, 'true');
       setConfigured(true);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -422,9 +465,9 @@ function TelegramSection() {
   };
 
   const handleClear = () => {
-    localStorage.removeItem('thunderflow_telegram_token');
-    localStorage.removeItem('thunderflow_telegram_chatid');
-    localStorage.removeItem('thunderflow_telegram_configured');
+    localStorage.removeItem(TELEGRAM_KEYS.token);
+    localStorage.removeItem(TELEGRAM_KEYS.chatId);
+    localStorage.removeItem(TELEGRAM_KEYS.configured);
     setBotToken('');
     setChatId('');
     setConfigured(false);
@@ -465,7 +508,7 @@ function TelegramSection() {
           onChange={(e) => setBotToken(e.target.value)}
           placeholder="1234567890:ABCdef..."
           style={inputStyle()}
-          onFocus={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
           onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
         />
       </div>
@@ -484,7 +527,7 @@ function TelegramSection() {
           onChange={(e) => setChatId(e.target.value)}
           placeholder="-1001234567890"
           style={inputStyle()}
-          onFocus={(e) => { e.currentTarget.style.borderColor = '#2ca5e0'; }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
           onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
         />
       </div>
@@ -496,9 +539,9 @@ function TelegramSection() {
           style={{
             padding: '7px 16px',
             borderRadius: '6px',
-            border: `1px solid ${!botToken || !chatId ? C.border : '#2ca5e0'}`,
-            backgroundColor: !botToken || !chatId ? 'transparent' : 'rgba(44,165,224,0.12)',
-            color: !botToken || !chatId ? C.textMuted : '#2ca5e0',
+            border: `1px solid ${!botToken || !chatId ? C.border : C.accent}`,
+            backgroundColor: !botToken || !chatId ? 'transparent' : C.accentDim,
+            color: !botToken || !chatId ? C.textMuted : C.accent,
             fontSize: '13px',
             cursor: !botToken || !chatId ? 'default' : 'pointer',
             opacity: !botToken || !chatId ? 0.5 : 1,
@@ -564,6 +607,7 @@ function AiProviderSection({
   const [testMessage, setTestMessage] = useState('');
   const [saving, setSaving]           = useState(false);
   const [saved, setSaved]             = useState(false);
+  const [saveError, setSaveError]     = useState<string | null>(null);
 
   const handlePreset = (presetId: string) => {
     const p = LOCAL_PRESETS_SETTINGS.find((x) => x.id === presetId);
@@ -584,6 +628,8 @@ function AiProviderSection({
   };
 
   const handleSave = async () => {
+    setSaveError(null);
+    setSaved(false);
     setSaving(true);
     const resolvedModel = provider === 'openai' && openaiPreset !== 'custom' ? openaiPreset : model;
     const patch: Partial<AppConfig> = {
@@ -597,8 +643,12 @@ function AiProviderSection({
         proxy_url: proxyUrl,
       },
     };
-    await updateConfig(patch as Record<string, unknown>);
+    const ok = await updateConfig(patch as Record<string, unknown>);
     setSaving(false);
+    if (!ok) {
+      setSaveError('Failed to save provider settings.');
+      return;
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
     onSaved();
@@ -777,7 +827,7 @@ function AiProviderSection({
             <div>
               <div style={{ fontSize: '13px', fontWeight: 500, color: C.textPrimary, marginBottom: '2px' }}>Route ALL agents through proxy</div>
               <div style={{ fontSize: '11px', color: C.textSecondary }}>
-                Uses a LiteLLM proxy to translate all agent subprocess calls. Requires <code style={{ fontSize: '10px' }}>pip install thunderflow[proxy]</code>.
+                Uses a LiteLLM proxy to translate all agent subprocess calls. Requires <code style={{ fontSize: '10px' }}>pip install compaas[proxy]</code>.
               </div>
             </div>
             <button
@@ -824,6 +874,11 @@ function AiProviderSection({
       >
         {saving ? 'Saving…' : saved ? 'Saved' : 'Save Provider Settings'}
       </button>
+      {saveError && (
+        <div role="alert" style={{ marginTop: '8px', fontSize: '12px', color: C.error }}>
+          {saveError}
+        </div>
+      )}
     </div>
   );
 }
@@ -839,7 +894,7 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
   const [pollInterval, setPollInterval] = useState(5000);
   const [autoOpen, setAutoOpen] = useState(true);
 
-  // Display / integrations (localStorage-based)
+  // Display / integrations
   const [compactMode, setCompactMode] = useState(() => localStorage.getItem('tf_compact_mode') === '1');
   const [agentModels, setAgentModels] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('tf_agent_models') ?? '{}'); } catch { return {}; }
@@ -847,9 +902,12 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
   const [agentPersonas, setAgentPersonas] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('tf_agent_personas') ?? '{}'); } catch { return {}; }
   });
-  const [githubToken, setGithubToken] = useState(() => localStorage.getItem('tf_github_token') ?? '');
-  const [slackToken, setSlackToken] = useState(() => localStorage.getItem('tf_slack_token') ?? '');
-  const [webhookUrl, setWebhookUrl] = useState(() => localStorage.getItem('tf_webhook_url') ?? '');
+  const [githubToken, setGithubToken] = useState('');
+  const [slackToken, setSlackToken] = useState('');
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [githubTokenMasked, setGithubTokenMasked] = useState(false);
+  const [slackTokenMasked, setSlackTokenMasked] = useState(false);
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   useEffect(() => {
     // Apply compact mode on mount
@@ -863,6 +921,22 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
         setUserName(cfg.user?.name ?? '');
         setPollInterval(cfg.ui?.poll_interval_ms ?? 5000);
         setAutoOpen(cfg.server?.auto_open_browser ?? true);
+        const integrationCfg = integrationsFromConfig(cfg);
+        if (integrationCfg.github_token === REDACTED_SECRET) {
+          setGithubToken('');
+          setGithubTokenMasked(true);
+        } else {
+          setGithubToken(integrationCfg.github_token);
+          setGithubTokenMasked(false);
+        }
+        if (integrationCfg.slack_token === REDACTED_SECRET) {
+          setSlackToken('');
+          setSlackTokenMasked(true);
+        } else {
+          setSlackToken(integrationCfg.slack_token);
+          setSlackTokenMasked(false);
+        }
+        setWebhookUrl(integrationCfg.webhook_url);
       }
     });
   }, []);
@@ -879,11 +953,36 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
     };
 
     try {
-      await updateConfig(patch);
-      // Persist integrations — only if at least one value is set
-      if (githubToken || slackToken || webhookUrl) {
-        await saveIntegrations({ github_token: githubToken, slack_token: slackToken, webhook_url: webhookUrl });
+      const configOk = await updateConfig(patch);
+      if (!configOk) {
+        setSaveError('Failed to save settings');
+        return;
       }
+
+      const nextIntegrations: IntegrationSettings = {
+        github_token: githubTokenMasked ? REDACTED_SECRET : githubToken.trim(),
+        slack_token: slackTokenMasked ? REDACTED_SECRET : slackToken.trim(),
+        webhook_url: webhookUrl.trim(),
+      };
+      const currentIntegrations = integrationsFromConfig(config);
+      const integrationsChanged =
+        nextIntegrations.github_token !== currentIntegrations.github_token ||
+        nextIntegrations.slack_token !== currentIntegrations.slack_token ||
+        nextIntegrations.webhook_url !== currentIntegrations.webhook_url;
+
+      if (integrationsChanged) {
+        const integrationsOk = await saveIntegrations(nextIntegrations);
+        if (!integrationsOk) {
+          setSaveError('Saved core settings, but failed to save integrations');
+          return;
+        }
+      }
+
+      setConfig((prev) => prev ? ({
+        ...prev,
+        ...patch,
+        integrations: nextIntegrations,
+      }) : prev);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
       onConfigUpdated?.();
@@ -904,6 +1003,9 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
     onConfigUpdated?.();
   };
 
+  const activeTabMeta = SETTINGS_TABS.find((tab) => tab.id === activeTab) ?? SETTINGS_TABS[0];
+  const showGlobalSave = activeTab === 'general' || activeTab === 'integrations';
+
   return (
     <div style={{ maxWidth: '720px', margin: '0 auto' }} className="animate-fade-in">
       <div style={{ marginBottom: '24px' }}>
@@ -911,287 +1013,330 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
           Settings
         </h2>
         <p style={{ fontSize: '13px', color: C.textSecondary }}>
-          Manage your ThunderFlow dashboard configuration.
+          Manage your COMPaaS dashboard configuration.
         </p>
       </div>
 
-      {/* AI Provider */}
-      <Section title="AI Model Provider">
-        <AiProviderSection llm={config?.llm} onSaved={() => { fetchConfig().then((c) => { if (c) setConfig(c); }); onConfigUpdated?.(); }} />
-      </Section>
-
-      {/* General settings */}
-      <Section title="General">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div>
-            <label
-              htmlFor="settings-username"
-              style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
-            >
-              Your Name (Board Head)
-            </label>
-            <input
-              id="settings-username"
-              type="text"
-              value={userName}
-              onChange={(e) => setUserName(e.target.value)}
-              placeholder="e.g. Idan"
-              style={inputStyle({ maxWidth: '320px' })}
-              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="settings-poll"
-              style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
-            >
-              Poll Interval
-            </label>
-            <select
-              id="settings-poll"
-              value={pollInterval}
-              onChange={(e) => setPollInterval(Number(e.target.value))}
-              style={{ ...inputStyle(), maxWidth: '200px', cursor: 'pointer' }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-            >
-              {POLL_INTERVAL_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <Toggle
-            value={autoOpen}
-            onChange={setAutoOpen}
-            label="Auto-open browser"
-            description="Automatically open the dashboard when thunderflow-web starts"
-          />
+      <div style={{ marginBottom: '16px' }}>
+        <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
+          {SETTINGS_TABS.map((tab) => {
+            const selected = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: '999px',
+                  border: `1px solid ${selected ? C.accent : C.border}`,
+                  backgroundColor: selected ? C.accentDim : C.surface,
+                  color: selected ? C.accent : C.textSecondary,
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: selected ? 600 : 500,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
-      </Section>
-
-      {/* Appearance */}
-      <Section title="Appearance">
-        <ThemeSelector />
-      </Section>
-
-      {/* Agent names */}
-      <Section title="Agent Names">
-        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
-          Customise the display name for each AI agent. Click "Rename" to edit.
+        <p style={{ marginTop: '8px', fontSize: '12px', color: C.textMuted }}>
+          {activeTabMeta.description}
         </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {AGENT_ROSTER.map((agent) => (
-            <AgentNameRow
-              key={agent.id}
-              agentId={agent.id}
-              role={agent.role}
-              currentName={agentNameMap[agent.id] ?? agent.role}
-              onSaved={handleAgentSaved}
-            />
-          ))}
-        </div>
-      </Section>
+      </div>
 
-      {/* Telegram */}
-      <Section title="Telegram Integration">
-        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
-          Configure Telegram to continue CEO conversations from your phone.
-          Create a bot via @BotFather, then paste the credentials below.
-        </p>
-        <TelegramSection />
-      </Section>
-
-      {/* Display */}
-      <Section title="Display">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <Toggle
-            value={compactMode}
-            onChange={(v) => {
-              setCompactMode(v);
-              localStorage.setItem('tf_compact_mode', v ? '1' : '0');
-              document.body.classList.toggle('compact-mode', v);
-            }}
-            label="Compact mode"
-            description="Reduce spacing for a denser, information-rich layout"
-          />
-        </div>
-      </Section>
-
-      {/* Per-agent models */}
-      <Section title="Agent Models">
-        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
-          Override the model used for individual agents. Leave blank to use the global provider setting.
-        </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {AGENT_ROSTER.slice(0, 6).map((agent) => (
-            <div key={agent.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
-              <div style={{ flex: '0 0 130px', fontSize: '12px', fontWeight: 500, color: C.textSecondary }}>{agent.role}</div>
+      {activeTab === 'general' && (
+        <Section title="General">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label
+                htmlFor="settings-username"
+                style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
+              >
+                Your Name (Board Head)
+              </label>
               <input
+                id="settings-username"
                 type="text"
-                value={agentModels[agent.id] ?? ''}
-                onChange={(e) => {
-                  const next = { ...agentModels, [agent.id]: e.target.value };
-                  setAgentModels(next);
-                  localStorage.setItem('tf_agent_models', JSON.stringify(next));
-                }}
-                placeholder="(global default)"
-                style={{ ...inputStyle(), flex: 1, fontSize: '12px', padding: '5px 10px' }}
+                value={userName}
+                onChange={(e) => setUserName(e.target.value)}
+                placeholder="e.g. Idan"
+                style={inputStyle({ maxWidth: '320px' })}
                 onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
                 onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
               />
             </div>
-          ))}
-          <p style={{ fontSize: '11px', color: C.textMuted }}>
-            Examples: <code style={{ fontSize: '10px' }}>claude-opus-4-6</code>, <code style={{ fontSize: '10px' }}>gpt-4o</code>, <code style={{ fontSize: '10px' }}>llama3.2</code>
-          </p>
-        </div>
-      </Section>
 
-      {/* Agent personas */}
-      <Section title="Agent Personas">
-        <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
-          Set a custom system prompt for each agent to shape their personality and focus.
-        </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {AGENT_ROSTER.slice(0, 4).map((agent) => (
-            <div key={agent.id}>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{agent.role}</label>
-              <textarea
-                value={agentPersonas[agent.id] ?? ''}
-                onChange={(e) => {
-                  const next = { ...agentPersonas, [agent.id]: e.target.value };
-                  setAgentPersonas(next);
-                  localStorage.setItem('tf_agent_personas', JSON.stringify(next));
-                }}
-                placeholder={`Custom system prompt for ${agent.role}…`}
-                rows={2}
-                style={{ ...inputStyle(), resize: 'vertical', fontFamily: 'inherit', fontSize: '12px', lineHeight: '1.5' }}
+            <div>
+              <label
+                htmlFor="settings-poll"
+                style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
+              >
+                Poll Interval
+              </label>
+              <select
+                id="settings-poll"
+                value={pollInterval}
+                onChange={(e) => setPollInterval(Number(e.target.value))}
+                style={{ ...inputStyle(), maxWidth: '200px', cursor: 'pointer' }}
                 onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
                 onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              >
+                {POLL_INTERVAL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <Toggle
+              value={autoOpen}
+              onChange={setAutoOpen}
+              label="Auto-open browser"
+              description="Automatically open the dashboard when compaas-web starts"
+            />
+          </div>
+        </Section>
+      )}
+
+      {activeTab === 'ai' && (
+        <Section title="AI Model Provider">
+          <AiProviderSection llm={config?.llm} onSaved={() => { fetchConfig().then((c) => { if (c) setConfig(c); }); onConfigUpdated?.(); }} />
+        </Section>
+      )}
+
+      {activeTab === 'agents' && (
+        <>
+          <Section title="Agent Names">
+            <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
+              Customise the display name for each AI agent. Click "Rename" to edit.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {AGENT_ROSTER.map((agent) => (
+                <AgentNameRow
+                  key={agent.id}
+                  agentId={agent.id}
+                  role={agent.role}
+                  currentName={agentNameMap[agent.id] ?? agent.role}
+                  onSaved={handleAgentSaved}
+                />
+              ))}
+            </div>
+          </Section>
+
+          <Section title="Agent Models">
+            <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
+              Override the model used for individual agents. Leave blank to use the global provider setting.
+            </p>
+            <p style={{ fontSize: '11px', color: C.warning, marginBottom: '10px' }}>
+              Stored locally in this browser only. Runtime overrides are not yet wired on the backend.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {AGENT_ROSTER.slice(0, 6).map((agent) => (
+                <div key={agent.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                  <div style={{ flex: '0 0 130px', fontSize: '12px', fontWeight: 500, color: C.textSecondary }}>{agent.role}</div>
+                  <input
+                    type="text"
+                    value={agentModels[agent.id] ?? ''}
+                    onChange={(e) => {
+                      const next = { ...agentModels, [agent.id]: e.target.value };
+                      setAgentModels(next);
+                      localStorage.setItem('tf_agent_models', JSON.stringify(next));
+                    }}
+                    placeholder="(global default)"
+                    style={{ ...inputStyle(), flex: 1, fontSize: '12px', padding: '5px 10px' }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                </div>
+              ))}
+              <p style={{ fontSize: '11px', color: C.textMuted }}>
+                Examples: <code style={{ fontSize: '10px' }}>claude-opus-4-6</code>, <code style={{ fontSize: '10px' }}>gpt-4o</code>, <code style={{ fontSize: '10px' }}>llama3.2</code>
+              </p>
+            </div>
+          </Section>
+
+          <Section title="Agent Personas">
+            <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
+              Set a custom system prompt for each agent to shape their personality and focus.
+            </p>
+            <p style={{ fontSize: '11px', color: C.warning, marginBottom: '10px' }}>
+              Stored locally in this browser only. Agent persona injection is not yet wired on the backend.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {AGENT_ROSTER.slice(0, 4).map((agent) => (
+                <div key={agent.id}>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{agent.role}</label>
+                  <textarea
+                    value={agentPersonas[agent.id] ?? ''}
+                    onChange={(e) => {
+                      const next = { ...agentPersonas, [agent.id]: e.target.value };
+                      setAgentPersonas(next);
+                      localStorage.setItem('tf_agent_personas', JSON.stringify(next));
+                    }}
+                    placeholder={`Custom system prompt for ${agent.role}…`}
+                    rows={2}
+                    style={{ ...inputStyle(), resize: 'vertical', fontFamily: 'inherit', fontSize: '12px', lineHeight: '1.5' }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                </div>
+              ))}
+            </div>
+          </Section>
+        </>
+      )}
+
+      {activeTab === 'integrations' && (
+        <>
+          <Section title="Telegram Integration">
+            <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '16px' }}>
+              Configure Telegram to continue CEO conversations from your phone.
+              Create a bot via @BotFather, then paste the credentials below.
+            </p>
+            <TelegramSection />
+          </Section>
+
+          <Section title="Integrations">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>GitHub</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>CEO creates PRs, issues, and reviews diffs</div>
+                  </div>
+                  <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Inbound webhook ready</span>
+                </div>
+                <input type="password" value={githubToken} onChange={(e) => { setGithubToken(e.target.value); }}
+                  placeholder={githubTokenMasked ? 'Saved (hidden). Type to replace.' : 'ghp_xxxx (Personal access token)'}
+                  style={{ ...inputStyle({ maxWidth: '380px', fontSize: '12px' }) }}
+                  onInput={() => { setGithubTokenMasked(false); }}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                />
+                <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>Webhook URL: <code style={{ color: C.accent }}>/api/integrations/github/webhook</code></p>
+              </div>
+
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Slack Bot</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>Two-way Slack integration for CEO conversations</div>
+                  </div>
+                  <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Events API ready</span>
+                </div>
+                <input type="password" value={slackToken} onChange={(e) => { setSlackToken(e.target.value); }}
+                  placeholder={slackTokenMasked ? 'Saved (hidden). Type to replace.' : 'xoxb-xxxx (Bot token)'}
+                  style={{ ...inputStyle({ maxWidth: '380px', fontSize: '12px' }) }}
+                  onInput={() => { setSlackTokenMasked(false); }}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                />
+                <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>Events URL: <code style={{ color: C.accent }}>/api/integrations/slack/events</code></p>
+              </div>
+
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Outbound Webhooks</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>POST to a URL on every activity event</div>
+                  </div>
+                  <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Active</span>
+                </div>
+                <input type="url" value={webhookUrl} onChange={(e) => { setWebhookUrl(e.target.value); }}
+                  placeholder="https://your-server.com/webhook"
+                  style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                />
+              </div>
+            </div>
+          </Section>
+        </>
+      )}
+
+      {activeTab === 'appearance' && (
+        <>
+          <Section title="Appearance">
+            <ThemeSelector />
+          </Section>
+
+          <Section title="Display">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <Toggle
+                value={compactMode}
+                onChange={(v) => {
+                  setCompactMode(v);
+                  localStorage.setItem('tf_compact_mode', v ? '1' : '0');
+                  document.body.classList.toggle('compact-mode', v);
+                }}
+                label="Compact mode"
+                description="Reduce spacing for a denser, information-rich layout"
               />
             </div>
-          ))}
-        </div>
-      </Section>
+          </Section>
+        </>
+      )}
 
-      {/* Integrations */}
-      <Section title="Integrations">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* GitHub */}
-          <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>GitHub</div>
-                <div style={{ fontSize: '11px', color: C.textSecondary }}>CEO creates PRs, issues, and reviews diffs</div>
-              </div>
-              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Inbound webhook ready</span>
-            </div>
-            <input type="password" value={githubToken} onChange={(e) => { setGithubToken(e.target.value); localStorage.setItem('tf_github_token', e.target.value); }}
-              placeholder="ghp_xxxx (Personal access token)"
-              style={{ ...inputStyle({ maxWidth: '380px', fontSize: '12px' }) }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-            />
-            <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>Webhook URL: <code style={{ color: C.accent }}>/api/integrations/github/webhook</code></p>
-          </div>
-
-          {/* Slack */}
-          <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Slack Bot</div>
-                <div style={{ fontSize: '11px', color: C.textSecondary }}>Two-way Slack integration for CEO conversations</div>
-              </div>
-              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Events API ready</span>
-            </div>
-            <input type="password" value={slackToken} onChange={(e) => { setSlackToken(e.target.value); localStorage.setItem('tf_slack_token', e.target.value); }}
-              placeholder="xoxb-xxxx (Bot token)"
-              style={{ ...inputStyle({ maxWidth: '380px', fontSize: '12px' }) }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-            />
-            <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>Events URL: <code style={{ color: C.accent }}>/api/integrations/slack/events</code></p>
-          </div>
-
-          {/* Webhooks */}
-          <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Outbound Webhooks</div>
-                <div style={{ fontSize: '11px', color: C.textSecondary }}>POST to a URL on every activity event</div>
-              </div>
-              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Active</span>
-            </div>
-            <input type="url" value={webhookUrl} onChange={(e) => { setWebhookUrl(e.target.value); localStorage.setItem('tf_webhook_url', e.target.value); }}
-              placeholder="https://your-server.com/webhook"
-              style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-            />
-          </div>
-        </div>
-      </Section>
-
-      {/* Save button */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          padding: '20px 0',
-        }}
-      >
-        <button
-          onClick={handleSave}
-          disabled={saving}
+      {showGlobalSave && (
+        <div
           style={{
-            padding: '9px 24px',
-            borderRadius: '8px',
-            border: `1px solid ${C.accent}`,
-            backgroundColor: C.accentDim,
-            color: C.textPrimary,
-            fontSize: '14px',
-            fontWeight: 500,
-            cursor: saving ? 'default' : 'pointer',
-            opacity: saving ? 0.7 : 1,
             display: 'flex',
             alignItems: 'center',
-            gap: '8px',
+            gap: '12px',
+            padding: '20px 0',
           }}
         >
-          {saving && (
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              aria-hidden="true"
-              style={{ animation: 'spin 1s linear infinite' }}
-            >
-              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.3" />
-              <path d="M12 2a10 10 0 0110 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-            </svg>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            style={{
+              padding: '9px 24px',
+              borderRadius: '8px',
+              border: `1px solid ${C.accent}`,
+              backgroundColor: C.accentDim,
+              color: C.textPrimary,
+              fontSize: '14px',
+              fontWeight: 500,
+              cursor: saving ? 'default' : 'pointer',
+              opacity: saving ? 0.7 : 1,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            {saving && (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+                style={{ animation: 'spin 1s linear infinite' }}
+              >
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.3" />
+                <path d="M12 2a10 10 0 0110 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+              </svg>
+            )}
+            {saving ? 'Saving...' : 'Save Settings'}
+          </button>
+
+          {saveSuccess && (
+            <span style={{ fontSize: '13px', color: C.success }}>
+              Settings saved successfully!
+            </span>
           )}
-          {saving ? 'Saving...' : 'Save Settings'}
-        </button>
 
-        {saveSuccess && (
-          <span style={{ fontSize: '13px', color: C.success }}>
-            Settings saved successfully!
-          </span>
-        )}
-
-        {saveError && (
-          <span role="alert" style={{ fontSize: '13px', color: C.error }}>
-            {saveError}
-          </span>
-        )}
-      </div>
+          {saveError && (
+            <span role="alert" style={{ fontSize: '13px', color: C.error }}>
+              {saveError}
+            </span>
+          )}
+        </div>
+      )}
 
       <style>{`
         @keyframes spin {

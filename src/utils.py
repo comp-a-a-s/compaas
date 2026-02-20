@@ -1,4 +1,4 @@
-"""Shared utilities for the ThunderFlow system."""
+"""Shared utilities for the COMPaaS system."""
 
 import os
 import fcntl
@@ -14,12 +14,11 @@ def resolve_data_dir() -> str:
     """Resolve the company_data directory to an absolute path.
 
     Priority:
-    1. THUNDERFLOW_DATA_DIR environment variable (preferred)
-    2. CRACKPIE_DATA_DIR environment variable (legacy, backwards compat)
-    3. ./company_data relative to the project root (where pyproject.toml lives)
-    4. ./company_data relative to the current working directory
+    1. COMPAAS_DATA_DIR environment variable (preferred)
+    2. ./company_data relative to the project root (where pyproject.toml lives)
+    3. ./company_data relative to the current working directory
     """
-    env_dir = os.environ.get("THUNDERFLOW_DATA_DIR") or os.environ.get("CRACKPIE_DATA_DIR")
+    env_dir = os.environ.get("COMPAAS_DATA_DIR")
     if env_dir:
         abs_dir = os.path.abspath(env_dir)
         return abs_dir

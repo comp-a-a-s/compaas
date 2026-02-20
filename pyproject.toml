@@ -1,7 +1,7 @@
 [project]
-name = "thunderflow"
+name = "compaas"
 version = "0.3.0"
-description = "ThunderFlow — Business as a Service, AI Virtual Company Orchestration"
+description = "COMPaaS — Company as a Service, AI virtual company orchestration"
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.0,<3.0",
@@ -16,12 +16,12 @@ dependencies = [
 
 [project.optional-dependencies]
 # Local / alternative model support (OpenAI, Ollama, LM Studio, llama.cpp, etc.)
-# Install with:  pip install thunderflow[local-models]
+# Install with:  pip install compaas[local-models]
 local-models = [
     "openai>=1.0",
 ]
 # Full agent routing via LiteLLM proxy (Phase 2)
-# Install with:  pip install thunderflow[proxy]
+# Install with:  pip install compaas[proxy]
 proxy = [
     "openai>=1.0",
     "litellm>=1.40",
@@ -34,10 +34,8 @@ dev = [
 ]
 
 [project.scripts]
-thunderflow-tui = "src.tui.main:main"
-thunderflow-web = "src.web.main:main"
-crackpie-tui = "src.tui.main:main"
-crackpie-web = "src.web.main:main"
+compaas-tui = "src.tui.main:main"
+compaas-web = "src.web.main:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

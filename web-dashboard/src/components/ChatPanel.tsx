@@ -535,8 +535,8 @@ export default function ChatPanel({
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
 
-  // Feature: Export
-  const [showExportMenu, setShowExportMenu] = useState(false);
+  // Secondary actions menu
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   // Feature: Pinned messages
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => {
@@ -554,7 +554,6 @@ export default function ChatPanel({
   const [memorySaving, setMemorySaving] = useState(false);
 
   // Feature: Session token estimate + context summary
-  const [showSummaryConfirm, setShowSummaryConfirm] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
 
   // Refs
@@ -586,16 +585,15 @@ export default function ChatPanel({
     });
   }, []);
 
-  // Export
   const handleExport = (format: 'markdown' | 'json') => {
-    setShowExportMenu(false);
+    setShowMoreMenu(false);
     if (format === 'json') {
-      downloadFile('thunderflow-chat.json', JSON.stringify(messages, null, 2), 'application/json');
+      downloadFile('compaas-chat.json', JSON.stringify(messages, null, 2), 'application/json');
     } else {
       const md = messages.map((m) =>
         `**${m.role === 'user' ? userName : ceoName}** _(${m.timestamp})_\n\n${m.content}`
       ).join('\n\n---\n\n');
-      downloadFile('thunderflow-chat.md', md, 'text/markdown');
+      downloadFile('compaas-chat.md', md, 'text/markdown');
     }
   };
 
@@ -609,8 +607,15 @@ export default function ChatPanel({
   const pinnedMessages = useMemo(() => messages.filter((m) => pinnedIds.has(msgKey(m))), [messages, pinnedIds]);
 
   // Scroll
-  const scrollToBottom = useCallback(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
-  useEffect(() => { scrollToBottom(); }, [messages, streamingContent, actionLog, scrollToBottom]);
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  }, []);
+  useEffect(() => {
+    scrollToBottom('smooth');
+  }, [messages.length, actionLog.length, pendingApprovalProjects.length, scrollToBottom]);
+  useEffect(() => {
+    if (streamingContent) scrollToBottom('auto');
+  }, [streamingContent, scrollToBottom]);
 
   // Load history
   useEffect(() => {
@@ -641,8 +646,8 @@ export default function ChatPanel({
   };
 
   const handleSummarize = async () => {
+    setShowMoreMenu(false);
     setSummarizing(true);
-    setShowSummaryConfirm(false);
     const result = await summarizeChat();
     setSummarizing(false);
     if (result.status === 'ok') {
@@ -658,7 +663,7 @@ export default function ChatPanel({
   }, [messages]);
 
   // WebSocket
-  const connectWebSocket = useCallback(() => {
+  const connectWebSocket = useCallback(function connectWebSocketImpl() {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
     setConnectionStatus('connecting');
     try {
@@ -706,7 +711,7 @@ export default function ChatPanel({
       ws.onclose = () => {
         setConnectionStatus('disconnected');
         wsRef.current = null;
-        reconnectTimerRef.current = setTimeout(connectWebSocket, 3000);
+        reconnectTimerRef.current = setTimeout(connectWebSocketImpl, 3000);
       };
       ws.onerror = () => setConnectionStatus('error');
     } catch { setConnectionStatus('error'); }
@@ -747,7 +752,7 @@ export default function ChatPanel({
 
   // Close menus on outside click
   useEffect(() => {
-    const close = () => { setShowToneMenu(false); setShowExportMenu(false); };
+    const close = () => { setShowToneMenu(false); setShowMoreMenu(false); setShowMemory(false); };
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, []);
@@ -758,14 +763,14 @@ export default function ChatPanel({
 
   // ---- Shared header controls ----
   const headerControls = (
-    <div className="flex items-center gap-1" style={{ flexWrap: 'nowrap' }}>
+    <div className="chat-toolbar flex items-center gap-1" style={{ flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '2px' }}>
       {/* Tone selector */}
       <div style={{ position: 'relative' }}>
         <button
           onClick={(e) => { e.stopPropagation(); setShowToneMenu((v) => !v); }}
           title="Response tone"
           style={{
-            padding: '3px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap',
+            padding: '5px 9px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap',
             border: `1px solid ${tone !== 'default' ? 'var(--tf-accent)' : 'var(--tf-border)'}`,
             backgroundColor: tone !== 'default' ? 'rgba(88,166,255,0.1)' : 'transparent',
             color: tone !== 'default' ? 'var(--tf-accent)' : 'var(--tf-text-muted)',
@@ -796,84 +801,117 @@ export default function ChatPanel({
 
       {/* Search */}
       <button onClick={() => { setShowSearch((v) => { if (v) setSearchQuery(''); return !v; }); }} title="Search messages"
-        style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '13px', cursor: 'pointer', border: `1px solid ${showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`, backgroundColor: showSearch ? 'rgba(88,166,255,0.1)' : 'transparent', color: showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)' }}>
+        style={{ padding: '5px 9px', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', border: `1px solid ${showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`, backgroundColor: showSearch ? 'rgba(88,166,255,0.1)' : 'transparent', color: showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)' }}>
         ⌕
       </button>
 
       {/* Pins */}
       {pinnedIds.size > 0 && (
         <button onClick={() => setShowPinned((v) => !v)} title={`${pinnedIds.size} pinned`}
-          style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: `1px solid ${showPinned ? 'var(--tf-warning)' : 'var(--tf-border)'}`, backgroundColor: showPinned ? 'rgba(255,180,0,0.1)' : 'transparent', color: showPinned ? 'var(--tf-warning)' : 'var(--tf-text-muted)', whiteSpace: 'nowrap' }}>
+          style={{ padding: '5px 9px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', border: `1px solid ${showPinned ? 'var(--tf-warning)' : 'var(--tf-border)'}`, backgroundColor: showPinned ? 'rgba(255,180,0,0.1)' : 'transparent', color: showPinned ? 'var(--tf-warning)' : 'var(--tf-text-muted)', whiteSpace: 'nowrap' }}>
           📌 {pinnedIds.size}
         </button>
       )}
 
-      {/* Export */}
-      {messages.length > 0 && (
-        <div style={{ position: 'relative' }}>
-          <button onClick={(e) => { e.stopPropagation(); setShowExportMenu((v) => !v); }} title="Export chat"
-            style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: '1px solid var(--tf-border)', backgroundColor: 'transparent', color: 'var(--tf-text-muted)' }}>
-            ↓
-          </button>
-          {showExportMenu && (
-            <div onClick={(e) => e.stopPropagation()} style={{
-              position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50,
-              backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)',
-              borderRadius: '8px', padding: '4px', minWidth: '150px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-            }}>
-              {(['markdown', 'json'] as const).map((fmt) => (
-                <button key={fmt} onClick={() => handleExport(fmt)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}>
-                  Export as {fmt === 'markdown' ? 'Markdown' : 'JSON'}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Session token estimate */}
-      {sessionTokenEstimate > 0 && (
-        <span
-          title={`Estimated session tokens: ${sessionTokenEstimate.toLocaleString()}`}
-          style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '5px', backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-text-muted)', border: '1px solid var(--tf-border)', whiteSpace: 'nowrap' }}
-        >
-          ~{sessionTokenEstimate >= 1000 ? `${(sessionTokenEstimate / 1000).toFixed(1)}k` : sessionTokenEstimate} tok
-        </span>
-      )}
-
-      {/* Context summary button */}
-      {messages.length >= 6 && (
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => setShowSummaryConfirm((v) => !v)}
-            title="Compress conversation to summary"
-            disabled={summarizing}
-            style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '11px', cursor: summarizing ? 'wait' : 'pointer', border: '1px solid var(--tf-border)', backgroundColor: 'transparent', color: 'var(--tf-text-muted)' }}
-          >
-            {summarizing ? '…' : '⬡'}
-          </button>
-          {showSummaryConfirm && (
-            <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50, backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', borderRadius: '8px', padding: '10px 12px', minWidth: '200px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }}>
-              <p style={{ fontSize: '12px', color: 'var(--tf-text)', marginBottom: '8px' }}>Compress history to summary?</p>
-              <p style={{ fontSize: '11px', color: 'var(--tf-text-muted)', marginBottom: '8px' }}>Keeps last 5 messages + auto-summary. Saves context space.</p>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <button onClick={handleSummarize} style={{ flex: 1, padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: 'none', backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}>Compress</button>
-                <button onClick={() => setShowSummaryConfirm(false)} style={{ flex: 1, padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: '1px solid var(--tf-border)', backgroundColor: 'transparent', color: 'var(--tf-text-muted)' }}>Cancel</button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* CEO Memory button */}
+      {/* More menu for secondary controls */}
       <div style={{ position: 'relative' }}>
         <button
-          onClick={(e) => { e.stopPropagation(); setShowMemory((v) => !v); }}
-          title={`CEO Memory (${memoryEntries.length} entries)`}
-          style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: `1px solid ${memoryEntries.length > 0 ? 'var(--tf-accent)' : 'var(--tf-border)'}`, backgroundColor: memoryEntries.length > 0 ? 'rgba(88,166,255,0.1)' : 'transparent', color: memoryEntries.length > 0 ? 'var(--tf-accent)' : 'var(--tf-text-muted)' }}
+          onClick={(e) => { e.stopPropagation(); setShowMoreMenu((v) => !v); }}
+          title="More actions"
+          style={{
+            padding: '5px 9px',
+            borderRadius: '6px',
+            fontSize: '13px',
+            cursor: 'pointer',
+            border: `1px solid ${showMoreMenu ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+            backgroundColor: showMoreMenu ? 'var(--tf-accent-dim)' : 'transparent',
+            color: showMoreMenu ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+          }}
         >
-          🧠{memoryEntries.length > 0 ? ` ${memoryEntries.length}` : ''}
+          ⋯
         </button>
+        {showMoreMenu && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 4px)',
+              right: 0,
+              zIndex: 50,
+              backgroundColor: 'var(--tf-surface)',
+              border: '1px solid var(--tf-border)',
+              borderRadius: '8px',
+              padding: '6px',
+              minWidth: '220px',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+            }}
+          >
+            {messages.length > 0 && (
+              <>
+                <button
+                  onClick={() => handleExport('markdown')}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
+                >
+                  Export as Markdown
+                </button>
+                <button
+                  onClick={() => handleExport('json')}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
+                >
+                  Export as JSON
+                </button>
+              </>
+            )}
+            {sessionTokenEstimate > 0 && (
+              <div
+                title={`Estimated session tokens: ${sessionTokenEstimate.toLocaleString()}`}
+                style={{ margin: '4px 0 2px', padding: '6px 10px', fontSize: '11px', color: 'var(--tf-text-muted)' }}
+              >
+                Session size: ~{sessionTokenEstimate >= 1000 ? `${(sessionTokenEstimate / 1000).toFixed(1)}k` : sessionTokenEstimate} tokens
+              </div>
+            )}
+            <button
+              onClick={() => {
+                setShowMemory((v) => !v);
+                setShowMoreMenu(false);
+              }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
+            >
+              CEO Memory{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
+            </button>
+            {messages.length >= 6 && (
+              <button
+                onClick={() => {
+                  if (window.confirm('Compress history to summary? Keeps last 5 messages and saves context space.')) handleSummarize();
+                }}
+                disabled={summarizing}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: summarizing ? 'wait' : 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)', opacity: summarizing ? 0.7 : 1 }}
+              >
+                {summarizing ? 'Compressing…' : 'Compress history'}
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setShowThinking((t) => !t);
+                setShowMoreMenu(false);
+              }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: showThinking ? 'var(--tf-surface-raised)' : 'transparent', color: 'var(--tf-text-secondary)' }}
+            >
+              {showThinking ? 'Hide thinking traces' : 'Show thinking traces'}
+            </button>
+            {messages.length > 0 && (
+              <button
+                onClick={() => {
+                  setShowMoreMenu(false);
+                  handleClear();
+                }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-error)' }}
+              >
+                Clear chat
+              </button>
+            )}
+          </div>
+        )}
         {showMemory && (
           <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50, backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', borderRadius: '8px', padding: '12px', minWidth: '260px', maxWidth: '320px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
@@ -910,22 +948,6 @@ export default function ChatPanel({
           </div>
         )}
       </div>
-
-      {/* Thinking toggle */}
-      <button onClick={() => setShowThinking((t) => !t)} title={showThinking ? 'Hide thinking' : 'Show thinking'}
-        style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: '1px solid var(--tf-border)', backgroundColor: showThinking ? 'var(--tf-surface-raised)' : 'transparent', color: 'var(--tf-text-muted)' }}>
-        {showThinking ? '◎' : '○'}
-      </button>
-
-      {/* Clear */}
-      {messages.length > 0 && (
-        <button onClick={handleClear} title="Clear chat"
-          style={{ padding: '3px 7px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: '1px solid var(--tf-border)', backgroundColor: 'transparent', color: 'var(--tf-text-muted)' }}
-          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.color = 'var(--tf-error)'; b.style.borderColor = 'var(--tf-error)'; }}
-          onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.color = 'var(--tf-text-muted)'; b.style.borderColor = 'var(--tf-border)'; }}>
-          ✕
-        </button>
-      )}
     </div>
   );
 

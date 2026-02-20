@@ -3,6 +3,7 @@ import { saveSetupConfig, testLlmConnection } from '../api/client';
 import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
+import CompassRoseLogo from './CompassRoseLogo';
 
 // ---- Types ----
 
@@ -19,6 +20,11 @@ interface SetupWizardProps {
 // ---- Constants ----
 
 const TOTAL_STEPS = 7;
+const TELEGRAM_KEYS = {
+  token: 'compaas_telegram_token',
+  chatId: 'compaas_telegram_chatid',
+  configured: 'compaas_telegram_configured',
+} as const;
 
 const AGENT_DEFAULTS: AgentDefault[] = [
   { id: 'ceo', role: 'CEO', defaultName: 'Marcus' },
@@ -171,29 +177,14 @@ function StepWelcome() {
 
   return (
     <div style={{ textAlign: 'center', padding: '8px 0 16px' }}>
-      <div
-        style={{
-          width: '56px',
-          height: '56px',
-          borderRadius: '12px',
-          backgroundColor: C.accentDim,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          margin: '0 auto 24px',
-          border: `1px solid ${C.accent}`,
-        }}
-        aria-hidden="true"
-      >
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: C.textPrimary }}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
+      <div style={{ margin: '0 auto 24px', width: '56px' }}>
+        <CompassRoseLogo size={56} />
       </div>
       <h2 style={{ fontSize: '22px', fontWeight: 700, color: C.textPrimary, marginBottom: '12px' }}>
-        Welcome to ThunderFlow
+        Welcome to COMPaaS
       </h2>
       <p style={{ fontSize: '14px', color: C.textSecondary, lineHeight: '1.6', maxWidth: '480px', margin: '0 auto 24px' }}>
-        ThunderFlow is your AI-powered virtual company dashboard. You direct a team of 15 autonomous agents
+        COMPaaS is your AI-powered virtual company dashboard. You direct a team of 15 autonomous agents
         across engineering, product, research, and operations. This wizard takes about 2 minutes to configure
         your workspace.
       </p>
@@ -328,6 +319,55 @@ function SubTab({ label, active, onClick }: { label: string; active: boolean; on
   );
 }
 
+interface ProviderCardProps {
+  icon: string;
+  title: string;
+  description: string;
+  selected: boolean;
+  onClick: () => void;
+  children?: React.ReactNode;
+}
+
+function ProviderCard({ icon, title, description, selected, onClick, children }: ProviderCardProps) {
+  return (
+    <button
+      role="radio"
+      aria-checked={selected}
+      onClick={onClick}
+      style={{
+        width: '100%', textAlign: 'left', padding: '14px 16px',
+        borderRadius: '10px', cursor: 'pointer',
+        border: `2px solid ${selected ? C.accent : C.border}`,
+        backgroundColor: selected ? C.accentDim : C.surfaceRaised,
+        transition: 'all 0.15s', marginBottom: '10px', outline: 'none',
+      }}
+      onFocus={(e) => { e.currentTarget.style.boxShadow = `0 0 0 2px ${C.accentDim}`; }}
+      onBlur={(e) => { e.currentTarget.style.boxShadow = 'none'; }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: selected && children ? '14px' : 0 }}>
+        <span style={{ fontSize: '22px', flexShrink: 0 }}>{icon}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '14px', fontWeight: 600, color: C.textPrimary, marginBottom: '2px' }}>{title}</div>
+          <div style={{ fontSize: '12px', color: C.textSecondary }}>{description}</div>
+        </div>
+        <div style={{
+          width: '18px', height: '18px', borderRadius: '50%', flexShrink: 0,
+          border: `2px solid ${selected ? C.accent : C.border}`,
+          backgroundColor: selected ? C.accent : 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {selected && <div style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: C.bg }} />}
+        </div>
+      </div>
+      {selected && children && (
+        <div onClick={(e) => e.stopPropagation()}>
+          {children}
+        </div>
+      )}
+    </button>
+  );
+}
+
 function StepAiProvider({
   llmProvider, setLlmProvider,
   anthropicMode, setAnthropicMode,
@@ -393,49 +433,6 @@ function StepAiProvider({
     setTestMessage(result.message);
   };
 
-  const ProviderCard = ({
-    icon, title, description, selected, onClick, children,
-  }: {
-    id?: LlmProvider; icon: string; title: string; description: string;
-    selected: boolean; onClick: () => void; children?: React.ReactNode;
-  }) => (
-    <button
-      role="radio"
-      aria-checked={selected}
-      onClick={onClick}
-      style={{
-        width: '100%', textAlign: 'left', padding: '14px 16px',
-        borderRadius: '10px', cursor: 'pointer',
-        border: `2px solid ${selected ? C.accent : C.border}`,
-        backgroundColor: selected ? C.accentDim : C.surfaceRaised,
-        transition: 'all 0.15s', marginBottom: '10px', outline: 'none',
-      }}
-      onFocus={(e) => { e.currentTarget.style.boxShadow = `0 0 0 2px ${C.accentDim}`; }}
-      onBlur={(e) => { e.currentTarget.style.boxShadow = 'none'; }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: selected && children ? '14px' : 0 }}>
-        <span style={{ fontSize: '22px', flexShrink: 0 }}>{icon}</span>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: '14px', fontWeight: 600, color: C.textPrimary, marginBottom: '2px' }}>{title}</div>
-          <div style={{ fontSize: '12px', color: C.textSecondary }}>{description}</div>
-        </div>
-        <div style={{
-          width: '18px', height: '18px', borderRadius: '50%', flexShrink: 0,
-          border: `2px solid ${selected ? C.accent : C.border}`,
-          backgroundColor: selected ? C.accent : 'transparent',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          {selected && <div style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: C.bg }} />}
-        </div>
-      </div>
-      {selected && children && (
-        <div onClick={(e) => e.stopPropagation()}>
-          {children}
-        </div>
-      )}
-    </button>
-  );
-
   return (
     <div>
       <h2 style={{ fontSize: '18px', fontWeight: 600, color: C.textPrimary, marginBottom: '6px' }}>
@@ -447,7 +444,7 @@ function StepAiProvider({
 
       {/* ── Anthropic ── */}
       <ProviderCard
-        id="anthropic" icon="⚡" selected={llmProvider === 'anthropic'}
+        icon="⚡" selected={llmProvider === 'anthropic'}
         title="Anthropic (Recommended)"
         description="Claude Opus 4 / Sonnet 4 / Haiku 4.5 — world's best reasoning and tool-use. Via CLI or direct API key."
         onClick={() => setLlmProvider('anthropic')}
@@ -521,7 +518,7 @@ function StepAiProvider({
             </ol>
             <div style={{ marginTop: '10px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
               <strong style={{ color: C.accent, fontSize: '11px' }}>Why CLI?</strong>{' '}
-              <span style={{ fontSize: '11px' }}>The CLI handles auth, tool use, and streaming with built-in retries. No API key management needed in ThunderFlow — the CLI handles it.</span>
+              <span style={{ fontSize: '11px' }}>The CLI handles auth, tool use, and streaming with built-in retries. No API key management needed in COMPaaS — the CLI handles it.</span>
             </div>
           </GuideBox>
         )}
@@ -559,7 +556,7 @@ function StepAiProvider({
                 <li style={{ marginBottom: '6px' }}>
                   Copy the key — it starts with <Code>sk-ant-api03-</Code>
                 </li>
-                <li>Paste it above. ThunderFlow sends it directly to <Code>api.anthropic.com</Code></li>
+                <li>Paste it above. COMPaaS sends it directly to <Code>api.anthropic.com</Code></li>
               </ol>
               <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Pricing:</strong>{' '}
@@ -575,7 +572,7 @@ function StepAiProvider({
 
       {/* ── OpenAI ── */}
       <ProviderCard
-        id="openai" icon="🤖" selected={llmProvider === 'openai'}
+        icon="🤖" selected={llmProvider === 'openai'}
         title="OpenAI"
         description="GPT-4o, o3-mini, o1 — cloud models. Works via API key or the Codex CLI."
         onClick={() => setLlmProvider('openai')}
@@ -686,12 +683,12 @@ function StepAiProvider({
                   <Code>codex --version</Code>
                 </li>
                 <li>
-                  <strong>Also paste the same key above</strong> — ThunderFlow uses it for direct API calls in addition to the CLI.
+                  <strong>Also paste the same key above</strong> — COMPaaS uses it for direct API calls in addition to the CLI.
                 </li>
               </ol>
               <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>About Codex CLI:</strong>{' '}
-                <span style={{ fontSize: '11px' }}>OpenAI's terminal coding agent. Same API key as above — the CLI handles tool execution locally while ThunderFlow coordinates the agents via API.</span>
+                <span style={{ fontSize: '11px' }}>OpenAI's terminal coding agent. Same API key as above — the CLI handles tool execution locally while COMPaaS coordinates the agents via API.</span>
               </div>
             </GuideBox>
           )}
@@ -700,7 +697,7 @@ function StepAiProvider({
 
       {/* ── Local Model ── */}
       <ProviderCard
-        id="openai_compat" icon="🖥️" selected={llmProvider === 'openai_compat'}
+        icon="🖥️" selected={llmProvider === 'openai_compat'}
         title="Local / Self-Hosted"
         description="Ollama, LM Studio, llama.cpp, Jan, vLLM — run models on your own machine. Free, private, no cloud."
         onClick={() => setLlmProvider('openai_compat')}
@@ -777,7 +774,7 @@ function StepAiProvider({
                 </li>
                 <li style={{ marginBottom: '6px' }}>Pull a model:<br /><Code>ollama pull llama3.3</Code></li>
                 <li style={{ marginBottom: '6px' }}>Start the server (runs automatically after install):<br /><Code>ollama serve</Code></li>
-                <li>ThunderFlow connects to <Code>http://localhost:11434/v1</Code> — no API key needed</li>
+                <li>COMPaaS connects to <Code>http://localhost:11434/v1</Code> — no API key needed</li>
               </ol>
               <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Recommended models:</strong>{' '}
@@ -796,7 +793,7 @@ function StepAiProvider({
                 </li>
                 <li style={{ marginBottom: '6px' }}>In LM Studio, go to the <strong>Discover</strong> tab and download a model</li>
                 <li style={{ marginBottom: '6px' }}>Go to <strong>Local Server</strong> tab → Start Server</li>
-                <li>ThunderFlow connects to <Code>http://localhost:1234/v1</Code></li>
+                <li>COMPaaS connects to <Code>http://localhost:1234/v1</Code></li>
               </ol>
               <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Recommended models:</strong>{' '}
@@ -835,7 +832,7 @@ function StepAiProvider({
                 <li style={{ marginBottom: '6px' }}>
                   Go to <strong>Settings → Advanced</strong> → enable <strong>API Server</strong>
                 </li>
-                <li>ThunderFlow connects to <Code>http://localhost:1337/v1</Code></li>
+                <li>COMPaaS connects to <Code>http://localhost:1337/v1</Code></li>
               </ol>
               <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Note:</strong>{' '}
@@ -863,7 +860,7 @@ function StepAiProvider({
                   <Code>vllm serve meta-llama/Llama-3.3-70B-Instruct --port 8000</Code>
                 </li>
                 <li>
-                  ThunderFlow connects to <Code>http://localhost:8000/v1</Code>
+                  COMPaaS connects to <Code>http://localhost:8000/v1</Code>
                 </li>
               </ol>
               <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
@@ -911,7 +908,7 @@ function StepAiProvider({
                 Route ALL agents through proxy
               </div>
               <div style={{ fontSize: '11px', color: C.textSecondary }}>
-                Uses a LiteLLM proxy to translate agent calls. Requires <code style={{ fontSize: '10px' }}>pip install thunderflow[proxy]</code>.
+                Uses a LiteLLM proxy to translate agent calls. Requires <code style={{ fontSize: '10px' }}>pip install compaas[proxy]</code>.
               </div>
             </div>
             <button
@@ -1267,7 +1264,7 @@ function StepPreferences({
             Auto-open browser
           </div>
           <div style={{ fontSize: '11px', color: C.textSecondary }}>
-            Automatically open the dashboard when thunderflow-web starts.
+            Automatically open the dashboard when compaas-web starts.
           </div>
         </div>
         <button
@@ -1629,13 +1626,13 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
     // Save Telegram credentials if provided; clear any stale values if skipped
     if (telegramBotToken && telegramChatId) {
-      localStorage.setItem('thunderflow_telegram_token', telegramBotToken);
-      localStorage.setItem('thunderflow_telegram_chatid', telegramChatId);
-      localStorage.setItem('thunderflow_telegram_configured', 'true');
+      localStorage.setItem(TELEGRAM_KEYS.token, telegramBotToken);
+      localStorage.setItem(TELEGRAM_KEYS.chatId, telegramChatId);
+      localStorage.setItem(TELEGRAM_KEYS.configured, 'true');
     } else {
-      localStorage.removeItem('thunderflow_telegram_token');
-      localStorage.removeItem('thunderflow_telegram_chatid');
-      localStorage.removeItem('thunderflow_telegram_configured');
+      localStorage.removeItem(TELEGRAM_KEYS.token);
+      localStorage.removeItem(TELEGRAM_KEYS.chatId);
+      localStorage.removeItem(TELEGRAM_KEYS.configured);
     }
 
     // Resolve model, base_url, and api_key based on provider + sub-mode
@@ -1684,7 +1681,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     if (ok) {
       onComplete();
     } else {
-      setSubmitError('Failed to save configuration. Please check that the thunderflow-web server is running and try again.');
+      setSubmitError('Failed to save configuration. Please check that compaas-web is running and try again.');
       setSubmitting(false);
     }
   };
@@ -1731,24 +1728,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div
-                style={{
-                  width: '28px',
-                  height: '28px',
-                  borderRadius: '6px',
-                  backgroundColor: C.accentDim,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-                aria-hidden="true"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: C.textPrimary }}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
+              <div style={{ flexShrink: 0 }}>
+                <CompassRoseLogo size={28} />
               </div>
-              <span style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>ThunderFlow Setup</span>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>COMPaaS Setup</span>
               <span
                 style={{
                   fontSize: '11px',

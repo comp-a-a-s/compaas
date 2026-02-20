@@ -1,4 +1,4 @@
-"""ThunderFlow Web Dashboard — entry point."""
+"""COMPaaS Web Dashboard — entry point."""
 import os
 import subprocess
 import sys
@@ -22,29 +22,29 @@ def _ensure_frontend_built() -> None:
     node_modules = os.path.join(web_dir, "node_modules")
     try:
         if not os.path.isdir(node_modules):
-            print("[ThunderFlow] Installing frontend dependencies...")
+            print("[COMPaaS] Installing frontend dependencies...")
             subprocess.run(["npm", "install"], cwd=web_dir, check=True)
 
-        print("[ThunderFlow] Building frontend...")
+        print("[COMPaaS] Building frontend...")
         subprocess.run(["npm", "run", "build"], cwd=web_dir, check=True)
-        print("[ThunderFlow] Frontend built successfully.")
+        print("[COMPaaS] Frontend built successfully.")
     except FileNotFoundError:
-        print("[ThunderFlow] Warning: npm not found. Install Node.js to build the frontend.", file=sys.stderr)
-        print("[ThunderFlow]   Then run: cd web-dashboard && npm install && npm run build", file=sys.stderr)
+        print("[COMPaaS] Warning: npm not found. Install Node.js to build the frontend.", file=sys.stderr)
+        print("[COMPaaS]   Then run: cd web-dashboard && npm install && npm run build", file=sys.stderr)
     except subprocess.CalledProcessError as exc:
-        print(f"[ThunderFlow] Warning: Frontend build failed (exit code {exc.returncode}).", file=sys.stderr)
+        print(f"[COMPaaS] Warning: Frontend build failed (exit code {exc.returncode}).", file=sys.stderr)
 
 
 def main():
-    host = os.environ.get("THUNDERFLOW_API_HOST", os.environ.get("CRACKPIE_API_HOST", "127.0.0.1"))
-    port = int(os.environ.get("THUNDERFLOW_API_PORT", os.environ.get("CRACKPIE_API_PORT", "8420")))
-    debug = os.environ.get("THUNDERFLOW_DEBUG", os.environ.get("CRACKPIE_DEBUG", "")).lower() == "true"
+    host = os.environ.get("COMPAAS_API_HOST", "127.0.0.1")
+    port = int(os.environ.get("COMPAAS_API_PORT", "8420"))
+    debug = os.environ.get("COMPAAS_DEBUG", "").lower() == "true"
 
     # Build frontend if dist is missing
     _ensure_frontend_built()
 
-    # Auto-open browser after a short delay (set THUNDERFLOW_NO_BROWSER=true to disable)
-    if os.environ.get("THUNDERFLOW_NO_BROWSER", os.environ.get("CRACKPIE_NO_BROWSER", "")).lower() != "true":
+    # Auto-open browser after a short delay (set COMPAAS_NO_BROWSER=true to disable)
+    if os.environ.get("COMPAAS_NO_BROWSER", "").lower() != "true":
         url = f"http://{host}:{port}"
         threading.Timer(1.5, webbrowser.open, args=[url]).start()
 

@@ -398,13 +398,17 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailedAgent, setDetailedAgent] = useState<Agent | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // Fetch full detail when an agent is selected
   useEffect(() => {
-    if (!selectedId) {
-      setDetailedAgent(null);
-      return;
-    }
+    if (!selectedId) return;
     let cancelled = false;
     fetchAgentDetail(selectedId).then((data) => {
       if (!cancelled && data) setDetailedAgent(data);
@@ -421,8 +425,17 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
     return a.name.toLowerCase().includes(q) || a.role.toLowerCase().includes(q) || (a.team || '').toLowerCase().includes(q);
   });
 
+  const isNarrowViewport = viewportWidth <= 1100;
+  const isPhoneViewport = viewportWidth <= 760;
+
   const handleSelect = (id: string) => {
-    setSelectedId((prev) => (prev === id ? null : id));
+    setSelectedId((prev) => {
+      const next = prev === id ? null : id;
+      if (next !== prev) {
+        setDetailedAgent(null);
+      }
+      return next;
+    });
   };
 
   if (loading) {
@@ -454,7 +467,7 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
   }
 
   return (
-    <div className="flex flex-col gap-4 h-full animate-fade-in" style={{ minHeight: '600px' }}>
+    <div className="flex flex-col gap-4 h-full animate-fade-in" style={{ minHeight: 0 }}>
       {/* Search / filter input */}
       <div>
         <input
@@ -480,11 +493,15 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
         />
       </div>
 
-      <div className="flex gap-5 flex-1" style={{ minHeight: 0 }}>
+      <div className="flex gap-5 flex-1" style={{ minHeight: 0, flexDirection: isNarrowViewport ? 'column' : 'row' }}>
         {/* Agent grid */}
         <div
           className="overflow-y-auto"
-          style={{ flex: selectedAgent ? '0 0 auto' : '1', width: selectedAgent ? '420px' : '100%' }}
+          style={{
+            flex: selectedAgent && !isNarrowViewport ? '0 0 auto' : '1',
+            width: selectedAgent && !isNarrowViewport ? '420px' : '100%',
+            maxWidth: selectedAgent && !isNarrowViewport ? '420px' : 'none',
+          }}
         >
           {filteredAgents.length === 0 && searchQuery ? (
             <p className="text-sm py-8 text-center" style={{ color: 'var(--tf-text-muted)' }}>
@@ -494,7 +511,11 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
             <div
               className="grid gap-3"
               style={{
-                gridTemplateColumns: selectedAgent
+                gridTemplateColumns: isPhoneViewport
+                  ? 'repeat(1, 1fr)'
+                  : isNarrowViewport
+                  ? 'repeat(2, 1fr)'
+                  : selectedAgent
                   ? 'repeat(2, 1fr)'
                   : 'repeat(3, 1fr)',
               }}
@@ -513,7 +534,7 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
 
         {/* Detail panel */}
         {selectedAgent && (
-          <div className="flex-1 overflow-hidden" style={{ minWidth: 0 }}>
+          <div className="flex-1 overflow-hidden" style={{ minWidth: 0, minHeight: isNarrowViewport ? '420px' : 0 }}>
             <DetailPanel agent={selectedAgent} onClose={() => setSelectedId(null)} />
           </div>
         )}

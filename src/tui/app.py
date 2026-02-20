@@ -1,4 +1,4 @@
-"""ThunderFlow TUI Dashboard — built with Textual."""
+"""COMPaaS TUI Dashboard — built with Textual."""
 
 import os
 import yaml
@@ -224,7 +224,7 @@ class VirtualCompanyDashboard(App):
     }
     """
 
-    TITLE = "ThunderFlow — Company Dashboard"
+    TITLE = "COMPaaS — Company Dashboard"
     SUB_TITLE = "Board Head: Idan"
     BINDINGS = [
         ("r", "force_refresh", "Refresh"),

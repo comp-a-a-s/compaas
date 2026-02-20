@@ -21,12 +21,12 @@ class TestUtils:
         assert os.path.isabs(result)
 
     def test_resolve_data_dir_env_override(self):
-        os.environ["CRACKPIE_DATA_DIR"] = "/tmp/test_crackpie_data"
+        os.environ["COMPAAS_DATA_DIR"] = "/tmp/test_compaas_data"
         try:
             result = resolve_data_dir()
-            assert result == "/tmp/test_crackpie_data"
+            assert result == "/tmp/test_compaas_data"
         finally:
-            del os.environ["CRACKPIE_DATA_DIR"]
+            del os.environ["COMPAAS_DATA_DIR"]
 
 
 class TestTaskBoardValidation:

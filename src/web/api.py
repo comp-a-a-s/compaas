@@ -1,4 +1,4 @@
-"""ThunderFlow Web Dashboard API.
+"""COMPaaS Web Dashboard API.
 
 FastAPI application exposing live company state — org chart, projects,
 tasks, activity stream, token metrics, agents, and model settings.
@@ -9,6 +9,11 @@ import os
 import json
 import shutil
 import asyncio
+import copy
+import hashlib
+import hmac
+import ipaddress
+import time
 import yaml
 from typing import AsyncGenerator
 from datetime import datetime, timezone
@@ -42,25 +47,166 @@ task_board = TaskBoard(DATA_DIR)
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="ThunderFlow Dashboard API",
-    description="Live data API for the ThunderFlow virtual company web dashboard.",
+    title="COMPaaS Dashboard API",
+    description="Live data API for the COMPaaS virtual company web dashboard.",
     version="0.1.0",
 )
 
 # CORS — restrict to known origins
-_cors_origins_env = os.environ.get("THUNDERFLOW_CORS_ORIGINS", os.environ.get("CRACKPIE_CORS_ORIGINS", ""))
+_cors_origins_env = os.environ.get(
+    "COMPAAS_CORS_ORIGINS",
+    "",
+)
 _allowed_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()] if _cors_origins_env else [
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:8420",
 ]
+_cors_methods_env = os.environ.get(
+    "COMPAAS_CORS_METHODS",
+    "GET",
+)
+_allowed_methods = [m.strip().upper() for m in _cors_methods_env.split(",") if m.strip()] or ["GET"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Content-Type"],
+    allow_methods=_allowed_methods,
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-COMPAAS-ADMIN-TOKEN",
+        "X-Hub-Signature-256",
+        "X-Slack-Signature",
+        "X-Slack-Request-Timestamp",
+    ],
 )
+
+
+def _env_first(*names: str) -> str:
+    """Return the first non-empty environment value from a list of names."""
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+REDACTED_SECRET = "__COMPAAS_REDACTED__"
+SENSITIVE_INTEGRATION_KEYS = ("github_token", "slack_token")
+
+
+def _redact_config_for_response(config: dict) -> dict:
+    """Return a copy of config with sensitive integration values redacted."""
+    safe = copy.deepcopy(config)
+    integrations = safe.get("integrations")
+    if isinstance(integrations, dict):
+        for key in SENSITIVE_INTEGRATION_KEYS:
+            value = integrations.get(key)
+            if isinstance(value, str) and value:
+                integrations[key] = REDACTED_SECRET
+    return safe
+
+
+def _sanitize_integration_payload(payload: dict) -> dict:
+    """Drop redaction placeholders so writes don't overwrite stored secrets."""
+    if not isinstance(payload, dict):
+        return {}
+    sanitized: dict = {}
+    for key, value in payload.items():
+        if key in SENSITIVE_INTEGRATION_KEYS and isinstance(value, str) and value == REDACTED_SECRET:
+            continue
+        sanitized[key] = value
+    return sanitized
+
+
+def _is_loopback_client(request: Request) -> bool:
+    """Check whether request origin is local (loopback)."""
+    client = request.client
+    if client is None or not client.host:
+        return False
+
+    host = client.host.strip().lower()
+    if host in {"localhost", "127.0.0.1", "::1", "testclient"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _require_integrations_write_auth(request: Request) -> None:
+    """Protect integration mutation endpoints from unauthorised remote writes."""
+    admin_token = _env_first("COMPAAS_ADMIN_TOKEN")
+    provided = request.headers.get("X-COMPAAS-ADMIN-TOKEN", "").strip()
+    auth_header = request.headers.get("Authorization", "").strip()
+    if not provided and auth_header.lower().startswith("bearer "):
+        provided = auth_header[7:].strip()
+
+    # Explicit shared-secret auth when configured.
+    if admin_token:
+        if not provided or not hmac.compare_digest(provided, admin_token):
+            raise HTTPException(status_code=401, detail="Unauthorized.")
+        return
+
+    # Safe default for single-user local mode.
+    if not _is_loopback_client(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Remote integration updates require COMPAAS_ADMIN_TOKEN.",
+        )
+
+
+def _require_github_signature(request: Request, body: bytes) -> None:
+    """Validate GitHub webhook signature using HMAC SHA-256."""
+    secret = _env_first("COMPAAS_GITHUB_WEBHOOK_SECRET")
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub webhook secret is not configured.",
+        )
+
+    signature = request.headers.get("X-Hub-Signature-256", "").strip()
+    if not signature.startswith("sha256="):
+        raise HTTPException(status_code=401, detail="Missing or invalid GitHub signature.")
+    provided = signature.split("=", 1)[1]
+    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid GitHub signature.")
+
+
+def _require_slack_signature(request: Request, body: bytes) -> None:
+    """Validate Slack request signature + replay window."""
+    secret = _env_first("COMPAAS_SLACK_SIGNING_SECRET")
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Slack signing secret is not configured.",
+        )
+
+    timestamp_raw = request.headers.get("X-Slack-Request-Timestamp", "").strip()
+    signature = request.headers.get("X-Slack-Signature", "").strip()
+    if not timestamp_raw or not signature.startswith("v0="):
+        raise HTTPException(status_code=401, detail="Missing or invalid Slack signature headers.")
+
+    try:
+        timestamp = int(timestamp_raw)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid Slack timestamp.")
+
+    # Reject replay attacks older/newer than 5 minutes.
+    if abs(int(time.time()) - timestamp) > 300:
+        raise HTTPException(status_code=401, detail="Slack request timestamp out of range.")
+
+    try:
+        body_text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid request encoding.")
+
+    basestring = f"v0:{timestamp_raw}:{body_text}".encode("utf-8")
+    expected = "v0=" + hmac.new(secret.encode("utf-8"), basestring, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=401, detail="Invalid Slack signature.")
 
 
 # ---------------------------------------------------------------------------
@@ -107,8 +253,8 @@ def get_org_chart() -> dict:
 
     # Use config values so that the org chart reflects user-set names
     cfg = _load_config()
-    chairman_name = cfg.get("user", {}).get("name", "") or "Chairman"
-    ceo_name = cfg.get("agents", {}).get("ceo", "CEO") or "CEO"
+    chairman_name = cfg.get("user", {}).get("name", "") or "Idan"
+    ceo_name = cfg.get("agents", {}).get("ceo", "Marcus") or "Marcus"
 
     org: dict = {
         "board_head": {"name": chairman_name, "role": "Chairman"},
@@ -448,7 +594,7 @@ def _get_agent_name(agent_id: str, default: str) -> str:
 
 @app.get("/api/config", summary="Get current configuration")
 def get_config() -> dict:
-    return _load_config()
+    return _redact_config_for_response(_load_config())
 
 
 @app.post("/api/config/setup", summary="Save initial setup configuration")
@@ -461,7 +607,12 @@ def setup_config(config: dict) -> dict:
 
 
 @app.patch("/api/config", summary="Update configuration settings")
-def update_config(updates: dict) -> dict:
+def update_config(request: Request, updates: dict) -> dict:
+    # Sensitive integration credentials must always pass the integration auth guard.
+    if isinstance(updates, dict) and isinstance(updates.get("integrations"), dict):
+        _require_integrations_write_auth(request)
+        updates = updates.copy()
+        updates["integrations"] = _sanitize_integration_payload(updates["integrations"])
     config = _load_config()
     merged = _deep_merge(config, updates)
     _save_config(merged)
@@ -1300,7 +1451,10 @@ async def github_webhook(request: Request) -> dict:
     """Receive GitHub webhook events and append them to the activity log."""
     try:
         body = await request.body()
+        _require_github_signature(request, body)
         payload = json.loads(body)
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
@@ -1349,7 +1503,11 @@ async def github_webhook(request: Request) -> dict:
 async def slack_events(request: Request) -> dict:
     """Handle Slack Events API payloads (URL verification + messages)."""
     try:
-        body = await request.json()
+        raw_body = await request.body()
+        _require_slack_signature(request, raw_body)
+        body = json.loads(raw_body)
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
@@ -1380,13 +1538,15 @@ async def slack_events(request: Request) -> dict:
 
 
 @app.patch("/api/integrations", summary="Save integration settings (tokens, webhook URL)")
-def save_integrations(body: dict) -> dict:
+def save_integrations(request: Request, body: dict) -> dict:
     """Persist integration settings under config.integrations."""
+    _require_integrations_write_auth(request)
     config = _load_config()
     integrations = config.get("integrations", {})
+    sanitized = _sanitize_integration_payload(body)
     for key in ("github_token", "slack_token", "webhook_url"):
-        if key in body:
-            integrations[key] = body[key]
+        if key in sanitized:
+            integrations[key] = sanitized[key]
     config["integrations"] = integrations
     _save_config(config)
     return {"status": "ok"}

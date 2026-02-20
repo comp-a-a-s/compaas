@@ -172,11 +172,17 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
   const [actionFilter, setActionFilter] = useState<string>('ALL');
   const [activeTab, setActiveTab] = useState<'live' | 'audit'>('live');
   const [auditSearch, setAuditSearch] = useState('');
+  const feedRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom on new events
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const feed = feedRef.current;
+    if (!feed) return;
+    const distanceToBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+    if (distanceToBottom <= 120) {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+    }
   }, [events.length]);
 
   // Build unique agent list for filter
@@ -212,7 +218,7 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
   }, [events, auditSearch]);
 
   return (
-    <div className="flex flex-col animate-fade-in" style={{ height: '100%', minHeight: '600px' }}>
+    <div className="flex flex-col animate-fade-in" style={{ height: '100%', minHeight: 0 }}>
       {/* Tab bar */}
       <div className="flex items-center gap-1 pb-3 flex-shrink-0">
         {(['live', 'audit'] as const).map((tab) => (
@@ -340,6 +346,7 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
 
       {/* Events feed */}
       <div
+        ref={feedRef}
         className="flex-1 overflow-y-auto rounded-xl"
         style={{
           backgroundColor: 'var(--tf-surface)',

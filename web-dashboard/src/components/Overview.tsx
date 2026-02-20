@@ -806,7 +806,7 @@ export default function Overview({
 
       {/* Stat cards */}
       {widgets.stats && (
-        <div className="grid grid-cols-2 gap-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard label="Agents"      value={agents.length.toString()}  color="var(--tf-accent)"       loading={loadingAgents} />
           <StatCard label="Projects"    value={projects.length.toString()} color="var(--tf-accent-blue)"  loading={loadingProjects} />
           <StatCard label="Tasks"       value={tasks.length.toString()}    color="var(--tf-success)"      loading={loadingTasks} />
@@ -826,7 +826,7 @@ export default function Overview({
 
       {/* Task status + Project progress row */}
       {(widgets.tasks || widgets.projects) && (
-        <div className="grid gap-6" style={{ gridTemplateColumns: widgets.tasks && widgets.projects ? '1fr 1fr' : '1fr' }}>
+        <div className={`grid gap-6 ${widgets.tasks && widgets.projects ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
           {widgets.tasks && (
             <div className="rounded-xl p-5" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
               <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>

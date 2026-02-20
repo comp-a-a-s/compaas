@@ -6,7 +6,7 @@ endpoint: Ollama, LM Studio, llama.cpp server, the real OpenAI API, Groq, etc.
 This module is imported lazily inside the CEO chat handler so that the
 ``openai`` package remains optional — install with::
 
-    pip install thunderflow[local-models]
+    pip install compaas[local-models]
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ def _require_openai():
     except ImportError:
         raise RuntimeError(
             "The 'openai' package is required for OpenAI / local model support. "
-            "Install it with:  pip install 'thunderflow[local-models]'"
+            "Install it with:  pip install 'compaas[local-models]'"
         )
 
 
