@@ -10,17 +10,37 @@ PURPLE='\033[0;35m'
 NC='\033[0m' # No Color
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOGO_PATH="$SCRIPT_DIR/web-dashboard/public/compass-rose.svg"
 
-echo -e "${PURPLE}"
-echo "   _____ ____  __  __ ____              "
-echo "  / ____/ __ \\|  \\/  |  _ \\             "
-echo " | |   | |  | | \\  / | |_) | __ _  __ _ "
-echo " | |   | |  | | |\\/| |  _ < / _\` |/ _\` |"
-echo " | |___| |__| | |  | | |_) | (_| | (_| |"
-echo "  \\_____\\____/|_|  |_|____/ \\__,_|\\__,_|"
-echo -e "${NC}"
-echo -e "${BLUE}=== COMPaaS Virtual Company — Installation ===${NC}"
-echo ""
+print_banner() {
+    if command -v chafa &>/dev/null && [ -f "$LOGO_PATH" ]; then
+        # Render the real logo when an image-to-terminal renderer is available.
+        chafa --size 30x15 "$LOGO_PATH" 2>/dev/null || true
+        echo -e "${PURPLE}"
+    else
+        echo -e "${PURPLE}"
+        cat << 'COMPASS'
+                \   |   /
+                 .-*-.
+            ----(  +  )----
+                 '-*-'
+                /   |   \
+COMPASS
+    fi
+
+    cat << 'WORDMARK'
+   ____ ___  __  __ ____   ___    _    ____
+  / ___/ _ \|  \/  |  _ \ / _ \  / \  / ___|
+ | |  | | | | |\/| | |_) | | | |/ _ \ \___ \
+ | |__| |_| | |  | |  __/| |_| / ___ \ ___) |
+  \____\___/|_|  |_|_|    \___/_/   \_\____/
+WORDMARK
+    echo -e "${NC}"
+    echo -e "${BLUE}=== COMPaaS Virtual Company - Installation ===${NC}"
+    echo ""
+}
+
+print_banner
 
 # 1. Check Python 3.10+
 echo -e "${YELLOW}[1/8] Checking Python...${NC}"
