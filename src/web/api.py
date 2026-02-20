@@ -93,7 +93,7 @@ def _env_first(*names: str) -> str:
 
 
 REDACTED_SECRET = "__COMPAAS_REDACTED__"
-SENSITIVE_INTEGRATION_KEYS = ("github_token", "slack_token")
+SENSITIVE_INTEGRATION_KEYS = ("github_token", "slack_token", "vercel_token")
 
 
 def _redact_config_for_response(config: dict) -> dict:
@@ -553,6 +553,19 @@ DEFAULT_CONFIG: dict = {
         "proxy_enabled": False,
         "proxy_url": "http://localhost:4000",
     },
+    "integrations": {
+        "workspace_mode": "local",
+        "github_token": "",
+        "github_repo": "",
+        "github_default_branch": "master",
+        "github_auto_push": False,
+        "github_auto_pr": False,
+        "vercel_token": "",
+        "vercel_team_id": "",
+        "vercel_project_name": "",
+        "slack_token": "",
+        "webhook_url": "",
+    },
 }
 
 
@@ -957,6 +970,8 @@ def _build_context_prompt(
     """Build a prompt that includes recent conversation context and persona context."""
     messages = _load_chat_messages()
     recent = messages[-history_limit:] if len(messages) > history_limit else messages
+    cfg = _load_config()
+    integrations = cfg.get("integrations", {}) if isinstance(cfg, dict) else {}
 
     parts: list[str] = []
 
@@ -983,6 +998,40 @@ def _build_context_prompt(
         for msg in recent:
             speaker = user_name if msg["role"] == "user" else f"You ({ceo_name}, CEO)"
             parts.append(f"{speaker}: {msg['content']}")
+        parts.append("")
+
+    # Execution and delivery preferences from integrations config.
+    workspace_mode = integrations.get("workspace_mode", "local")
+    github_repo = str(integrations.get("github_repo", "") or "").strip()
+    github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
+    github_auto_push = bool(integrations.get("github_auto_push"))
+    github_auto_pr = bool(integrations.get("github_auto_pr"))
+    vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
+    vercel_connected = bool(str(integrations.get("vercel_token", "") or "").strip())
+
+    if workspace_mode == "github":
+        repo_label = github_repo or "(not configured)"
+        parts.append(
+            "[DELIVERY MODE: GitHub. "
+            f"Target repository: {repo_label}. Default branch: {github_branch}. "
+            f"Auto-push is {'enabled' if github_auto_push else 'disabled'}. "
+            f"Auto-PR is {'enabled' if github_auto_pr else 'disabled'}. "
+            "Prefer proposing concrete git actions and branch/PR steps.]"
+        )
+        parts.append("")
+    else:
+        parts.append(
+            "[DELIVERY MODE: Local workspace. "
+            "Prefer writing and validating changes locally unless the Chairman explicitly asks for GitHub actions.]"
+        )
+        parts.append("")
+
+    if vercel_connected and vercel_project_name:
+        parts.append(
+            "[DEPLOYMENT: Vercel connector is configured. "
+            f"Preferred project name: {vercel_project_name}. "
+            "You may propose deployment steps when the Chairman asks to ship.]"
+        )
         parts.append("")
 
     parts.append(f"{user_name} says now: {user_message}")
@@ -1544,12 +1593,74 @@ def save_integrations(request: Request, body: dict) -> dict:
     config = _load_config()
     integrations = config.get("integrations", {})
     sanitized = _sanitize_integration_payload(body)
-    for key in ("github_token", "slack_token", "webhook_url"):
+    for key in (
+        "workspace_mode",
+        "github_token",
+        "github_repo",
+        "github_default_branch",
+        "github_auto_push",
+        "github_auto_pr",
+        "vercel_token",
+        "vercel_team_id",
+        "vercel_project_name",
+        "slack_token",
+        "webhook_url",
+    ):
         if key in sanitized:
             integrations[key] = sanitized[key]
     config["integrations"] = integrations
     _save_config(config)
     return {"status": "ok"}
+
+
+@app.get("/api/integrations/capabilities", summary="Summarise available GitHub/Vercel capabilities")
+def get_integration_capabilities() -> dict:
+    """Return non-secret capability metadata for configured integrations."""
+    integrations = _load_config().get("integrations", {})
+
+    workspace_mode = integrations.get("workspace_mode", "local")
+    github_token_set = bool(str(integrations.get("github_token", "") or "").strip())
+    github_repo = str(integrations.get("github_repo", "") or "").strip()
+    github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
+
+    vercel_token_set = bool(str(integrations.get("vercel_token", "") or "").strip())
+    vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
+
+    github_capabilities = [
+        "create_branch",
+        "commit_changes",
+        "push_branch",
+        "open_pull_request",
+        "receive_webhooks",
+    ]
+    if github_token_set:
+        github_capabilities.extend(["manage_issues", "review_diffs"])
+
+    vercel_capabilities = [
+        "deploy_preview",
+        "deploy_production",
+    ] if vercel_token_set else []
+
+    return {
+        "workspace_mode": workspace_mode,
+        "github": {
+            "configured": github_token_set and bool(github_repo),
+            "token_configured": github_token_set,
+            "repo": github_repo,
+            "default_branch": github_branch,
+            "auto_push": bool(integrations.get("github_auto_push")),
+            "auto_pr": bool(integrations.get("github_auto_pr")),
+            "capabilities": github_capabilities,
+            "webhook_endpoint": "/api/integrations/github/webhook",
+        },
+        "vercel": {
+            "configured": vercel_token_set and bool(vercel_project_name),
+            "token_configured": vercel_token_set,
+            "project_name": vercel_project_name,
+            "team_id_set": bool(str(integrations.get("vercel_team_id", "") or "").strip()),
+            "capabilities": vercel_capabilities,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

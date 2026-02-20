@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import type { Agent, Project, Task, ActivityEvent } from '../types';
 import Tooltip from './Tooltip';
 
@@ -474,6 +474,8 @@ interface OrgChartProps {
 
 function OrgChart({ agents, loading, events }: OrgChartProps) {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement | null>(null);
+  const [compactLayout, setCompactLayout] = useState(false);
 
   const agentMap = useMemo(() => {
     const map = new Map<string, Agent>();
@@ -498,6 +500,18 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
     setSelectedAgent(prev => prev?.id === agent.id ? null : agent);
   };
 
+  useEffect(() => {
+    const node = chartContainerRef.current;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      setCompactLayout(width > 0 && width < 980);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   if (loading) {
     return (
       <div className="space-y-2 py-4">
@@ -516,8 +530,16 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
     );
   }
 
+  const ceoAgent = agentMap.get('ceo');
+  const laneSections = [
+    { title: 'Leadership', ids: ['cto', 'cfo', 'ciso', 'vp-product', 'vp-engineering', 'chief-researcher'] },
+    { title: 'Product + Design', ids: ['lead-designer', 'tech-writer'] },
+    { title: 'Engineering', ids: ['lead-backend', 'lead-frontend', 'qa-lead', 'devops'] },
+    { title: 'Specialists', ids: ['security-engineer', 'data-engineer'] },
+  ] as const;
+
   return (
-    <div>
+    <div ref={chartContainerRef} style={{ maxWidth: '100%', overflow: 'hidden' }}>
       {/* Chart label */}
       <p
         style={{
@@ -533,19 +555,132 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
         Organization Chart
       </p>
 
-      {/* Scrollable chart container */}
-      <div
-        style={{
-          overflowX: 'auto',
-          overflowY: 'visible',
-          padding: '8px 16px 16px',
-          minWidth: 'min-content',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <TreeNode node={ORG_TREE} agentMap={agentMap} onAgentClick={handleAgentClick} events={events} activeIds={activeIds} />
+      {compactLayout ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {ceoAgent && (
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'center',
+                paddingBottom: '8px',
+                borderBottom: '1px dashed var(--tf-border)',
+              }}
+            >
+              <Tooltip content={`${ceoAgent.role} · ${ceoAgent.model}`} position="top">
+                <div style={{ transform: 'scale(1.04)', transformOrigin: 'center top' }}>
+                  <OrgNode
+                    agent={ceoAgent}
+                    onAgentClick={handleAgentClick}
+                    recentlyActive={isAgentRecentlyActive(ceoAgent.id, ceoAgent.name, events)}
+                  />
+                </div>
+              </Tooltip>
+            </div>
+          )}
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '10px',
+            }}
+          >
+            {laneSections.map((section) => {
+              const sectionAgents = section.ids
+                .map((id) => agentMap.get(id))
+                .filter(Boolean) as Agent[];
+
+              if (sectionAgents.length === 0) return null;
+
+              return (
+                <div
+                  key={section.title}
+                  style={{
+                    border: '1px solid var(--tf-border)',
+                    borderRadius: '10px',
+                    backgroundColor: 'var(--tf-surface-raised)',
+                    padding: '10px',
+                  }}
+                >
+                  <p
+                    style={{
+                      fontSize: '10px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.08em',
+                      color: 'var(--tf-text-muted)',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    {section.title}
+                  </p>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {sectionAgents.map((agent) => {
+                      const active = isAgentRecentlyActive(agent.id, agent.name, events);
+                      return (
+                        <button
+                          key={agent.id}
+                          onClick={() => handleAgentClick(agent)}
+                          style={{
+                            border: `1px solid ${active ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+                            backgroundColor: active ? 'rgba(63,185,80,0.08)' : 'var(--tf-surface)',
+                            color: 'var(--tf-text)',
+                            borderRadius: '999px',
+                            padding: '4px 9px',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                          }}
+                          title={`${agent.role} · ${agent.model}`}
+                        >
+                          <span
+                            style={{
+                              width: '6px',
+                              height: '6px',
+                              borderRadius: '50%',
+                              backgroundColor: active ? 'var(--tf-success)' : 'var(--tf-text-muted)',
+                              flexShrink: 0,
+                            }}
+                          />
+                          {agent.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div
+          style={{
+            overflowX: 'auto',
+            overflowY: 'hidden',
+            padding: '8px 8px 16px',
+            maxWidth: '100%',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              width: 'max-content',
+              minWidth: '100%',
+              margin: '0 auto',
+            }}
+          >
+            <TreeNode
+              node={ORG_TREE}
+              agentMap={agentMap}
+              onAgentClick={handleAgentClick}
+              events={events}
+              activeIds={activeIds}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Agent detail panel */}
       {selectedAgent && (

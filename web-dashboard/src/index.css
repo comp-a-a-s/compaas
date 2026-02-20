@@ -50,26 +50,26 @@
 }
 
 [data-theme="dawn"] {
-  --tf-bg:              #f5f9fc;
+  --tf-bg:              #fcfefb;
   --tf-surface:         #ffffff;
-  --tf-surface-raised:  #edf4f9;
-  --tf-border:          #cbd8e3;
-  --tf-border-subtle:   #dfe8ef;
-  --tf-text:            #1b2630;
-  --tf-text-secondary:  #4f6070;
-  --tf-text-muted:      #637483;
-  --tf-accent:          #1ea89c;
-  --tf-accent-blue:     #2c7de2;
-  --tf-accent-dim:      #1758ad;
-  --tf-success:         #25966b;
-  --tf-warning:         #c27d22;
-  --tf-error:           #c9554d;
-  --tf-scrollbar-track: #f5f9fc;
-  --tf-scrollbar-thumb: #c0cfdb;
-  --tf-scrollbar-hover: #9fb2c2;
-  --tf-user-bubble:     #d7ecfb;
-  --tf-bg-gradient-a:   rgba(30, 168, 156, 0.12);
-  --tf-bg-gradient-b:   rgba(44, 125, 226, 0.1);
+  --tf-surface-raised:  #f7fbfe;
+  --tf-border:          #d9e5ee;
+  --tf-border-subtle:   #e7eef4;
+  --tf-text:            #22313b;
+  --tf-text-secondary:  #5d7283;
+  --tf-text-muted:      #7f93a2;
+  --tf-accent:          #1ba89b;
+  --tf-accent-blue:     #3f8de8;
+  --tf-accent-dim:      #1f67c8;
+  --tf-success:         #27966f;
+  --tf-warning:         #bf882b;
+  --tf-error:           #c95f56;
+  --tf-scrollbar-track: #fcfefb;
+  --tf-scrollbar-thumb: #c7d6e3;
+  --tf-scrollbar-hover: #adbfce;
+  --tf-user-bubble:     #eaf5ff;
+  --tf-bg-gradient-a:   rgba(27, 168, 155, 0.08);
+  --tf-bg-gradient-b:   rgba(63, 141, 232, 0.06);
 }
 
 [data-theme="sahara"] {
@@ -321,6 +321,35 @@ textarea:focus-visible {
 
 .streaming-bubble {
   animation: live-border 2s ease-in-out infinite;
+}
+
+/* ---- Split chat panel motion ---- */
+@keyframes split-panel-open {
+  from {
+    opacity: 0;
+    transform: translateX(22px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.split-chat-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  opacity: 0;
+  transform: translateX(22px);
+  transition:
+    opacity 220ms ease,
+    transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.split-chat-panel-open {
+  opacity: 1;
+  transform: translateX(0);
+  animation: split-panel-open 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* ---- Compact mode ---- */

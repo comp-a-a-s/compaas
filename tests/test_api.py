@@ -567,6 +567,7 @@ class TestIntegrationSecurity:
                 "setup_complete": True,
                 "integrations": {
                     "github_token": "ghp_secret",
+                    "vercel_token": "vercel_secret",
                     "slack_token": "xoxb_secret",
                     "webhook_url": "https://example.com/hook",
                 },
@@ -576,6 +577,7 @@ class TestIntegrationSecurity:
         assert response.status_code == 200
         data = response.json()
         assert data["integrations"]["github_token"] == api_module.REDACTED_SECRET
+        assert data["integrations"]["vercel_token"] == api_module.REDACTED_SECRET
         assert data["integrations"]["slack_token"] == api_module.REDACTED_SECRET
         assert data["integrations"]["webhook_url"] == "https://example.com/hook"
 
@@ -618,3 +620,57 @@ class TestIntegrationSecurity:
             cfg = yaml.safe_load(f) or {}
         assert cfg["integrations"]["slack_token"] == "xoxb_secret"
         assert cfg["integrations"]["webhook_url"] == "https://example.com/config"
+
+    def test_save_integrations_persists_workspace_and_vercel_fields(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.delenv("COMPAAS_ADMIN_TOKEN", raising=False)
+
+        response = client.patch("/api/integrations", json={
+            "workspace_mode": "github",
+            "github_repo": "comp-a-a-s/compaas",
+            "github_default_branch": "master",
+            "github_auto_push": True,
+            "github_auto_pr": True,
+            "vercel_team_id": "team_123",
+            "vercel_project_name": "compaas-dashboard",
+        })
+        assert response.status_code == 200
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations["workspace_mode"] == "github"
+        assert integrations["github_repo"] == "comp-a-a-s/compaas"
+        assert integrations["github_auto_push"] is True
+        assert integrations["github_auto_pr"] is True
+        assert integrations["vercel_team_id"] == "team_123"
+        assert integrations["vercel_project_name"] == "compaas-dashboard"
+
+    def test_get_integration_capabilities_reflects_configuration(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({
+                "integrations": {
+                    "workspace_mode": "github",
+                    "github_token": "ghp_secret",
+                    "github_repo": "comp-a-a-s/compaas",
+                    "github_default_branch": "master",
+                    "github_auto_push": True,
+                    "github_auto_pr": False,
+                    "vercel_token": "vercel_secret",
+                    "vercel_project_name": "compaas-dashboard",
+                }
+            }, f)
+
+        response = client.get("/api/integrations/capabilities")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["workspace_mode"] == "github"
+        assert data["github"]["configured"] is True
+        assert data["github"]["repo"] == "comp-a-a-s/compaas"
+        assert "push_branch" in data["github"]["capabilities"]
+        assert data["vercel"]["configured"] is True
+        assert "deploy_preview" in data["vercel"]["capabilities"]

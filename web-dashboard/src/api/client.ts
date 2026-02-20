@@ -201,6 +201,14 @@ export async function summarizeChat(): Promise<{ status: 'ok' | 'error' | 'too_s
 
 export async function saveIntegrations(data: {
   github_token?: string;
+  github_repo?: string;
+  github_default_branch?: string;
+  github_auto_push?: boolean;
+  github_auto_pr?: boolean;
+  workspace_mode?: 'local' | 'github';
+  vercel_token?: string;
+  vercel_team_id?: string;
+  vercel_project_name?: string;
   slack_token?: string;
   webhook_url?: string;
 }): Promise<boolean> {
