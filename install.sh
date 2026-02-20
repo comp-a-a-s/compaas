@@ -29,12 +29,11 @@ COMPASS
     fi
 
     cat << 'WORDMARK'
-   ____ ___  __  __ ____   ___    _    ____
-  / ___/ _ \|  \/  |  _ \ / _ \  / \  / ___|
- | |  | | | | |\/| | |_) | | | |/ _ \ \___ \
- | |__| |_| | |  | |  __/| |_| / ___ \ ___) |
-  \____\___/|_|  |_|_|    \___/_/   \_\____/
-                      COMPaaS
+   CCCC   OOO   M   M  PPPP    A    A    SSS
+  C      O   O  MM MM  P   P  A A  A A  S
+  C      O   O  M M M  PPPP   AAAAAAAA   SSS
+  C      O   O  M   M  P      A      A      S
+   CCCC   OOO   M   M  P      A      A   SSS
 WORDMARK
     echo -e "${NC}"
     echo -e "${BLUE}=== COMPaaS Virtual Company - Installation ===${NC}"
