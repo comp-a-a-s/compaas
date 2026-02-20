@@ -29,11 +29,14 @@ COMPASS
     fi
 
     cat << 'WORDMARK'
-   CCCC   OOO   M   M  PPPP    A    A    SSS
-  C      O   O  MM MM  P   P  A A  A A  S
-  C      O   O  M M M  PPPP   AAAAAAAA   SSS
-  C      O   O  M   M  P      A      A      S
-   CCCC   OOO   M   M  P      A      A   SSS
+ .d8888b.   .d88888b.  888b     d888 8888888b.                    .d8888b.
+d88P  Y88b d88P" "Y88b 8888b   d8888 888   Y88b                  d88P  Y88b
+888    888 888     888 88888b.d88888 888    888                  Y88b.
+888        888     888 888Y88888P888 888   d88P 8888b.   8888b.   "Y888b.
+888        888     888 888 Y888P 888 8888888P"     "88b     "88b     "Y88b.
+888    888 888     888 888  Y8P  888 888       .d888888 .d888888       "888
+Y88b  d88P Y88b. .d88P 888   "   888 888       888  888 888  888 Y88b  d88P
+ "Y8888P"   "Y88888P"  888       888 888       "Y888888 "Y888888  "Y8888P"
 WORDMARK
     echo -e "${NC}"
     echo -e "${BLUE}=== COMPaaS Virtual Company - Installation ===${NC}"
