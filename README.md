@@ -29,6 +29,8 @@ Leadership  Engineering  On-Demand     Dashboards
 - **Python 3.10+** (required)
 - **Node.js 18+** (optional, for web dashboard)
 - **Claude Code CLI** (`npm install -g @anthropic-ai/claude-code`)
+- **Codex CLI** (`npm install -g @openai/codex`) for OpenAI Codex runtime mode
+- **Ollama** (optional, for local `openai_compat` mode)
 - **Anthropic API key**
 
 ## Quick Start
@@ -61,7 +63,7 @@ The installer handles Python checks, web dependencies, environment setup, test v
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,local-models]"
 ```
 
 **Step 2: Web dashboard (optional)**
@@ -131,6 +133,7 @@ Features:
 - Mobile-first navigation — drawer sidebar and stacked detail panels on narrow screens
 - Improved readability — stronger muted-text contrast in Twilight and Dawn themes
 - Perceived-speed tuning — tab-aware polling and reduced forced smooth scrolling during live updates
+- Provider runtimes — Anthropic (`Claude CLI` / `API key`), OpenAI (`API` / `Codex CLI`), and local OpenAI-compatible (`Ollama`, `LM Studio`, `llama.cpp`)
 
 ### TUI Dashboard
 
@@ -249,6 +252,50 @@ Choose from 4 built-in themes in Settings or during the Setup Wizard:
 - **Twilight** — Deep indigo with cool highlights
 - **Dawn** — Clean light mode with improved contrast
 - **Sahara** — Warm earthy palette
+
+## LLM Provider Modes
+
+COMPaaS supports three providers and explicit runtime modes:
+
+| Provider | Runtime mode | Backend behavior |
+|----------|--------------|------------------|
+| `anthropic` | `cli` | Runs `claude --agent ceo` using local CLI auth |
+| `anthropic` | `apikey` | Runs Claude CLI with `ANTHROPIC_API_KEY` injected from config |
+| `openai` | `apikey` | Uses OpenAI-compatible chat completions API |
+| `openai` | `codex` | Runs local `codex exec --json` and streams response |
+| `openai_compat` | `apikey` | Uses OpenAI-compatible local endpoint (e.g. Ollama) |
+
+These values are stored in config as:
+- `llm.provider`
+- `llm.anthropic_mode`
+- `llm.openai_mode`
+
+## Provider Smoke Test
+
+Use the built-in smoke harness to validate live CEO responses across providers:
+
+```bash
+# Start the API (example port used by smoke script)
+COMPAAS_API_PORT=8421 COMPAAS_NO_BROWSER=true compaas-web
+```
+
+In another terminal:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+# Optional for anthropic_apikey scenario:
+# export ANTHROPIC_API_KEY="sk-ant-..."
+
+python3 scripts/provider_smoke_test.py --base-url http://127.0.0.1:8421
+```
+
+Run selected scenarios only:
+
+```bash
+python3 scripts/provider_smoke_test.py \
+  --base-url http://127.0.0.1:8421 \
+  --scenarios anthropic_cli,openai_api,openai_codex,ollama_local
+```
 
 ## Development
 

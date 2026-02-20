@@ -545,6 +545,14 @@ DEFAULT_CONFIG: dict = {
         # "openai"        — use OpenAI API (GPT-4o, etc.)
         # "openai_compat" — use any OpenAI-compatible local server (Ollama, LM Studio, …)
         "provider": "anthropic",
+        # Runtime mode for Anthropic provider:
+        # "cli"    — use locally installed Claude Code CLI credentials
+        # "apikey" — inject API key from config into Claude Code CLI env
+        "anthropic_mode": "cli",
+        # Runtime mode for OpenAI provider:
+        # "apikey" — call OpenAI-compatible Chat Completions API directly
+        # "codex"  — run Codex CLI locally and stream its result
+        "openai_mode": "apikey",
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-4o",
         "api_key": "",
@@ -1110,9 +1118,20 @@ async def _handle_ceo_claude(
     Returns the full response string, or None if an error was sent.
     """
     env = os.environ.copy()
+    anthropic_mode = str(llm_cfg.get("anthropic_mode", "cli") or "cli").lower()
+    anthropic_api_key = str(llm_cfg.get("api_key", "") or "").strip()
     if llm_cfg.get("proxy_enabled") and llm_cfg.get("proxy_url"):
         env["ANTHROPIC_BASE_URL"] = llm_cfg["proxy_url"]
         env["ANTHROPIC_API_KEY"] = env.get("ANTHROPIC_API_KEY") or "litellm"
+    elif anthropic_mode == "apikey":
+        if anthropic_api_key:
+            env["ANTHROPIC_API_KEY"] = anthropic_api_key
+        elif not env.get("ANTHROPIC_API_KEY"):
+            await websocket.send_json({
+                "type": "error",
+                "content": "Anthropic API-key mode is selected but no API key is configured.",
+            })
+            return None
 
     process = None
     try:
@@ -1234,6 +1253,136 @@ async def _handle_ceo_claude(
                 pass
 
 
+async def _handle_ceo_codex(
+    websocket: WebSocket,
+    prompt: str,
+    llm_cfg: dict,
+    ceo_name: str = "CEO",
+) -> str | None:
+    """Handle a CEO chat turn using local Codex CLI JSON streaming output."""
+    codex_path = shutil.which("codex")
+    if not codex_path:
+        await websocket.send_json({
+            "type": "error",
+            "content": "Codex CLI not found. Install: npm install -g @openai/codex",
+        })
+        return None
+
+    env = os.environ.copy()
+    api_key = str(llm_cfg.get("api_key", "") or "").strip()
+    if api_key:
+        env["OPENAI_API_KEY"] = api_key
+
+    process = None
+
+    await websocket.send_json({"type": "action", "content": "Launching Codex CLI…"})
+    try:
+        process = await asyncio.create_subprocess_exec(
+            codex_path,
+            "exec",
+            "--json",
+            "--sandbox",
+            "workspace-write",
+            prompt,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=PROJECT_ROOT,
+        )
+
+        response_parts: list[str] = []
+        assert process.stdout is not None
+        seen_first_output = False
+        idle_ticks = 0
+
+        while True:
+            try:
+                raw = await asyncio.wait_for(process.stdout.readline(), timeout=30.0)
+            except asyncio.TimeoutError:
+                idle_ticks += 1
+                await websocket.send_json({
+                    "type": "thinking",
+                    "content": f"{ceo_name} is working… ({idle_ticks * 30}s)",
+                })
+                if process.returncode is not None:
+                    break
+                continue
+
+            if not raw:
+                break
+            idle_ticks = 0
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            event_type = event.get("type", "")
+            if event_type == "item.completed":
+                item = event.get("item") or {}
+                item_type = item.get("type", "")
+                if item_type == "agent_message":
+                    text = (item.get("text") or "").strip()
+                    if text:
+                        if not seen_first_output:
+                            seen_first_output = True
+                            await websocket.send_json({"type": "action_result", "content": "Connected"})
+                            await websocket.send_json({"type": "action", "content": "Generating response…"})
+                        response_parts.append(text)
+                        await websocket.send_json({"type": "chunk", "content": text})
+                elif item_type == "reasoning":
+                    reason = (item.get("text") or "").strip()
+                    if reason:
+                        await websocket.send_json({"type": "thinking", "content": reason[:240]})
+                else:
+                    label = (item.get("title") or item.get("text") or item_type or "Working").strip()
+                    if label:
+                        await websocket.send_json({"type": "action", "content": label[:240]})
+            elif event_type == "turn.completed":
+                break
+            elif event_type == "error":
+                message = event.get("message") or event.get("error") or "Unknown Codex error"
+                await websocket.send_json({"type": "error", "content": str(message)[:300]})
+                return None
+
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            process.kill()
+
+        full_response = "\n\n".join(part for part in response_parts if part).strip()
+        if not full_response and process.returncode and process.returncode != 0:
+            stderr_text = ""
+            if process.stderr:
+                try:
+                    stderr_data = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
+                    stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
+                except asyncio.TimeoutError:
+                    pass
+            await websocket.send_json({
+                "type": "error",
+                "content": stderr_text[:500] or f"Codex exited with code {process.returncode}",
+            })
+            return None
+
+        return full_response or None
+    except OSError as exc:
+        await websocket.send_json({"type": "error", "content": f"Failed to start Codex CLI: {exc}"})
+        return None
+    except Exception as exc:
+        await websocket.send_json({"type": "error", "content": f"Codex chat error: {str(exc)[:200]}"})
+        return None
+    finally:
+        if process and process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+
+
 async def _handle_ceo_openai(
     websocket: WebSocket,
     prompt: str,
@@ -1320,15 +1469,22 @@ async def chat_websocket(websocket: WebSocket) -> None:
     config = _load_config()
     llm_cfg = config.get("llm", {})
     provider = llm_cfg.get("provider", "anthropic")
+    openai_mode = str(llm_cfg.get("openai_mode", "apikey") or "apikey").lower()
 
-    # For Anthropic/proxy mode we still need the Claude CLI
-    claude_path: str | None = None
+    # Validate configured runtime binaries early for cleaner UX.
     if provider == "anthropic":
-        claude_path = shutil.which("claude")
-        if not claude_path:
+        if not shutil.which("claude"):
             await websocket.send_json({
                 "type": "error",
                 "content": "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
+            })
+            await websocket.close()
+            return
+    elif provider == "openai" and openai_mode == "codex":
+        if not shutil.which("codex"):
+            await websocket.send_json({
+                "type": "error",
+                "content": "Codex CLI not found. Install: npm install -g @openai/codex",
             })
             await websocket.close()
             return
@@ -1356,6 +1512,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             config = _load_config()
             llm_cfg = config.get("llm", {})
             provider = llm_cfg.get("provider", "anthropic")
+            openai_mode = str(llm_cfg.get("openai_mode", "apikey") or "apikey").lower()
             user_name = config.get("user", {}).get("name", "User") or "User"
             ceo_name = config.get("agents", {}).get("ceo", "CEO") or "CEO"
             company_name = config.get("company", {}).get("name", "") if isinstance(config.get("company"), dict) else ""
@@ -1366,11 +1523,20 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 company_name=company_name,
             )
 
-            if provider in ("openai", "openai_compat"):
+            if provider == "openai" and openai_mode == "codex":
+                full_response = await _handle_ceo_codex(websocket, prompt, llm_cfg, ceo_name=ceo_name)
+            elif provider in ("openai", "openai_compat"):
                 full_response = await _handle_ceo_openai(websocket, prompt, llm_cfg, ceo_name)
             else:
+                claude_path = shutil.which("claude")
+                if not claude_path:
+                    await websocket.send_json({
+                        "type": "error",
+                        "content": "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
+                    })
+                    continue
                 full_response = await _handle_ceo_claude(
-                    websocket, prompt, claude_path or "", llm_cfg, ceo_name=ceo_name
+                    websocket, prompt, claude_path, llm_cfg, ceo_name=ceo_name
                 )
 
             if full_response:
