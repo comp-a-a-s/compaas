@@ -57,7 +57,7 @@ const POLL_INTERVAL_OPTIONS = [
 const THEMES = [
   { id: 'midnight', label: 'Midnight', description: 'Deep dark', preview: ['#0d1117', '#161b22', '#e6edf3'] },
   { id: 'twilight', label: 'Twilight', description: 'Soft blue dark', preview: ['#0f1923', '#1a2332', '#d0d8e4'] },
-  { id: 'dawn', label: 'Dawn', description: 'Light mode', preview: ['#ffffff', '#f6f8fa', '#24292f'] },
+  { id: 'dawn', label: 'Dawn', description: 'Bright daylight', preview: ['#fcfefb', '#f7fbfe', '#5d7283'] },
   { id: 'sahara', label: 'Sahara', description: 'Warm desert sand', preview: ['#1a1715', '#2d2924', '#d97757'] },
 ];
 
@@ -67,12 +67,20 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string
   { id: 'general', label: 'General', description: 'Core dashboard and identity settings.' },
   { id: 'ai', label: 'AI', description: 'Model provider and runtime selection.' },
   { id: 'agents', label: 'Agents', description: 'Names, model overrides, and agent personas.' },
-  { id: 'integrations', label: 'Integrations', description: 'Telegram, GitHub, Slack, and webhooks.' },
+  { id: 'integrations', label: 'Integrations', description: 'Workspace mode, GitHub, Vercel, Telegram, Slack, and webhooks.' },
   { id: 'appearance', label: 'Appearance', description: 'Theme and density preferences.' },
 ];
 
 interface IntegrationSettings {
+  workspace_mode: 'local' | 'github';
   github_token: string;
+  github_repo: string;
+  github_default_branch: string;
+  github_auto_push: boolean;
+  github_auto_pr: boolean;
+  vercel_token: string;
+  vercel_team_id: string;
+  vercel_project_name: string;
   slack_token: string;
   webhook_url: string;
 }
@@ -81,7 +89,15 @@ const REDACTED_SECRET = '__COMPAAS_REDACTED__';
 
 function integrationsFromConfig(config: AppConfig | null): IntegrationSettings {
   return {
+    workspace_mode: config?.integrations?.workspace_mode === 'github' ? 'github' : 'local',
     github_token: config?.integrations?.github_token ?? '',
+    github_repo: config?.integrations?.github_repo ?? '',
+    github_default_branch: config?.integrations?.github_default_branch ?? 'master',
+    github_auto_push: Boolean(config?.integrations?.github_auto_push),
+    github_auto_pr: Boolean(config?.integrations?.github_auto_pr),
+    vercel_token: config?.integrations?.vercel_token ?? '',
+    vercel_team_id: config?.integrations?.vercel_team_id ?? '',
+    vercel_project_name: config?.integrations?.vercel_project_name ?? '',
     slack_token: config?.integrations?.slack_token ?? '',
     webhook_url: config?.integrations?.webhook_url ?? '',
   };
@@ -902,10 +918,19 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
   const [agentPersonas, setAgentPersonas] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('tf_agent_personas') ?? '{}'); } catch { return {}; }
   });
+  const [workspaceMode, setWorkspaceMode] = useState<'local' | 'github'>('local');
   const [githubToken, setGithubToken] = useState('');
+  const [githubRepo, setGithubRepo] = useState('');
+  const [githubDefaultBranch, setGithubDefaultBranch] = useState('master');
+  const [githubAutoPush, setGithubAutoPush] = useState(false);
+  const [githubAutoPr, setGithubAutoPr] = useState(false);
+  const [vercelToken, setVercelToken] = useState('');
+  const [vercelTeamId, setVercelTeamId] = useState('');
+  const [vercelProjectName, setVercelProjectName] = useState('');
   const [slackToken, setSlackToken] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
   const [githubTokenMasked, setGithubTokenMasked] = useState(false);
+  const [vercelTokenMasked, setVercelTokenMasked] = useState(false);
   const [slackTokenMasked, setSlackTokenMasked] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
@@ -922,6 +947,7 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
         setPollInterval(cfg.ui?.poll_interval_ms ?? 5000);
         setAutoOpen(cfg.server?.auto_open_browser ?? true);
         const integrationCfg = integrationsFromConfig(cfg);
+        setWorkspaceMode(integrationCfg.workspace_mode);
         if (integrationCfg.github_token === REDACTED_SECRET) {
           setGithubToken('');
           setGithubTokenMasked(true);
@@ -929,6 +955,19 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
           setGithubToken(integrationCfg.github_token);
           setGithubTokenMasked(false);
         }
+        setGithubRepo(integrationCfg.github_repo);
+        setGithubDefaultBranch(integrationCfg.github_default_branch || 'master');
+        setGithubAutoPush(Boolean(integrationCfg.github_auto_push));
+        setGithubAutoPr(Boolean(integrationCfg.github_auto_pr));
+        if (integrationCfg.vercel_token === REDACTED_SECRET) {
+          setVercelToken('');
+          setVercelTokenMasked(true);
+        } else {
+          setVercelToken(integrationCfg.vercel_token);
+          setVercelTokenMasked(false);
+        }
+        setVercelTeamId(integrationCfg.vercel_team_id);
+        setVercelProjectName(integrationCfg.vercel_project_name);
         if (integrationCfg.slack_token === REDACTED_SECRET) {
           setSlackToken('');
           setSlackTokenMasked(true);
@@ -960,15 +999,20 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
       }
 
       const nextIntegrations: IntegrationSettings = {
+        workspace_mode: workspaceMode,
         github_token: githubTokenMasked ? REDACTED_SECRET : githubToken.trim(),
+        github_repo: githubRepo.trim(),
+        github_default_branch: githubDefaultBranch.trim() || 'master',
+        github_auto_push: githubAutoPush,
+        github_auto_pr: githubAutoPr,
+        vercel_token: vercelTokenMasked ? REDACTED_SECRET : vercelToken.trim(),
+        vercel_team_id: vercelTeamId.trim(),
+        vercel_project_name: vercelProjectName.trim(),
         slack_token: slackTokenMasked ? REDACTED_SECRET : slackToken.trim(),
         webhook_url: webhookUrl.trim(),
       };
       const currentIntegrations = integrationsFromConfig(config);
-      const integrationsChanged =
-        nextIntegrations.github_token !== currentIntegrations.github_token ||
-        nextIntegrations.slack_token !== currentIntegrations.slack_token ||
-        nextIntegrations.webhook_url !== currentIntegrations.webhook_url;
+      const integrationsChanged = JSON.stringify(nextIntegrations) !== JSON.stringify(currentIntegrations);
 
       if (integrationsChanged) {
         const integrationsOk = await saveIntegrations(nextIntegrations);
@@ -1205,19 +1249,140 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
               <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <div>
-                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>GitHub</div>
-                    <div style={{ fontSize: '11px', color: C.textSecondary }}>CEO creates PRs, issues, and reviews diffs</div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Workspace Mode</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>Choose where generated work is written and versioned</div>
+                  </div>
+                  <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: workspaceMode === 'github' ? 'rgba(59,142,255,0.14)' : 'rgba(63,185,80,0.12)', color: workspaceMode === 'github' ? C.accent : C.success, border: `1px solid ${workspaceMode === 'github' ? 'rgba(59,142,255,0.35)' : 'rgba(63,185,80,0.3)'}` }}>
+                    {workspaceMode === 'github' ? 'GitHub mode' : 'Local mode'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => setWorkspaceMode('local')}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '7px',
+                      border: `1px solid ${workspaceMode === 'local' ? C.accent : C.border}`,
+                      backgroundColor: workspaceMode === 'local' ? C.accentDim : C.surface,
+                      color: workspaceMode === 'local' ? C.accent : C.textSecondary,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Local files
+                  </button>
+                  <button
+                    onClick={() => setWorkspaceMode('github')}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '7px',
+                      border: `1px solid ${workspaceMode === 'github' ? C.accent : C.border}`,
+                      backgroundColor: workspaceMode === 'github' ? C.accentDim : C.surface,
+                      color: workspaceMode === 'github' ? C.accent : C.textSecondary,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    GitHub repo
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>GitHub Connector</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>Repo sync, branch pushes, PR creation, and webhook intake</div>
                   </div>
                   <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(63,185,80,0.12)', color: C.success, border: `1px solid rgba(63,185,80,0.3)` }}>Inbound webhook ready</span>
                 </div>
-                <input type="password" value={githubToken} onChange={(e) => { setGithubToken(e.target.value); }}
-                  placeholder={githubTokenMasked ? 'Saved (hidden). Type to replace.' : 'ghp_xxxx (Personal access token)'}
-                  style={{ ...inputStyle({ maxWidth: '380px', fontSize: '12px' }) }}
-                  onInput={() => { setGithubTokenMasked(false); }}
-                  onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-                  onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-                />
-                <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>Webhook URL: <code style={{ color: C.accent }}>/api/integrations/github/webhook</code></p>
+
+                <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: '1fr', marginBottom: '10px' }}>
+                  <input
+                    type="text"
+                    value={githubRepo}
+                    onChange={(e) => setGithubRepo(e.target.value)}
+                    placeholder="owner/repo (example: comp-a-a-s/compaas)"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                  <input
+                    type="text"
+                    value={githubDefaultBranch}
+                    onChange={(e) => setGithubDefaultBranch(e.target.value)}
+                    placeholder="Default branch (example: master)"
+                    style={{ ...inputStyle({ maxWidth: '260px', fontSize: '12px' }) }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                  <input
+                    type="password"
+                    value={githubToken}
+                    onChange={(e) => { setGithubToken(e.target.value); }}
+                    placeholder={githubTokenMasked ? 'Saved (hidden). Type to replace.' : 'ghp_xxxx (Personal access token)'}
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onInput={() => { setGithubTokenMasked(false); }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: C.textSecondary }}>
+                    <input type="checkbox" checked={githubAutoPush} onChange={(e) => setGithubAutoPush(e.target.checked)} />
+                    Auto-push commits
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: C.textSecondary }}>
+                    <input type="checkbox" checked={githubAutoPr} onChange={(e) => setGithubAutoPr(e.target.checked)} />
+                    Auto-open PRs
+                  </label>
+                </div>
+
+                <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>
+                  Webhook URL: <code style={{ color: C.accent }}>/api/integrations/github/webhook</code>
+                </p>
+              </div>
+
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Vercel Connector</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>Deploy generated apps directly to Vercel from the same workflow</div>
+                  </div>
+                  <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(59,142,255,0.14)', color: C.accent, border: `1px solid rgba(59,142,255,0.32)` }}>Deployment ready</span>
+                </div>
+
+                <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: '1fr' }}>
+                  <input
+                    type="password"
+                    value={vercelToken}
+                    onChange={(e) => { setVercelToken(e.target.value); }}
+                    placeholder={vercelTokenMasked ? 'Saved (hidden). Type to replace.' : 'Vercel token (vercel_...)'}
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onInput={() => { setVercelTokenMasked(false); }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                  <input
+                    type="text"
+                    value={vercelTeamId}
+                    onChange={(e) => setVercelTeamId(e.target.value)}
+                    placeholder="Team ID (optional)"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                  <input
+                    type="text"
+                    value={vercelProjectName}
+                    onChange={(e) => setVercelProjectName(e.target.value)}
+                    placeholder="Project name"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                </div>
               </div>
 
               <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
