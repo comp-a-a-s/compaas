@@ -34,6 +34,7 @@ COMPASS
  | |  | | | | |\/| | |_) | | | |/ _ \ \___ \
  | |__| |_| | |  | |  __/| |_| / ___ \ ___) |
   \____\___/|_|  |_|_|    \___/_/   \_\____/
+                      COMPaaS
 WORDMARK
     echo -e "${NC}"
     echo -e "${BLUE}=== COMPaaS Virtual Company - Installation ===${NC}"
