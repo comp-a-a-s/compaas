@@ -416,8 +416,14 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
     return () => { cancelled = true; };
   }, [selectedId]);
 
-  // Use the detailed version if available, otherwise fall back to list version
-  const selectedAgent = detailedAgent ?? agents.find((a) => a.id === selectedId) ?? null;
+  // Keep selection source-of-truth on selectedId so closing always hides the panel.
+  const selectedAgent = selectedId
+    ? (
+        detailedAgent && detailedAgent.id === selectedId
+          ? detailedAgent
+          : agents.find((a) => a.id === selectedId) ?? null
+      )
+    : null;
 
   // Filter agents by search query
   const filteredAgents = agents.filter((a) => {
@@ -535,7 +541,13 @@ export default function AgentPanel({ agents, loading }: AgentPanelProps) {
         {/* Detail panel */}
         {selectedAgent && (
           <div className="flex-1 overflow-hidden" style={{ minWidth: 0, minHeight: isNarrowViewport ? '420px' : 0 }}>
-            <DetailPanel agent={selectedAgent} onClose={() => setSelectedId(null)} />
+            <DetailPanel
+              agent={selectedAgent}
+              onClose={() => {
+                setSelectedId(null);
+                setDetailedAgent(null);
+              }}
+            />
           </div>
         )}
       </div>

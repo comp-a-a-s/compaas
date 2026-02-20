@@ -57,7 +57,7 @@ const POLL_INTERVAL_OPTIONS = [
 const THEMES = [
   { id: 'midnight', label: 'Midnight', description: 'Deep dark', preview: ['#0d1117', '#161b22', '#e6edf3'] },
   { id: 'twilight', label: 'Twilight', description: 'Soft blue dark', preview: ['#0f1923', '#1a2332', '#d0d8e4'] },
-  { id: 'dawn', label: 'Dawn', description: 'Bright daylight', preview: ['#fcfefb', '#f7fbfe', '#5d7283'] },
+  { id: 'dawn', label: 'Dawn', description: 'Bright daylight', preview: ['#f8fcff', '#f2f8ff', '#3f5768'] },
   { id: 'sahara', label: 'Sahara', description: 'Warm desert sand', preview: ['#1a1715', '#2d2924', '#d97757'] },
 ];
 
@@ -600,6 +600,11 @@ const LOCAL_PRESETS_SETTINGS = [
 
 const OPENAI_MODEL_PRESETS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'custom'];
 
+function detectLocalPreset(baseUrl: string): (typeof LOCAL_PRESETS_SETTINGS)[number]['id'] {
+  const match = LOCAL_PRESETS_SETTINGS.find((preset) => preset.baseUrl === baseUrl);
+  return match ? match.id : 'custom';
+}
+
 function AiProviderSection({
   llm,
   onSaved,
@@ -611,6 +616,7 @@ function AiProviderSection({
   const [baseUrl, setBaseUrl]           = useState(llm?.base_url ?? 'http://localhost:11434/v1');
   const [model, setModel]               = useState(llm?.model ?? 'llama3.2');
   const [apiKey, setApiKey]             = useState(llm?.api_key ?? '');
+  const [localPreset, setLocalPreset]   = useState<(typeof LOCAL_PRESETS_SETTINGS)[number]['id']>(() => detectLocalPreset(llm?.base_url ?? 'http://localhost:11434/v1'));
   const [systemPrompt, setSystemPrompt] = useState(llm?.system_prompt ?? '');
   const [proxyEnabled, setProxyEnabled] = useState(llm?.proxy_enabled ?? false);
   const [proxyUrl, setProxyUrl]         = useState(llm?.proxy_url ?? 'http://localhost:4000');
@@ -627,7 +633,11 @@ function AiProviderSection({
 
   const handlePreset = (presetId: string) => {
     const p = LOCAL_PRESETS_SETTINGS.find((x) => x.id === presetId);
-    if (p) { setBaseUrl(p.baseUrl); setApiKey(p.apiKey); }
+    if (p) {
+      setLocalPreset(p.id);
+      setBaseUrl(p.baseUrl);
+      setApiKey(p.apiKey);
+    }
   };
 
   const handleOpenaiPreset = (m: string) => {
@@ -641,6 +651,11 @@ function AiProviderSection({
     const result = await testLlmConnection({ base_url: baseUrl, model, api_key: apiKey });
     setTestStatus(result.status);
     setTestMessage(result.message);
+  };
+
+  const clearTestStatus = () => {
+    setTestStatus('idle');
+    setTestMessage('');
   };
 
   const handleSave = async () => {
@@ -770,9 +785,9 @@ function AiProviderSection({
               {LOCAL_PRESETS_SETTINGS.map((p) => (
                 <button key={p.id} onClick={() => handlePreset(p.id)} style={{
                   padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
-                  border: `1px solid ${baseUrl === p.baseUrl ? C.accent : C.border}`,
-                  backgroundColor: baseUrl === p.baseUrl ? 'rgba(88,166,255,0.15)' : C.surface,
-                  color: baseUrl === p.baseUrl ? C.accent : C.textSecondary, outline: 'none',
+                  border: `1px solid ${localPreset === p.id ? C.accent : C.border}`,
+                  backgroundColor: localPreset === p.id ? 'rgba(88,166,255,0.15)' : C.surface,
+                  color: localPreset === p.id ? C.accent : C.textSecondary, outline: 'none',
                 }}>
                   {p.label}
                 </button>
@@ -781,7 +796,14 @@ function AiProviderSection({
           </div>
           <div style={{ marginBottom: '10px' }}>
             <label style={labelStyle}>Base URL</label>
-            <input type="text" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
+            <input
+              type="text"
+              value={baseUrl}
+              onChange={(e) => {
+                const next = e.target.value;
+                setBaseUrl(next);
+                setLocalPreset(detectLocalPreset(next));
+              }}
               placeholder="http://localhost:11434/v1" style={inputStyle({ maxWidth: '420px' })}
               onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
               onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
@@ -832,6 +854,25 @@ function AiProviderSection({
           </button>
           {testStatus === 'error' && testMessage && (
             <span style={{ fontSize: '11px', color: C.error }}>{testMessage.slice(0, 120)}</span>
+          )}
+          {(testStatus === 'ok' || testStatus === 'error') && (
+            <button
+              onClick={clearTestStatus}
+              style={{
+                border: `1px solid ${C.border}`,
+                backgroundColor: 'transparent',
+                color: C.textMuted,
+                borderRadius: '6px',
+                fontSize: '11px',
+                lineHeight: 1,
+                padding: '4px 7px',
+                cursor: 'pointer',
+              }}
+              aria-label="Dismiss test status"
+              title="Dismiss status"
+            >
+              ×
+            </button>
           )}
         </div>
       )}
@@ -1148,7 +1189,11 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
 
       {activeTab === 'ai' && (
         <Section title="AI Model Provider">
-          <AiProviderSection llm={config?.llm} onSaved={() => { fetchConfig().then((c) => { if (c) setConfig(c); }); onConfigUpdated?.(); }} />
+          <AiProviderSection
+            key={`${config?.llm?.provider ?? 'none'}|${config?.llm?.base_url ?? 'none'}|${config?.llm?.model ?? 'none'}`}
+            llm={config?.llm}
+            onSaved={() => { fetchConfig().then((c) => { if (c) setConfig(c); }); onConfigUpdated?.(); }}
+          />
         </Section>
       )}
 

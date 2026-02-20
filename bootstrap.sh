@@ -38,7 +38,8 @@ else
         fi
         git -C "${COMPAAS_INSTALL_DIR}" fetch --depth 1 origin "${COMPAAS_BRANCH}"
         git -C "${COMPAAS_INSTALL_DIR}" checkout -q "${COMPAAS_BRANCH}"
-        git -C "${COMPAAS_INSTALL_DIR}" pull --ff-only --depth 1 origin "${COMPAAS_BRANCH}"
+        # Align to the remote branch tip even if local history diverged.
+        git -C "${COMPAAS_INSTALL_DIR}" reset --hard "origin/${COMPAAS_BRANCH}" >/dev/null
     else
         echo -e "${YELLOW}Cloning COMPaaS...${NC}"
         rm -rf "${COMPAAS_INSTALL_DIR}"

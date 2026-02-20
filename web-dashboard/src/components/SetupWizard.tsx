@@ -83,7 +83,7 @@ const NAME_TEMPLATES: Record<string, Record<string, string>> = {
 const THEMES = [
   { id: 'midnight', label: 'Midnight', description: 'Deep dark — easy on the eyes', preview: ['#0d1117', '#161b22', '#e6edf3'] },
   { id: 'twilight', label: 'Twilight', description: 'Softer dark with blue tones', preview: ['#0f1923', '#1a2332', '#d0d8e4'] },
-  { id: 'dawn', label: 'Dawn', description: 'Light mode — clean and bright', preview: ['#ffffff', '#f6f8fa', '#24292f'] },
+  { id: 'dawn', label: 'Dawn', description: 'Light mode — clean and bright', preview: ['#f8fcff', '#f2f8ff', '#3f5768'] },
   { id: 'sahara', label: 'Sahara', description: 'Warm desert sand — soft on eyes', preview: ['#1a1715', '#2d2924', '#d97757'] },
 ];
 

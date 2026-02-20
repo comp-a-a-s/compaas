@@ -50,26 +50,26 @@
 }
 
 [data-theme="dawn"] {
-  --tf-bg:              #fcfefb;
+  --tf-bg:              #f8fcff;
   --tf-surface:         #ffffff;
-  --tf-surface-raised:  #f7fbfe;
-  --tf-border:          #d9e5ee;
-  --tf-border-subtle:   #e7eef4;
-  --tf-text:            #22313b;
-  --tf-text-secondary:  #5d7283;
-  --tf-text-muted:      #7f93a2;
+  --tf-surface-raised:  #f2f8ff;
+  --tf-border:          #caddea;
+  --tf-border-subtle:   #dce8f2;
+  --tf-text:            #1c2e3a;
+  --tf-text-secondary:  #3f5768;
+  --tf-text-muted:      #5a7385;
   --tf-accent:          #1ba89b;
   --tf-accent-blue:     #3f8de8;
   --tf-accent-dim:      #1f67c8;
   --tf-success:         #27966f;
   --tf-warning:         #bf882b;
   --tf-error:           #c95f56;
-  --tf-scrollbar-track: #fcfefb;
-  --tf-scrollbar-thumb: #c7d6e3;
-  --tf-scrollbar-hover: #adbfce;
-  --tf-user-bubble:     #eaf5ff;
-  --tf-bg-gradient-a:   rgba(27, 168, 155, 0.08);
-  --tf-bg-gradient-b:   rgba(63, 141, 232, 0.06);
+  --tf-scrollbar-track: #f8fcff;
+  --tf-scrollbar-thumb: #b7cfde;
+  --tf-scrollbar-hover: #97b5c7;
+  --tf-user-bubble:     #e4f2ff;
+  --tf-bg-gradient-a:   rgba(27, 168, 155, 0.09);
+  --tf-bg-gradient-b:   rgba(63, 141, 232, 0.08);
 }
 
 [data-theme="sahara"] {
@@ -119,6 +119,13 @@ body {
   font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
   line-height: 1.5;
   min-height: 100vh;
+}
+
+[data-theme="dawn"] body {
+  background-image:
+    radial-gradient(1200px 520px at 10% -15%, var(--tf-bg-gradient-a), transparent 62%),
+    radial-gradient(1100px 560px at 95% -25%, var(--tf-bg-gradient-b), transparent 68%),
+    linear-gradient(180deg, color-mix(in srgb, var(--tf-bg) 98%, white) 0%, var(--tf-bg) 100%);
 }
 
 code,

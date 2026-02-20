@@ -565,6 +565,7 @@ export default function ChatPanel({
   const chatOpenRef = useRef(chatOpen);
   const onNewCeoMessageRef = useRef(onNewCeoMessage);
   const streamingAccumRef = useRef('');
+  const turnErroredRef = useRef(false);
 
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
   useEffect(() => { onNewCeoMessageRef.current = onNewCeoMessage; }, [onNewCeoMessage]);
@@ -695,12 +696,16 @@ export default function ChatPanel({
             case 'done': {
               const finalContent = streamingAccumRef.current || data.content || '';
               streamingAccumRef.current = '';
-              setMessages((prev) => [...prev, { role: 'ceo', content: finalContent, timestamp: new Date().toISOString() }]);
+              if (!turnErroredRef.current && finalContent.trim()) {
+                setMessages((prev) => [...prev, { role: 'ceo', content: finalContent, timestamp: new Date().toISOString() }]);
+              }
+              turnErroredRef.current = false;
               setStreamingContent(''); setThinkingContent(''); setActionLog([]); setIsWaiting(false);
               if (!chatOpenRef.current) onNewCeoMessageRef.current?.();
               break;
             }
             case 'error':
+              turnErroredRef.current = true;
               streamingAccumRef.current = '';
               setMessages((prev) => [...prev, { role: 'ceo', content: `[Error] ${data.content || 'Unknown error'}`, timestamp: new Date().toISOString() }]);
               setStreamingContent(''); setThinkingContent(''); setActionLog([]); setIsWaiting(false);
@@ -736,6 +741,7 @@ export default function ChatPanel({
     setMessages((prev) => [...prev, { role: 'user', content: text, timestamp: new Date().toISOString() }]);
     setInput(''); setIsWaiting(true); setStreamingContent(''); setThinkingContent(''); setActionLog([]);
     streamingAccumRef.current = '';
+    turnErroredRef.current = false;
     ws.send(JSON.stringify({ message: prefix + text }));
   }, [input, isWaiting, tone, connectWebSocket]);
 
