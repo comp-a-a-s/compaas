@@ -132,7 +132,8 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false }: O
       style={{
         backgroundColor: isActive ? 'rgba(63,185,80,0.06)' : 'var(--tf-surface-raised)',
         border: `1px solid ${isActive ? 'var(--tf-success)' : 'var(--tf-border)'}`,
-        minWidth: '96px',
+        minWidth: '88px',
+        maxWidth: '128px',
         cursor: onAgentClick ? 'pointer' : 'default',
         transition: 'border-color 0.3s, background-color 0.3s, box-shadow 0.3s',
         boxShadow: isActive ? '0 0 10px rgba(63,185,80,0.2)' : 'none',
@@ -506,7 +507,7 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
 
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width ?? 0;
-      setCompactLayout(width > 0 && width < 980);
+      setCompactLayout(width > 0 && width < 1180);
     });
     observer.observe(node);
     return () => observer.disconnect();
@@ -951,7 +952,10 @@ export default function Overview({
 
       {/* Org chart */}
       {widgets.orgchart && (
-        <div className="rounded-xl p-5" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
+        <div
+          className="rounded-xl p-5"
+          style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', overflow: 'hidden' }}
+        >
           <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
             Organization Hierarchy
           </h3>

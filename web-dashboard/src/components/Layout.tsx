@@ -148,6 +148,8 @@ export default function Layout({
                 zIndex: 60,
                 transform: mobileSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
                 boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+                pointerEvents: mobileSidebarOpen ? 'auto' : 'none',
+                visibility: mobileSidebarOpen ? 'visible' : 'hidden',
               }
             : {
                 width: sidebarIsCollapsed ? '56px' : '208px',
@@ -180,6 +182,29 @@ export default function Layout({
               </div>
             )}
           </div>
+          {isMobileViewport && (
+            <button
+              onClick={() => setMobileSidebarOpen(false)}
+              aria-label="Close navigation menu"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--tf-text-muted)',
+                cursor: 'pointer',
+                padding: '2px',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                flexShrink: 0,
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-muted)'; }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
           {!sidebarIsCollapsed && !isMobileViewport && (
             <button
               onClick={toggleSidebar}
@@ -531,7 +556,7 @@ export default function Layout({
       {isMobileViewport && mobileSidebarOpen && (
         <button
           onClick={() => setMobileSidebarOpen(false)}
-          aria-label="Close navigation menu"
+          aria-label="Close navigation overlay"
           style={{
             position: 'fixed',
             inset: 0,
