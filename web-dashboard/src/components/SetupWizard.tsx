@@ -206,6 +206,9 @@ function StepWelcome() {
         across engineering, product, research, and operations. This wizard takes about 2 minutes to configure
         your workspace.
       </p>
+      <p style={{ fontSize: '12px', color: C.textMuted, marginBottom: '18px' }}>
+        Built by Idan Hen
+      </p>
 
       {/* Features grid */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', maxWidth: '480px', margin: '0 auto', textAlign: 'left' }}>
@@ -1893,7 +1896,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               <div style={{ flexShrink: 0 }}>
                 <CompassRoseLogo size={28} />
               </div>
-              <span style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>COMPaaS Setup</span>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>COMPaaS Setup · Built by Idan Hen</span>
               <span
                 style={{
                   fontSize: '11px',
