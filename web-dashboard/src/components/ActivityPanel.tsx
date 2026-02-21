@@ -11,13 +11,15 @@ function actionBadgeStyle(action: string): { bg: string; text: string } {
   if (a.includes('STARTED') || a.includes('START')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
   if (a.includes('COMPLETED') || a.includes('DONE') || a.includes('FINISH')) return { bg: '#1a2e25', text: 'var(--tf-success)' };
   if (a.includes('BLOCKED') || a.includes('ERROR') || a.includes('FAIL')) return { bg: '#2d1519', text: 'var(--tf-error)' };
+  if (a.includes('WARNING') || a.includes('WARN')) return { bg: '#2d2213', text: 'var(--tf-warning)' };
   if (a.includes('ASSIGNED') || a.includes('ASSIGN')) return { bg: '#1c2233', text: 'var(--tf-accent)' };
   if (a.includes('UPDATED') || a.includes('UPDATE')) return { bg: '#2d2213', text: 'var(--tf-warning)' };
   if (a.includes('CREATED') || a.includes('CREATE')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
+  if (a.includes('MESSAGE')) return { bg: '#1f2f3f', text: 'var(--tf-accent)' };
   return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)' };
 }
 
-const ACTION_TYPES = ['ALL', 'STARTED', 'COMPLETED', 'BLOCKED', 'ASSIGNED', 'UPDATED', 'CREATED'];
+const ACTION_TYPES = ['ALL', 'STARTED', 'COMPLETED', 'BLOCKED', 'ASSIGNED', 'UPDATED', 'CREATED', 'MESSAGE', 'WARNING', 'ERROR'];
 
 function agentAvatarColor(name: string): string {
   const colors = [
@@ -55,6 +57,19 @@ function formatDate(ts: string): string {
   } catch {
     return '';
   }
+}
+
+function eventDetailText(event: ActivityEvent): string {
+  const base = (event.detail || '').trim();
+  const metadata = event.metadata || {};
+  const command = typeof metadata.command === 'string' ? metadata.command : '';
+  const filePath = typeof metadata.file_path === 'string' ? metadata.file_path : '';
+  const workspacePath = typeof metadata.workspace_path === 'string' ? metadata.workspace_path : '';
+  const extras = [command, filePath, workspacePath].filter(Boolean).join(' | ');
+  if (base && extras) return `${base} (${extras})`;
+  if (base) return base;
+  if (extras) return extras;
+  return '(no detail)';
 }
 
 // ---- Empty state ----
@@ -117,6 +132,14 @@ function EventBubble({ event, index }: EventBubbleProps) {
           <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>
             {agentName}
           </span>
+          {event.project_id && (
+            <span
+              className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0"
+              style={{ backgroundColor: 'var(--tf-surface)', color: 'var(--tf-accent-blue)', border: '1px solid var(--tf-border)' }}
+            >
+              {event.project_id}
+            </span>
+          )}
           <span
             className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0"
             style={{ backgroundColor: badge.bg, color: badge.text }}
@@ -134,7 +157,7 @@ function EventBubble({ event, index }: EventBubbleProps) {
           style={{ backgroundColor: 'var(--tf-surface-raised)' }}
         >
           <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
-            {event.detail || '(no detail)'}
+            {eventDetailText(event)}
           </p>
         </div>
       </div>
@@ -160,7 +183,7 @@ function AuditEntry({ event, index }: { event: ActivityEvent; index: number }) {
       </span>
       <span style={{ color: 'var(--tf-accent)', flexShrink: 0, width: '90px' }}>{event.agent}</span>
       <span style={{ color: 'var(--tf-text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {event.detail}
+        {event.project_id ? `[${event.project_id}] ` : ''}{eventDetailText(event)}
       </span>
     </div>
   );

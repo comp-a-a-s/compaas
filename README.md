@@ -112,6 +112,7 @@ Then open **CEO Chat** and give instructions like:
 
 The CEO can delegate to specialized agents (CTO, engineers, designers, etc.) for full-crew execution.
 For very small tasks, enable **Micro Project mode** in chat to run a fast solo response path.
+By default, project implementation output is written under `./projects/<project-name>-<id>/` (inside the COMPaaS workspace).
 
 ### Web Dashboard
 
@@ -127,13 +128,18 @@ Features:
 - Real-time activity feed (SSE)
 - Token usage metrics and budget tracking
 - CEO Chat — talk directly to Marcus from the dashboard (WebSocket-based, with streaming responses)
+- Project-scoped CEO sessions — each project keeps its own chat history/context and can be switched from the chat toolbar
 - Micro Project mode — optional fast solo CEO mode for very small tasks, with complexity guardrails and explicit quality warning
+- New project workflow — create projects directly from the Projects tab with immediate chat/project context sync
+- Execution bridge for OpenAI/Ollama — implementation requests are executed in a local workspace via Codex runtime so tasks produce real files
+- Structured project outputs — every project includes stakeholder summary, full plan, activation guide, and handoff templates
 - Setup wizard — guided first-run configuration for team names, theme, and preferences
 - Telegram integration — hand off sessions to your phone
 - Keyboard shortcuts — press `?` to see all shortcuts
 - Four themes — Midnight, Twilight, Dawn, and Sahara
+- Default theme — Midnight
 - Mobile-first navigation — drawer sidebar and stacked detail panels on narrow screens
-- Improved readability — stronger muted-text contrast in Twilight and Dawn themes
+- Improved readability — rebalanced contrast and unique palettes across Midnight, Twilight, Dawn, and Sahara
 - Perceived-speed tuning — tab-aware polling and reduced forced smooth scrolling during live updates
 - Provider runtimes — Anthropic (`Claude CLI` / `API key`), OpenAI (`API` / `Codex CLI`), and local OpenAI-compatible (`Ollama`, `LM Studio`, `llama.cpp`)
 

@@ -1,14 +1,17 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Project, Task, Decision } from '../types';
-import { fetchProjectDecisions, fetchProjectSpecs, approveProjectPlan } from '../api/client';
+import { fetchProjectDecisions, fetchProjectSpecs, approveProjectPlan, createProject } from '../api/client';
 
 interface ProjectPanelProps {
   projects: Project[];
   loading: boolean;
   tasksByProject: Record<string, Task[]>;
   initialProjectId?: string | null;
+  selectedProjectId?: string | null;
+  onSelectProject?: (projectId: string) => void;
   onProjectIdConsumed?: () => void;
   onRefresh?: () => void;
+  onProjectCreated?: (projectId: string) => void;
 }
 
 type ProjectTab = 'tasks' | 'plan' | 'milestones' | 'sprint' | 'discussions' | 'team' | 'info';
@@ -1278,9 +1281,23 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
 }
 
 // ---- Main ProjectPanel ----
-export default function ProjectPanel({ projects, loading, tasksByProject, initialProjectId, onProjectIdConsumed, onRefresh }: ProjectPanelProps) {
+export default function ProjectPanel({
+  projects,
+  loading,
+  tasksByProject,
+  initialProjectId,
+  selectedProjectId,
+  onSelectProject,
+  onProjectIdConsumed,
+  onRefresh,
+  onProjectCreated,
+}: ProjectPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [projectError, setProjectError] = useState('');
 
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -1295,13 +1312,36 @@ export default function ProjectPanel({ projects, loading, tasksByProject, initia
     }
   }, [initialProjectId, onProjectIdConsumed]);
 
-  const effectiveSelectedId = initialProjectId ?? selectedId;
+  const effectiveSelectedId = initialProjectId ?? selectedProjectId ?? selectedId;
   const selectedProject = projects.find((p) => p.id === effectiveSelectedId) ?? null;
   const selectedTasks = effectiveSelectedId ? (tasksByProject[effectiveSelectedId] ?? []) : [];
   const isNarrowViewport = viewportWidth <= 1100;
 
   const handleSelect = (id: string) => {
-    setSelectedId((prev) => (prev === id ? null : id));
+    const next = effectiveSelectedId === id ? null : id;
+    setSelectedId(next);
+    onSelectProject?.(next || '');
+  };
+
+  const handleCreateProject = async () => {
+    const name = newProjectName.trim();
+    if (!name || creatingProject) return;
+    setCreatingProject(true);
+    setProjectError('');
+    const created = await createProject({
+      name,
+      description: newProjectDescription.trim(),
+      type: 'app',
+    });
+    setCreatingProject(false);
+    if (!created?.project?.id) {
+      setProjectError('Unable to create project. Try again.');
+      return;
+    }
+    setNewProjectName('');
+    setNewProjectDescription('');
+    onProjectCreated?.(created.project.id);
+    onSelectProject?.(created.project.id);
   };
 
   if (loading) {
@@ -1326,8 +1366,58 @@ export default function ProjectPanel({ projects, loading, tasksByProject, initia
     return (
       <div className="flex flex-col items-center justify-center py-16 gap-3">
         <p className="text-sm" style={{ color: 'var(--tf-text-muted)' }}>
-          No projects found. Ask the CEO to start a project, or check the backend is running.
+          No projects found yet. Start one here or ask the CEO to initialize one from chat.
         </p>
+        <div className="w-full max-w-xl rounded-xl p-4" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
+          <div className="text-xs mb-2 font-semibold" style={{ color: 'var(--tf-text-secondary)' }}>Start New Project</div>
+          <input
+            type="text"
+            value={newProjectName}
+            onChange={(e) => setNewProjectName(e.target.value)}
+            placeholder="Project name"
+            style={{
+              width: '100%',
+              marginBottom: '8px',
+              backgroundColor: 'var(--tf-bg)',
+              border: '1px solid var(--tf-border)',
+              borderRadius: '8px',
+              color: 'var(--tf-text)',
+              fontSize: '13px',
+              padding: '8px 10px',
+            }}
+          />
+          <textarea
+            value={newProjectDescription}
+            onChange={(e) => setNewProjectDescription(e.target.value)}
+            placeholder="Brief description (optional)"
+            style={{
+              width: '100%',
+              minHeight: '66px',
+              resize: 'vertical',
+              marginBottom: '10px',
+              backgroundColor: 'var(--tf-bg)',
+              border: '1px solid var(--tf-border)',
+              borderRadius: '8px',
+              color: 'var(--tf-text)',
+              fontSize: '13px',
+              padding: '8px 10px',
+            }}
+          />
+          {projectError && <div className="text-xs mb-2" style={{ color: 'var(--tf-error)' }}>{projectError}</div>}
+          <button
+            onClick={handleCreateProject}
+            disabled={!newProjectName.trim() || creatingProject}
+            className="text-xs px-4 py-2 rounded-lg transition-colors"
+            style={{
+              backgroundColor: creatingProject ? 'var(--tf-surface-raised)' : 'var(--tf-accent)',
+              color: creatingProject ? 'var(--tf-text-muted)' : 'var(--tf-bg)',
+              border: 'none',
+              cursor: creatingProject ? 'wait' : 'pointer',
+            }}
+          >
+            {creatingProject ? 'Creating…' : 'Start Project'}
+          </button>
+        </div>
         {onRefresh && (
           <button
             onClick={onRefresh}
@@ -1352,6 +1442,40 @@ export default function ProjectPanel({ projects, loading, tasksByProject, initia
           maxWidth: selectedProject && !isNarrowViewport ? '300px' : 'none',
         }}
       >
+        <div className="rounded-xl p-3" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
+          <div className="text-xs mb-2 font-semibold" style={{ color: 'var(--tf-text-secondary)' }}>Start New Project</div>
+          <input
+            type="text"
+            value={newProjectName}
+            onChange={(e) => setNewProjectName(e.target.value)}
+            placeholder="Project name"
+            style={{
+              width: '100%',
+              marginBottom: '8px',
+              backgroundColor: 'var(--tf-bg)',
+              border: '1px solid var(--tf-border)',
+              borderRadius: '8px',
+              color: 'var(--tf-text)',
+              fontSize: '12px',
+              padding: '7px 9px',
+            }}
+          />
+          <button
+            onClick={handleCreateProject}
+            disabled={!newProjectName.trim() || creatingProject}
+            className="text-xs px-3 py-1.5 rounded-lg transition-colors"
+            style={{
+              backgroundColor: creatingProject ? 'var(--tf-surface-raised)' : 'var(--tf-accent)',
+              color: creatingProject ? 'var(--tf-text-muted)' : 'var(--tf-bg)',
+              border: 'none',
+              cursor: creatingProject ? 'wait' : 'pointer',
+              width: '100%',
+            }}
+          >
+            {creatingProject ? 'Creating…' : 'Start Project'}
+          </button>
+          {projectError && <div className="text-xs mt-2" style={{ color: 'var(--tf-error)' }}>{projectError}</div>}
+        </div>
         {projects.map((project) => (
           <ProjectListCard
             key={project.id}
@@ -1368,7 +1492,10 @@ export default function ProjectPanel({ projects, loading, tasksByProject, initia
           <ProjectDetail
             project={selectedProject}
             tasks={selectedTasks}
-            onClose={() => setSelectedId(null)}
+            onClose={() => {
+              setSelectedId(null);
+              onSelectProject?.('');
+            }}
             initialTab={initialProjectId ? 'plan' : undefined}
           />
         </div>

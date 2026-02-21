@@ -127,7 +127,15 @@ def rotate_log_if_needed(log_path: str) -> None:
 # Activity logging — emit events to activity.log for the SSE stream
 # ---------------------------------------------------------------------------
 
-def emit_activity(data_dir: str, agent: str, action: str, detail: str = "") -> None:
+def emit_activity(
+    data_dir: str,
+    agent: str,
+    action: str,
+    detail: str = "",
+    *,
+    project_id: str = "",
+    metadata: dict | None = None,
+) -> None:
     """Append a structured JSON line to activity.log.
 
     Events are consumed by the SSE ``/api/activity/stream`` endpoint and
@@ -141,12 +149,17 @@ def emit_activity(data_dir: str, agent: str, action: str, detail: str = "") -> N
     os.makedirs(data_dir, exist_ok=True)
     rotate_log_if_needed(log_path)
 
-    event = json.dumps({
+    event_data = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "action": action,
         "detail": detail,
-    })
+    }
+    if project_id:
+        event_data["project_id"] = project_id
+    if metadata:
+        event_data["metadata"] = metadata
+    event = json.dumps(event_data)
 
     try:
         with open(log_path, "a") as f:

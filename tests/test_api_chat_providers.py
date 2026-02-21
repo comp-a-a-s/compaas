@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
 
 import src.web.api as api
 import src.llm_provider as llm_provider
+from src.state.project_state import ProjectStateManager
 
 
 class _FakeWebSocket:
@@ -123,7 +125,7 @@ async def test_handle_ceo_claude_streams_chunks_actions_and_results(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_handle_ceo_claude_micro_mode_uses_plain_cli_and_suppresses_actions(monkeypatch):
+async def test_handle_ceo_claude_micro_mode_keeps_ceo_agent_and_warns_on_tool_use(monkeypatch):
     captured_cmd: list[str] = []
     lines = [
         json.dumps(
@@ -157,9 +159,10 @@ async def test_handle_ceo_claude_micro_mode_uses_plain_cli_and_suppresses_action
     )
 
     assert result == "Fast solo answer."
-    assert "--agent" not in captured_cmd
+    assert "--agent" in captured_cmd
+    assert "ceo" in captured_cmd
     event_types = [event["type"] for event in ws.events]
-    assert "action" not in event_types
+    assert "action" in event_types
     assert "chunk" in event_types
     assert "micro_project_warning" in event_types
 
@@ -265,6 +268,85 @@ async def test_handle_ceo_openai_reports_provider_errors(monkeypatch):
     assert "upstream failed" in ws.events[-1]["content"]
 
 
+@pytest.mark.asyncio
+async def test_handle_ceo_openai_stream_failure_falls_back_to_execution_bridge(monkeypatch):
+    async def _broken_stream(*_args, **_kwargs):
+        raise RuntimeError("upstream failed")
+        yield ""  # pragma: no cover
+
+    captured_bridge: dict = {}
+
+    async def _fake_bridge(*_args, **kwargs):
+        captured_bridge.update(kwargs)
+        return "Created index.html and styles.css"
+
+    monkeypatch.setattr(llm_provider, "stream_openai_compat", _broken_stream)
+    monkeypatch.setattr(api, "_handle_ceo_codex", _fake_bridge)
+
+    ws = _FakeWebSocket()
+    result = await api._handle_ceo_openai(
+        websocket=ws,
+        prompt="test",
+        llm_cfg={
+            "base_url": "http://localhost:11434/v1",
+            "model": "llama3.2",
+            "api_key": "ollama",
+        },
+        ceo_name="Marcus",
+        user_message="Build a simple web page with HTML and CSS",
+        project={"name": "Bridge Project", "workspace_path": "/tmp/bridge-project"},
+        project_id="abcd1234",
+    )
+
+    assert result is not None
+    assert "index.html" in result
+    assert captured_bridge["workdir"] == "/tmp/bridge-project"
+    assert all(event["type"] != "error" for event in ws.events)
+    assert any(
+        event["type"] == "action_result"
+        and "continuing with direct workspace execution" in event.get("content", "").lower()
+        for event in ws.events
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_ceo_openai_timeout_falls_back_to_execution_bridge(monkeypatch):
+    async def _slow_stream(*_args, **_kwargs):
+        await asyncio.sleep(0.2)
+        if False:  # pragma: no cover
+            yield ""
+
+    async def _fake_bridge(*_args, **_kwargs):
+        return "Bridge completed after timeout"
+
+    monkeypatch.setattr(llm_provider, "stream_openai_compat", _slow_stream)
+    monkeypatch.setattr(api, "_handle_ceo_codex", _fake_bridge)
+    monkeypatch.setenv("COMPAAS_STREAM_FIRST_TOKEN_TIMEOUT_S", "0.01")
+
+    ws = _FakeWebSocket()
+    result = await api._handle_ceo_openai(
+        websocket=ws,
+        prompt="test",
+        llm_cfg={
+            "base_url": "http://localhost:11434/v1",
+            "model": "llama3.2",
+            "api_key": "ollama",
+        },
+        ceo_name="Marcus",
+        user_message="Create index.html for this project",
+        project={"name": "Timeout Project", "workspace_path": "/tmp/timeout-project"},
+        project_id="facecafe",
+    )
+
+    assert result is not None
+    assert "Bridge completed after timeout" in result
+    assert any(
+        event["type"] == "action_result"
+        and "timed out; continuing with direct workspace execution" in event.get("content", "").lower()
+        for event in ws.events
+    )
+
+
 def test_micro_project_complexity_reason_flags_large_request():
     reason = api._micro_project_complexity_reason(
         "Plan architecture and deployment strategy for an end-to-end OAuth migration "
@@ -285,3 +367,38 @@ def test_build_micro_project_prompt_adds_constraints():
     assert "Do not delegate" in prompt
     assert "Idan" in prompt
     assert "Marcus" in prompt
+
+
+def test_resolve_chat_project_creates_for_build_request(tmp_path, monkeypatch):
+    data_dir = tmp_path / "company_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    manager = ProjectStateManager(str(data_dir))
+
+    monkeypatch.setattr(api, "DATA_DIR", str(data_dir))
+    monkeypatch.setattr(api, "state_manager", manager)
+    monkeypatch.setattr(api, "CHAT_LOG_PATH", str(data_dir / "chat_messages.json"))
+
+    project_id, project, created = api._resolve_chat_project("", "build me a simple web page", "Idan")
+
+    assert created is True
+    assert project_id
+    assert project is not None
+    assert project["workspace_path"].startswith(str(tmp_path))
+
+
+def test_chat_history_scopes_by_project_id(tmp_path, monkeypatch):
+    data_dir = tmp_path / "company_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    manager = ProjectStateManager(str(data_dir))
+    project_id = manager.create_project("Scoped", "Scoped chat", "app")
+
+    monkeypatch.setattr(api, "state_manager", manager)
+    monkeypatch.setattr(api, "CHAT_LOG_PATH", str(data_dir / "chat_messages.json"))
+
+    api._save_chat_messages([])
+    api._append_chat_message("user", "global message", project_id="")
+    api._append_chat_message("user", "project message", project_id=project_id)
+
+    scoped = api._load_chat_messages(project_id=project_id)
+    assert len(scoped) == 1
+    assert scoped[0]["content"] == "project message"

@@ -7,6 +7,7 @@ tasks, activity stream, token metrics, agents, and model settings.
 import logging
 import os
 import json
+import re
 import shutil
 import asyncio
 import copy
@@ -15,7 +16,7 @@ import hmac
 import ipaddress
 import time
 import yaml
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ from src.state.task_board import TaskBoard
 from src.mcp_server.company_tools import CORE_TEAM, ON_DEMAND_TEAM
 from src.agents import AGENT_REGISTRY, get_agent_display_name
 from src.validators import validate_safe_id
-from src.utils import resolve_data_dir, resolve_project_root
+from src.utils import emit_activity, resolve_data_dir, resolve_project_root
 
 
 # ---------------------------------------------------------------------------
@@ -38,8 +39,11 @@ from src.utils import resolve_data_dir, resolve_project_root
 
 DATA_DIR = resolve_data_dir()
 PROJECT_ROOT = resolve_project_root()
+WORKSPACE_ROOT = os.path.abspath(
+    os.environ.get("COMPAAS_WORKSPACE_ROOT", "").strip() or os.path.join(PROJECT_ROOT, "projects")
+)
 
-state_manager = ProjectStateManager(DATA_DIR)
+state_manager = ProjectStateManager(DATA_DIR, workspace_root=WORKSPACE_ROOT)
 task_board = TaskBoard(DATA_DIR)
 
 # ---------------------------------------------------------------------------
@@ -302,6 +306,29 @@ def list_projects() -> list[dict]:
     return result
 
 
+@app.post("/api/projects", summary="Create a new project")
+def create_project(body: dict | None = None) -> dict:
+    """Create a project and return full project metadata."""
+    payload = body or {}
+    name = str(payload.get("name", "") or "").strip()
+    description = str(payload.get("description", "") or "").strip()
+    project_type = str(payload.get("type", "") or "general").strip() or "general"
+    if not name:
+        raise HTTPException(status_code=400, detail="Project name is required.")
+
+    project_id = state_manager.create_project(name, description, project_type)
+    project = state_manager.get_project(project_id) or {"id": project_id, "name": name}
+    emit_activity(
+        DATA_DIR,
+        "ceo",
+        "CREATED",
+        f"Project '{name}' initialized",
+        project_id=project_id,
+        metadata={"workspace_path": project.get("workspace_path", "")},
+    )
+    return {"status": "ok", "project": project}
+
+
 @app.get("/api/projects/{project_id}", summary="Get a single project with full task board")
 def get_project(project_id: str) -> dict:
     """Return a project's full details including the complete task board."""
@@ -532,7 +559,7 @@ DEFAULT_CONFIG: dict = {
         "tech-writer": "Tom",
     },
     "ui": {
-        "theme": "dark",
+        "theme": "midnight",
         "poll_interval_ms": 5000,
     },
     "server": {
@@ -933,16 +960,62 @@ CHAT_LOG_PATH = os.path.join(DATA_DIR, "chat_messages.json")
 _chat_lock = asyncio.Lock()
 
 
-def _load_chat_messages() -> list[dict]:
-    """Load chat messages from disk."""
+_EXECUTION_INTENT_KEYWORDS = (
+    "build",
+    "create",
+    "develop",
+    "fix",
+    "implement",
+    "scaffold",
+    "ship",
+    "deploy",
+    "code",
+)
+_PROJECT_START_HINTS = (
+    "new project",
+    "start a project",
+    "start project",
+    "build me",
+    "create an app",
+    "create a project",
+    "launch a project",
+)
+
+
+def _normalize_project_id(project_id: str) -> str:
+    pid = (project_id or "").strip()
+    if not pid:
+        return ""
+    try:
+        validate_safe_id(pid, "project_id")
+    except ValueError:
+        return ""
+    return pid
+
+
+def _load_chat_messages(project_id: str = "", include_global: bool = False) -> list[dict]:
+    """Load chat messages from disk, optionally scoped to a project."""
     if not os.path.exists(CHAT_LOG_PATH):
         return []
     try:
         with open(CHAT_LOG_PATH) as f:
             data = json.load(f)
-        return data.get("messages", [])
+        messages = data.get("messages", [])
     except (json.JSONDecodeError, OSError):
         return []
+
+    pid = _normalize_project_id(project_id)
+    if not pid:
+        return messages
+
+    filtered: list[dict] = []
+    for msg in messages:
+        msg_pid = _normalize_project_id(str(msg.get("project_id", "") or ""))
+        if msg_pid == pid:
+            filtered.append(msg)
+        elif include_global and not msg_pid:
+            filtered.append(msg)
+    return filtered
 
 
 def _save_chat_messages(messages: list[dict]) -> None:
@@ -952,20 +1025,90 @@ def _save_chat_messages(messages: list[dict]) -> None:
         json.dump({"messages": messages}, f, indent=2)
 
 
-def _append_chat_message(role: str, content: str) -> dict:
-    """Append a message and return it."""
+def _append_chat_message(role: str, content: str, project_id: str = "") -> dict:
+    """Append a chat message and return it."""
     msg = {
         "role": role,
         "content": content,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "project_id": _normalize_project_id(project_id),
     }
     messages = _load_chat_messages()
     messages.append(msg)
-    # Keep last 200 messages
-    if len(messages) > 200:
-        messages = messages[-200:]
+    if len(messages) > 600:
+        messages = messages[-600:]
     _save_chat_messages(messages)
     return msg
+
+
+def _latest_chat_project_id() -> str:
+    """Return the most recent project ID present in chat history."""
+    messages = _load_chat_messages()
+    for msg in reversed(messages):
+        msg_pid = _normalize_project_id(str(msg.get("project_id", "") or ""))
+        if msg_pid:
+            return msg_pid
+    return ""
+
+
+def _message_requests_execution(message: str) -> bool:
+    lower = (message or "").lower()
+    return any(keyword in lower for keyword in _EXECUTION_INTENT_KEYWORDS)
+
+
+def _message_starts_new_project(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if any(hint in text for hint in _PROJECT_START_HINTS):
+        return True
+    return _message_requests_execution(text) and len(text.split()) >= 4
+
+
+def _infer_project_name_from_message(message: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9\s-]+", " ", (message or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return "New Project"
+
+    stop_words = {"build", "create", "develop", "make", "please", "me", "a", "an", "the", "to"}
+    words = [w for w in cleaned.split(" ") if w and w.lower() not in stop_words]
+    if not words:
+        return "New Project"
+    title = " ".join(words[:6]).strip()
+    if len(title) > 60:
+        title = title[:60].rsplit(" ", 1)[0]
+    return title.title() or "New Project"
+
+
+def _resolve_chat_project(project_id: str, user_message: str, user_name: str) -> tuple[str, dict | None, bool]:
+    """Resolve active chat project, auto-creating one when needed."""
+    pid = _normalize_project_id(project_id)
+    if pid:
+        project = state_manager.get_project(pid)
+        if project:
+            return pid, project, False
+
+    latest_pid = _latest_chat_project_id()
+    if latest_pid and not _message_starts_new_project(user_message):
+        latest_project = state_manager.get_project(latest_pid)
+        if latest_project:
+            return latest_pid, latest_project, False
+
+    if _message_starts_new_project(user_message):
+        project_name = _infer_project_name_from_message(user_message)
+        project_desc = f"Auto-created from CEO chat request by {user_name}."
+        new_pid = state_manager.create_project(project_name, project_desc, "app")
+        new_project = state_manager.get_project(new_pid)
+        emit_activity(
+            DATA_DIR,
+            "ceo",
+            "CREATED",
+            f"Project '{project_name}' opened from chat",
+            project_id=new_pid,
+            metadata={"workspace_path": (new_project or {}).get("workspace_path", "")},
+        )
+        return new_pid, new_project, True
+
+    return "", None, False
 
 
 def _build_context_prompt(
@@ -974,17 +1117,17 @@ def _build_context_prompt(
     user_name: str = "User",
     ceo_name: str = "CEO",
     company_name: str = "",
+    project_id: str = "",
 ) -> str:
-    """Build a prompt that includes recent conversation context and persona context."""
-    messages = _load_chat_messages()
+    """Build a prompt that includes project-aware context and conversation history."""
+    messages = _load_chat_messages(project_id=project_id, include_global=False) if project_id else _load_chat_messages()
     recent = messages[-history_limit:] if len(messages) > history_limit else messages
+    active_project = state_manager.get_project(project_id) if project_id else None
     cfg = _load_config()
     integrations = cfg.get("integrations", {}) if isinstance(cfg, dict) else {}
 
     parts: list[str] = []
 
-    # Inject persona context so the CEO knows its own name and the user's role regardless
-    # of what may be hardcoded in the agent definition file.
     company_label = f" of {company_name}" if company_name else ""
     parts.append(
         f"[CONTEXT: You are {ceo_name}, the CEO{company_label}. "
@@ -993,12 +1136,26 @@ def _build_context_prompt(
     )
     parts.append("")
 
-    # Inject persistent CEO memories if any exist
+    if active_project:
+        workspace_path = str(active_project.get("workspace_path", "") or "")
+        project_name = active_project.get("name", project_id)
+        parts.append(
+            f"[ACTIVE PROJECT: {project_name} ({project_id}). "
+            f"Workspace path: {workspace_path}. "
+            "All generated code must stay inside this workspace path. "
+            "Keep project deliverables updated in company_data: "
+            "specs/00_stakeholder_meeting_summary.md, "
+            "specs/01_full_execution_plan.md, "
+            "artifacts/02_activation_guide.md, "
+            "artifacts/03_project_handoff.md.]"
+        )
+        parts.append("")
+
     if os.path.exists(MEMORY_PATH):
-        with open(MEMORY_PATH) as _mf:
-            _mem = _mf.read().strip()
-        if _mem:
-            parts.append(f"[YOUR PERSISTENT MEMORIES from previous sessions:\n{_mem}]")
+        with open(MEMORY_PATH) as memory_file:
+            memory_text = memory_file.read().strip()
+        if memory_text:
+            parts.append(f"[YOUR PERSISTENT MEMORIES from previous sessions:\n{memory_text}]")
             parts.append("")
 
     if recent:
@@ -1008,7 +1165,6 @@ def _build_context_prompt(
             parts.append(f"{speaker}: {msg['content']}")
         parts.append("")
 
-    # Execution and delivery preferences from integrations config.
     workspace_mode = integrations.get("workspace_mode", "local")
     github_repo = str(integrations.get("github_repo", "") or "").strip()
     github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
@@ -1024,13 +1180,14 @@ def _build_context_prompt(
             f"Target repository: {repo_label}. Default branch: {github_branch}. "
             f"Auto-push is {'enabled' if github_auto_push else 'disabled'}. "
             f"Auto-PR is {'enabled' if github_auto_pr else 'disabled'}. "
-            "Prefer proposing concrete git actions and branch/PR steps.]"
+            "Provide concrete git commands, branch names, and PR summaries.]"
         )
         parts.append("")
     else:
         parts.append(
             "[DELIVERY MODE: Local workspace. "
-            "Prefer writing and validating changes locally unless the Chairman explicitly asks for GitHub actions.]"
+            f"Primary workspace root is {WORKSPACE_ROOT}. "
+            "Write project output files there.]"
         )
         parts.append("")
 
@@ -1038,13 +1195,16 @@ def _build_context_prompt(
         parts.append(
             "[DEPLOYMENT: Vercel connector is configured. "
             f"Preferred project name: {vercel_project_name}. "
-            "You may propose deployment steps when the Chairman asks to ship.]"
+            "Offer deployment steps whenever shipping is requested.]"
         )
         parts.append("")
 
     parts.append(f"{user_name} says now: {user_message}")
     parts.append("")
-    parts.append(f"Respond to {user_name}'s latest message. You have full access to your MCP tools for company operations.")
+    parts.append(
+        f"Respond to {user_name}'s latest message. "
+        "For build requests, execute concrete implementation actions and report files/commands explicitly."
+    )
     return "\n".join(parts)
 
 
@@ -1146,18 +1306,83 @@ def _format_tool_action(tool_name: str, tool_input: dict) -> str:
     return f"Using {tool_name}"
 
 
+def _emit_chat_activity(
+    agent: str,
+    action: str,
+    detail: str,
+    *,
+    project_id: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    emit_activity(
+        DATA_DIR,
+        agent,
+        action,
+        detail,
+        project_id=_normalize_project_id(project_id),
+        metadata=metadata,
+    )
+
+
+def _should_trigger_execution_bridge(user_message: str, project_id: str) -> bool:
+    if not project_id:
+        return False
+    return _message_requests_execution(user_message)
+
+
+def _build_execution_bridge_prompt(
+    user_message: str,
+    model_response: str,
+    *,
+    project_name: str,
+    project_id: str,
+    workspace_path: str,
+) -> str:
+    """Build a constrained implementation prompt for Codex execution bridge."""
+    return (
+        "You are executing implementation work for COMPaaS.\n"
+        f"Project: {project_name} ({project_id})\n"
+        f"Workspace path: {workspace_path}\n\n"
+        "Hard constraints:\n"
+        "- Create or modify files only inside the workspace path.\n"
+        "- If new package files are needed, keep them minimal and runnable.\n"
+        "- Do not ask for interactive approvals.\n"
+        "- Print the exact files changed and commands run.\n\n"
+        f"Chairman request:\n{user_message}\n\n"
+        "Execution brief from reasoning model:\n"
+        f"{model_response}\n\n"
+        "Now implement the requested solution directly in the workspace and summarize results."
+    )
+
+
 @app.get("/api/chat/history", summary="Get CEO chat message history")
-def chat_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
+def chat_history(
+    limit: int = Query(default=50, ge=1, le=300),
+    project_id: str = Query(default="", description="Optional project scope"),
+) -> list[dict]:
     """Return recent chat messages."""
-    messages = _load_chat_messages()
+    normalized = _normalize_project_id(project_id)
+    if (project_id or "").strip() and not normalized:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
+    messages = _load_chat_messages(project_id=normalized)
     return messages[-limit:]
 
 
 @app.delete("/api/chat/history", summary="Clear chat history")
-def clear_chat_history() -> dict:
-    """Clear the chat log."""
-    _save_chat_messages([])
-    return {"status": "cleared"}
+def clear_chat_history(project_id: str = Query(default="", description="Optional project scope")) -> dict:
+    """Clear the chat log globally or for a single project."""
+    raw_pid = (project_id or "").strip()
+    pid = _normalize_project_id(project_id)
+    if raw_pid and not pid:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
+    if not pid:
+        _save_chat_messages([])
+        return {"status": "cleared", "scope": "all"}
+
+    messages = _load_chat_messages()
+    remaining = [m for m in messages if _normalize_project_id(str(m.get("project_id", "") or "")) != pid]
+    _save_chat_messages(remaining)
+    return {"status": "cleared", "scope": pid}
 
 
 # ---------------------------------------------------------------------------
@@ -1171,6 +1396,7 @@ async def _handle_ceo_claude(
     llm_cfg: dict,
     ceo_name: str = "CEO",
     micro_project_mode: bool = False,
+    project_id: str = "",
 ) -> str | None:
     """Handle a CEO chat turn using the Claude Code CLI subprocess.
 
@@ -1201,12 +1427,14 @@ async def _handle_ceo_claude(
     process = None
     saw_tool_use = False
     try:
-        cmd = [claude_path]
-        if micro_project_mode:
-            cmd.extend(["-p", prompt])
-        else:
-            cmd.extend(["--agent", "ceo", "-p", prompt])
+        cmd = [claude_path, "--agent", "ceo", "-p", prompt]
         cmd.extend(["--output-format", "stream-json", "--verbose"])
+        _emit_chat_activity(
+            "ceo",
+            "STARTED",
+            "Launching Claude CEO runtime (permission mode: bypassPermissions)",
+            project_id=project_id,
+        )
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1230,6 +1458,12 @@ async def _handle_ceo_claude(
                     "type": "thinking",
                     "content": f"{ceo_name} is working… ({idle_ticks * 30}s)",
                 })
+                _emit_chat_activity(
+                    "ceo",
+                    "UPDATED",
+                    f"Claude runtime still processing ({idle_ticks * 30}s)",
+                    project_id=project_id,
+                )
                 if process.returncode is not None:
                     break
                 continue
@@ -1262,11 +1496,11 @@ async def _handle_ceo_claude(
                             await websocket.send_json({"type": "chunk", "content": text})
                     elif btype == "tool_use":
                         saw_tool_use = True
-                        if not micro_project_mode:
-                            action_label = _format_tool_action(
-                                block.get("name", "tool"), block.get("input", {})
-                            )
-                            await websocket.send_json({"type": "action", "content": action_label})
+                        action_label = _format_tool_action(
+                            block.get("name", "tool"), block.get("input", {})
+                        )
+                        await websocket.send_json({"type": "action", "content": action_label})
+                        _emit_chat_activity("ceo", "STARTED", action_label, project_id=project_id)
 
             elif event_type == "user":
                 for block in event.get("message", {}).get("content", []):
@@ -1277,9 +1511,10 @@ async def _handle_ceo_claude(
                                 c.get("text", "") for c in content
                                 if isinstance(c, dict) and c.get("type") == "text"
                             )
-                        if content and content.strip() and not micro_project_mode:
+                        if content and content.strip():
                             preview = content.strip()[:200].replace("\n", " ")
                             await websocket.send_json({"type": "action_result", "content": preview})
+                            _emit_chat_activity("ceo", "COMPLETED", preview, project_id=project_id)
 
             elif event_type == "result":
                 # Final result — use this as the canonical response
@@ -1289,6 +1524,7 @@ async def _handle_ceo_claude(
             elif event_type == "error":
                 err = event.get("message", "Unknown error")
                 await websocket.send_json({"type": "error", "content": err})
+                _emit_chat_activity("ceo", "ERROR", str(err), project_id=project_id)
                 return None
 
         if full_response is None:
@@ -1309,6 +1545,7 @@ async def _handle_ceo_claude(
                     pass
             error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
             await websocket.send_json({"type": "error", "content": error_msg})
+            _emit_chat_activity("ceo", "ERROR", error_msg, project_id=project_id)
             return None
 
         if micro_project_mode and saw_tool_use:
@@ -1316,14 +1553,30 @@ async def _handle_ceo_claude(
                 "type": "micro_project_warning",
                 "content": "Micro Project mode detected tool/delegation activity. Disable Micro Project mode for full-crew execution quality.",
             })
+            _emit_chat_activity(
+                "ceo",
+                "WARNING",
+                "Micro mode triggered tool activity; consider full crew mode.",
+                project_id=project_id,
+            )
+
+        _emit_chat_activity(
+            "ceo",
+            "COMPLETED",
+            "CEO response generated",
+            project_id=project_id,
+            metadata={"micro_project_mode": micro_project_mode, "tool_use_detected": saw_tool_use},
+        )
 
         return full_response
 
     except OSError as exc:
         await websocket.send_json({"type": "error", "content": f"Failed to start CEO agent: {exc}"})
+        _emit_chat_activity("ceo", "ERROR", f"Failed to start CEO agent: {exc}", project_id=project_id)
         return None
     except Exception as exc:
         await websocket.send_json({"type": "error", "content": f"Chat error: {str(exc)[:200]}"})
+        _emit_chat_activity("ceo", "ERROR", f"Chat error: {str(exc)[:200]}", project_id=project_id)
         return None
     finally:
         if process and process.returncode is None:
@@ -1338,14 +1591,16 @@ async def _handle_ceo_codex(
     prompt: str,
     llm_cfg: dict,
     ceo_name: str = "CEO",
+    project_id: str = "",
+    workdir: str = "",
+    activity_context: str = "chat",
 ) -> str | None:
     """Handle a CEO chat turn using local Codex CLI JSON streaming output."""
     codex_path = shutil.which("codex")
     if not codex_path:
-        await websocket.send_json({
-            "type": "error",
-            "content": "Codex CLI not found. Install: npm install -g @openai/codex",
-        })
+        message = "Codex CLI not found. Install: npm install -g @openai/codex"
+        await websocket.send_json({"type": "error", "content": message})
+        _emit_chat_activity("ceo", "ERROR", message, project_id=project_id)
         return None
 
     env = os.environ.copy()
@@ -1354,20 +1609,33 @@ async def _handle_ceo_codex(
         env["OPENAI_API_KEY"] = api_key
 
     process = None
+    run_cwd = os.path.abspath(workdir or PROJECT_ROOT)
 
-    await websocket.send_json({"type": "action", "content": "Launching Codex CLI…"})
+    await websocket.send_json({
+        "type": "action",
+        "content": f"Launching Codex executor in {run_cwd} (auto approvals enabled)…",
+    })
+    _emit_chat_activity(
+        "ceo",
+        "STARTED",
+        f"Codex executor started ({activity_context})",
+        project_id=project_id,
+        metadata={"cwd": run_cwd},
+    )
     try:
         process = await asyncio.create_subprocess_exec(
             codex_path,
             "exec",
             "--json",
+            "--full-auto",
             "--sandbox",
             "workspace-write",
+            "--skip-git-repo-check",
             prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
-            cwd=PROJECT_ROOT,
+            cwd=run_cwd,
         )
 
         response_parts: list[str] = []
@@ -1384,6 +1652,12 @@ async def _handle_ceo_codex(
                     "type": "thinking",
                     "content": f"{ceo_name} is working… ({idle_ticks * 30}s)",
                 })
+                _emit_chat_activity(
+                    "ceo",
+                    "UPDATED",
+                    f"Codex executor still running ({idle_ticks * 30}s)",
+                    project_id=project_id,
+                )
                 if process.returncode is not None:
                     break
                 continue
@@ -1401,16 +1675,68 @@ async def _handle_ceo_codex(
                 continue
 
             event_type = event.get("type", "")
-            if event_type == "item.completed":
+            if event_type in ("item.started", "item.completed"):
                 item = event.get("item") or {}
                 item_type = item.get("type", "")
+
+                if item_type == "command_execution":
+                    command = str(item.get("command", "") or "").strip()
+                    command_hint = command or str(item.get("title", "") or item.get("description", "")).strip()
+                    if event_type == "item.started":
+                        label = f"Running: {command_hint[:180]}" if command_hint else "Running command (details unavailable)"
+                        await websocket.send_json({"type": "action", "content": label})
+                        _emit_chat_activity(
+                            "ceo",
+                            "STARTED",
+                            label,
+                            project_id=project_id,
+                            metadata={"command": command_hint},
+                        )
+                    else:
+                        exit_code = item.get("exit_code")
+                        output = str(item.get("aggregated_output", "") or "").strip().replace("\n", " ")
+                        output_preview = output[:160] if output else ""
+                        result = f"Command exit={exit_code}"
+                        if output_preview:
+                            result = f"{result}: {output_preview}"
+                        await websocket.send_json({"type": "action_result", "content": result})
+                        _emit_chat_activity(
+                            "ceo",
+                            "COMPLETED",
+                            result,
+                            project_id=project_id,
+                            metadata={"command": command_hint, "exit_code": exit_code},
+                        )
+                    continue
+
+                if item_type == "file_change":
+                    changed = str(item.get("path") or item.get("file_path") or item.get("description") or "").strip()
+                    if event_type == "item.started":
+                        label = f"Updating file: {changed[:180]}" if changed else "Updating files"
+                        await websocket.send_json({"type": "action", "content": label})
+                        _emit_chat_activity("ceo", "STARTED", label, project_id=project_id, metadata={"file_path": changed})
+                    else:
+                        result = f"Updated file: {changed[:180]}" if changed else "File update completed"
+                        await websocket.send_json({"type": "action_result", "content": result})
+                        _emit_chat_activity("ceo", "COMPLETED", result, project_id=project_id, metadata={"file_path": changed})
+                    continue
+
+                if event_type == "item.started":
+                    continue
+
                 if item_type == "agent_message":
                     text = (item.get("text") or "").strip()
                     if text:
                         if not seen_first_output:
                             seen_first_output = True
-                            await websocket.send_json({"type": "action_result", "content": "Connected"})
+                            await websocket.send_json({"type": "action_result", "content": "Execution stream connected"})
                             await websocket.send_json({"type": "action", "content": "Generating response…"})
+                            _emit_chat_activity(
+                                "ceo",
+                                "UPDATED",
+                                "Codex execution stream connected",
+                                project_id=project_id,
+                            )
                         response_parts.append(text)
                         await websocket.send_json({"type": "chunk", "content": text})
                 elif item_type == "reasoning":
@@ -1420,12 +1746,16 @@ async def _handle_ceo_codex(
                 else:
                     label = (item.get("title") or item.get("text") or item_type or "Working").strip()
                     if label:
-                        await websocket.send_json({"type": "action", "content": label[:240]})
+                        preview = label[:240]
+                        await websocket.send_json({"type": "action", "content": preview})
+                        _emit_chat_activity("ceo", "STARTED", preview, project_id=project_id)
             elif event_type == "turn.completed":
                 break
             elif event_type == "error":
                 message = event.get("message") or event.get("error") or "Unknown Codex error"
-                await websocket.send_json({"type": "error", "content": str(message)[:300]})
+                err = str(message)[:300]
+                await websocket.send_json({"type": "error", "content": err})
+                _emit_chat_activity("ceo", "ERROR", err, project_id=project_id)
                 return None
 
         try:
@@ -1446,14 +1776,33 @@ async def _handle_ceo_codex(
                 "type": "error",
                 "content": stderr_text[:500] or f"Codex exited with code {process.returncode}",
             })
+            _emit_chat_activity(
+                "ceo",
+                "ERROR",
+                stderr_text[:500] or f"Codex exited with code {process.returncode}",
+                project_id=project_id,
+            )
             return None
 
-        return full_response or None
+        final_response = full_response or None
+        if final_response:
+            _emit_chat_activity(
+                "ceo",
+                "COMPLETED",
+                f"Codex execution completed ({activity_context})",
+                project_id=project_id,
+                metadata={"cwd": run_cwd},
+            )
+        return final_response
     except OSError as exc:
-        await websocket.send_json({"type": "error", "content": f"Failed to start Codex CLI: {exc}"})
+        message = f"Failed to start Codex CLI: {exc}"
+        await websocket.send_json({"type": "error", "content": message})
+        _emit_chat_activity("ceo", "ERROR", message, project_id=project_id)
         return None
     except Exception as exc:
-        await websocket.send_json({"type": "error", "content": f"Codex chat error: {str(exc)[:200]}"})
+        message = f"Codex chat error: {str(exc)[:200]}"
+        await websocket.send_json({"type": "error", "content": message})
+        _emit_chat_activity("ceo", "ERROR", message, project_id=project_id)
         return None
     finally:
         if process and process.returncode is None:
@@ -1468,6 +1817,10 @@ async def _handle_ceo_openai(
     prompt: str,
     llm_cfg: dict,
     ceo_name: str,
+    *,
+    user_message: str = "",
+    project: dict | None = None,
+    project_id: str = "",
 ) -> str | None:
     """Handle a CEO chat turn using an OpenAI-compatible streaming API.
 
@@ -1485,12 +1838,35 @@ async def _handle_ceo_openai(
 
     response_parts: list[str] = []
     first_token = True
+    stream_warning: str | None = None
+    should_bridge_execution = _should_trigger_execution_bridge(user_message, project_id)
+
+    def _stream_timeout_seconds(env_name: str, default_value: float) -> float:
+        raw = str(os.getenv(env_name, "") or "").strip()
+        if not raw:
+            return default_value
+        try:
+            parsed = float(raw)
+        except ValueError:
+            return default_value
+        return parsed if parsed > 0 else default_value
+
+    first_token_timeout_s = _stream_timeout_seconds("COMPAAS_STREAM_FIRST_TOKEN_TIMEOUT_S", 25.0)
+    inter_token_timeout_s = _stream_timeout_seconds("COMPAAS_STREAM_INTER_TOKEN_TIMEOUT_S", 20.0)
 
     # Show an action entry immediately so the ActionLog appears while connecting
     await websocket.send_json({"type": "action", "content": f"Connecting to {model}…"})
+    _emit_chat_activity(
+        "ceo",
+        "STARTED",
+        f"Connecting to {model} via OpenAI-compatible API",
+        project_id=project_id,
+        metadata={"model": model, "base_url": str(base_url)},
+    )
 
     # Background task: send periodic "thinking" pings while we wait for tokens
     thinking_event = asyncio.Event()
+    stream_iter = None
 
     async def _thinking_pings() -> None:
         count = 0
@@ -1504,41 +1880,189 @@ async def _handle_ceo_openai(
                     "type": "thinking",
                     "content": f"{ceo_name} is thinking… ({count * 5}s elapsed)",
                 })
+                _emit_chat_activity(
+                    "ceo",
+                    "UPDATED",
+                    f"Streaming model still thinking ({count * 5}s)",
+                    project_id=project_id,
+                )
             except Exception:
                 break
 
     ping_task = asyncio.create_task(_thinking_pings())
     try:
-        async for chunk in stream_openai_compat(
+        stream_iter = stream_openai_compat(
             prompt=prompt,
             base_url=base_url,
             model=model,
             api_key=api_key,
             system_prompt=system_prompt,
-        ):
+        )
+        while True:
+            try:
+                timeout_s = first_token_timeout_s if first_token else inter_token_timeout_s
+                chunk = await asyncio.wait_for(anext(stream_iter), timeout=timeout_s)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                if first_token:
+                    stream_warning = (
+                        f"{model} did not return tokens within {int(first_token_timeout_s)}s."
+                    )
+                else:
+                    stream_warning = (
+                        f"{model} stream paused for over {int(inter_token_timeout_s)}s."
+                    )
+                if should_bridge_execution:
+                    await websocket.send_json({
+                        "type": "action_result",
+                        "content": "Model stream timed out; continuing with direct workspace execution.",
+                    })
+                    _emit_chat_activity(
+                        "ceo",
+                        "WARNING",
+                        f"Model stream timeout; continuing via execution bridge ({stream_warning})",
+                        project_id=project_id,
+                    )
+                    break
+                await websocket.send_json({
+                    "type": "error",
+                    "content": f"LLM timeout: {stream_warning}",
+                })
+                _emit_chat_activity(
+                    "ceo",
+                    "ERROR",
+                    f"LLM timeout: {stream_warning}",
+                    project_id=project_id,
+                )
+                return None
+
             if first_token:
                 first_token = False
                 thinking_event.set()  # stop pings
-                await websocket.send_json({"type": "action_result", "content": ""})
+                await websocket.send_json({"type": "action_result", "content": "Connected"})
                 await websocket.send_json({"type": "action", "content": "Generating response…"})
+                _emit_chat_activity("ceo", "UPDATED", "Model stream connected", project_id=project_id)
             response_parts.append(chunk)
             await websocket.send_json({"type": "chunk", "content": chunk})
     except RuntimeError as exc:
         # openai package not installed
-        await websocket.send_json({"type": "error", "content": str(exc)})
-        return None
+        if should_bridge_execution:
+            stream_warning = str(exc)
+            await websocket.send_json({
+                "type": "action_result",
+                "content": "Model runtime unavailable; continuing with direct workspace execution.",
+            })
+            _emit_chat_activity(
+                "ceo",
+                "WARNING",
+                f"Model runtime unavailable; continuing via execution bridge ({stream_warning})",
+                project_id=project_id,
+            )
+        else:
+            await websocket.send_json({"type": "error", "content": str(exc)})
+            _emit_chat_activity("ceo", "ERROR", str(exc), project_id=project_id)
+            return None
     except Exception as exc:
-        await websocket.send_json({"type": "error", "content": f"LLM error: {str(exc)[:300]}"})
-        return None
+        stream_warning = str(exc)[:300]
+        if should_bridge_execution:
+            await websocket.send_json({
+                "type": "action_result",
+                "content": "Model stream failed; continuing with direct workspace execution.",
+            })
+            _emit_chat_activity(
+                "ceo",
+                "WARNING",
+                f"Model stream failed; continuing via execution bridge ({stream_warning})",
+                project_id=project_id,
+            )
+        else:
+            await websocket.send_json({"type": "error", "content": f"LLM error: {stream_warning}"})
+            _emit_chat_activity("ceo", "ERROR", f"LLM error: {stream_warning}", project_id=project_id)
+            return None
     finally:
         thinking_event.set()
+        if stream_iter is not None:
+            aclose = getattr(stream_iter, "aclose", None)
+            if callable(aclose):
+                try:
+                    await aclose()
+                except Exception:
+                    pass
         ping_task.cancel()
         try:
             await ping_task
         except asyncio.CancelledError:
             pass
 
-    return "".join(response_parts).strip()
+    reasoning_response = "".join(response_parts).strip()
+    final_response = reasoning_response
+
+    # OpenAI/Ollama text-only providers cannot execute tools directly.
+    # Bridge implementation tasks through Codex when execution intent is detected.
+    if should_bridge_execution:
+        workspace_path = ""
+        project_name = project_id
+        if project:
+            workspace_path = str(project.get("workspace_path", "") or "").strip()
+            project_name = str(project.get("name", project_id) or project_id)
+        if not workspace_path:
+            workspace_path = os.path.join(WORKSPACE_ROOT, f"project-{project_id}")
+            os.makedirs(workspace_path, exist_ok=True)
+
+        await websocket.send_json({
+            "type": "action",
+            "content": f"Executing implementation tasks in {workspace_path}…",
+        })
+        _emit_chat_activity(
+            "ceo",
+            "STARTED",
+            "Execution bridge activated for implementation request",
+            project_id=project_id,
+            metadata={"workspace_path": workspace_path},
+        )
+
+        bridge_prompt = _build_execution_bridge_prompt(
+            user_message=user_message,
+            model_response=reasoning_response or "(empty model summary)",
+            project_name=project_name,
+            project_id=project_id,
+            workspace_path=workspace_path,
+        )
+        bridge_response = await _handle_ceo_codex(
+            websocket=websocket,
+            prompt=bridge_prompt,
+            llm_cfg=llm_cfg,
+            ceo_name=ceo_name,
+            project_id=project_id,
+            workdir=workspace_path,
+            activity_context="execution_bridge",
+        )
+        if bridge_response:
+            if final_response:
+                final_response = (
+                    f"{final_response}\n\n"
+                    f"Implementation update:\n{bridge_response}"
+                )
+            else:
+                final_response = bridge_response
+
+    _emit_chat_activity(
+        "ceo",
+        "COMPLETED",
+        "OpenAI-compatible response completed",
+        project_id=project_id,
+        metadata={
+            "model": model,
+            "execution_bridge": should_bridge_execution,
+            "stream_warning": stream_warning or "",
+        },
+    )
+    if final_response:
+        return final_response
+    if stream_warning:
+        return f"Model stream warning: {stream_warning}"
+    return None
 
 
 @app.websocket("/api/chat/ws")
@@ -1585,12 +2109,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             micro_project_mode = bool(data.get("micro_project_mode", False))
             micro_project_override = bool(data.get("micro_project_override", False))
 
-            # Store user message
-            async with _chat_lock:
-                user_msg = _append_chat_message("user", user_message)
-            await websocket.send_json({"type": "user_ack", "message": user_msg})
-
-            # Reload config each turn so Settings changes take effect live
+            # Reload config each turn so Settings changes take effect live.
             config = _load_config()
             llm_cfg = config.get("llm", {})
             provider = llm_cfg.get("provider", "anthropic")
@@ -1598,17 +2117,44 @@ async def chat_websocket(websocket: WebSocket) -> None:
             user_name = config.get("user", {}).get("name", "User") or "User"
             ceo_name = config.get("agents", {}).get("ceo", "CEO") or "CEO"
             company_name = config.get("company", {}).get("name", "") if isinstance(config.get("company"), dict) else ""
+
+            incoming_project_id = _normalize_project_id(str(data.get("project_id", "") or ""))
+            active_project_id, active_project, created_project = _resolve_chat_project(
+                incoming_project_id,
+                user_message,
+                user_name,
+            )
+
+            # Store user message with project scope.
+            async with _chat_lock:
+                user_msg = _append_chat_message("user", user_message, project_id=active_project_id)
+            await websocket.send_json({"type": "user_ack", "message": user_msg, "project_id": active_project_id})
+            _emit_chat_activity(
+                "chairman",
+                "MESSAGE",
+                user_message[:260],
+                project_id=active_project_id,
+            )
+            if active_project:
+                await websocket.send_json({
+                    "type": "project_context",
+                    "project_id": active_project_id,
+                    "created": created_project,
+                    "project": active_project,
+                })
+
             prompt = _build_context_prompt(
                 user_message,
                 user_name=user_name,
                 ceo_name=ceo_name,
                 company_name=company_name,
+                project_id=active_project_id,
             )
             if micro_project_mode:
                 complexity_reason = _micro_project_complexity_reason(user_message)
                 if complexity_reason and not micro_project_override:
                     await websocket.send_json({"type": "micro_project_warning", "content": complexity_reason})
-                    await websocket.send_json({"type": "done", "content": ""})
+                    await websocket.send_json({"type": "done", "content": "", "project_id": active_project_id})
                     continue
                 if complexity_reason and micro_project_override:
                     await websocket.send_json({
@@ -1618,9 +2164,26 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 prompt = _build_micro_project_prompt(prompt, user_name=user_name, ceo_name=ceo_name)
 
             if provider == "openai" and openai_mode == "codex":
-                full_response = await _handle_ceo_codex(websocket, prompt, llm_cfg, ceo_name=ceo_name)
+                project_workdir = str((active_project or {}).get("workspace_path", "") or "").strip()
+                full_response = await _handle_ceo_codex(
+                    websocket,
+                    prompt,
+                    llm_cfg,
+                    ceo_name=ceo_name,
+                    project_id=active_project_id,
+                    workdir=project_workdir,
+                    activity_context="direct_codex",
+                )
             elif provider in ("openai", "openai_compat"):
-                full_response = await _handle_ceo_openai(websocket, prompt, llm_cfg, ceo_name)
+                full_response = await _handle_ceo_openai(
+                    websocket,
+                    prompt,
+                    llm_cfg,
+                    ceo_name,
+                    user_message=user_message,
+                    project=active_project,
+                    project_id=active_project_id,
+                )
             else:
                 claude_path = shutil.which("claude")
                 if not claude_path:
@@ -1630,13 +2193,19 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     })
                     continue
                 full_response = await _handle_ceo_claude(
-                    websocket, prompt, claude_path, llm_cfg, ceo_name=ceo_name, micro_project_mode=micro_project_mode
+                    websocket,
+                    prompt,
+                    claude_path,
+                    llm_cfg,
+                    ceo_name=ceo_name,
+                    micro_project_mode=micro_project_mode,
+                    project_id=active_project_id,
                 )
 
             if full_response:
                 async with _chat_lock:
-                    _append_chat_message("ceo", full_response)
-            await websocket.send_json({"type": "done", "content": full_response or ""})
+                    _append_chat_message("ceo", full_response, project_id=active_project_id)
+            await websocket.send_json({"type": "done", "content": full_response or "", "project_id": active_project_id})
 
     except WebSocketDisconnect:
         pass

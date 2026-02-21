@@ -55,10 +55,10 @@ const POLL_INTERVAL_OPTIONS = [
 ];
 
 const THEMES = [
-  { id: 'midnight', label: 'Midnight', description: 'Deep dark', preview: ['#08131a', '#183548', '#edf5fb'] },
-  { id: 'twilight', label: 'Twilight', description: 'Soft blue dark', preview: ['#121425', '#272b42', '#f2f4ff'] },
-  { id: 'dawn', label: 'Dawn', description: 'Bright daylight', preview: ['#fcfeff', '#f7fbff', '#384f61'] },
-  { id: 'sahara', label: 'Sahara', description: 'Warm desert sand', preview: ['#1d1711', '#362a20', '#f6eadf'] },
+  { id: 'midnight', label: 'Midnight', description: 'High-contrast deep blue', preview: ['#070f19', '#17293d', '#edf5ff'] },
+  { id: 'twilight', label: 'Twilight', description: 'Moody indigo dusk', preview: ['#181626', '#312f4a', '#f3f4ff'] },
+  { id: 'dawn', label: 'Dawn', description: 'Muted warm daylight', preview: ['#efe9de', '#ece4d6', '#2f3a45'] },
+  { id: 'sahara', label: 'Sahara', description: 'Soft desert parchment', preview: ['#f2e7d4', '#efe1cb', '#3f3325'] },
 ];
 
 type SettingsTab = 'general' | 'ai' | 'agents' | 'integrations' | 'appearance';
@@ -716,9 +716,9 @@ function AiProviderSection({
       {/* Provider radio cards */}
       {(['anthropic', 'openai', 'openai_compat'] as LlmConfig['provider'][]).map((p) => {
         const meta: Record<string, { icon: string; title: string; desc: string }> = {
-          anthropic:    { icon: '⚡', title: 'Anthropic Cloud', desc: 'Claude via Claude Code CLI. Requires ANTHROPIC_API_KEY.' },
-          openai:       { icon: '🤖', title: 'OpenAI',          desc: 'GPT-4o, GPT-4-turbo, etc. Requires an OpenAI API key.' },
-          openai_compat:{ icon: '🖥️', title: 'Local Model',     desc: 'Ollama, LM Studio, llama.cpp, or any OpenAI-compatible server.' },
+          anthropic:    { icon: 'AN', title: 'Anthropic Cloud', desc: 'Claude via Claude Code CLI. Requires ANTHROPIC_API_KEY.' },
+          openai:       { icon: 'OA', title: 'OpenAI',          desc: 'GPT-4o, GPT-4-turbo, etc. Requires an OpenAI API key.' },
+          openai_compat:{ icon: 'LM', title: 'Local Model',     desc: 'Ollama, LM Studio, llama.cpp, or any OpenAI-compatible server.' },
         };
         const m = meta[p];
         const selected = provider === p;
@@ -737,7 +737,16 @@ function AiProviderSection({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '18px' }}>{m.icon}</span>
+              <span style={{
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                color: selected ? C.accent : C.textSecondary,
+                border: `1px solid ${selected ? C.accent : C.border}`,
+                borderRadius: '999px',
+                padding: '3px 6px',
+                backgroundColor: selected ? 'rgba(88,166,255,0.1)' : C.surface,
+              }}>{m.icon}</span>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>{m.title}</div>
                 <div style={{ fontSize: '11px', color: C.textSecondary }}>{m.desc}</div>
