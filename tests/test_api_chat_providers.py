@@ -369,6 +369,46 @@ def test_build_micro_project_prompt_adds_constraints():
     assert "Marcus" in prompt
 
 
+def test_build_context_prompt_prefers_user_name_over_chairman(monkeypatch):
+    monkeypatch.setattr(api, "_load_chat_messages", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        api,
+        "_load_config",
+        lambda: {
+            "agents": {},
+            "integrations": {},
+        },
+    )
+
+    prompt = api._build_context_prompt("hi", user_name="Idan", ceo_name="Ari")
+
+    assert "address the user as Idan" in prompt
+    assert "or 'Chairman'" not in prompt
+
+
+def test_apply_agent_name_overrides_replaces_agent_names():
+    config = {
+        "agents": {"ceo": "Ari", "cto": "Nova"},
+        "user": {"name": "Idan"},
+    }
+    result = api._apply_agent_name_overrides("Marcus and Elena reviewed the project.", config)
+    assert "Ari" in result
+    assert "Nova" in result
+    assert "Marcus" not in result
+    assert "Elena" not in result
+
+
+def test_apply_agent_name_overrides_replaces_chairman_with_user_name():
+    config = {
+        "agents": {"ceo": "Ari"},
+        "user": {"name": "Idan"},
+    }
+    result = api._apply_agent_name_overrides("Chairman, Marcus is ready.", config)
+    assert "Chairman" not in result
+    assert "Idan" in result
+    assert "Ari" in result
+
+
 def test_resolve_chat_project_creates_for_build_request(tmp_path, monkeypatch):
     data_dir = tmp_path / "company_data"
     data_dir.mkdir(parents=True, exist_ok=True)
