@@ -1022,6 +1022,15 @@ _PROJECT_START_HINTS = (
     "create a project",
     "launch a project",
 )
+_PROJECT_CONTINUE_HINTS = (
+    "continue",
+    "resume",
+    "next step",
+    "same project",
+    "this project",
+    "that project",
+    "pick up where we left off",
+)
 
 
 def _normalize_project_id(project_id: str) -> str:
@@ -1143,6 +1152,13 @@ def _message_starts_new_project(message: str) -> bool:
     return _message_requests_execution(text) and len(text.split()) >= 4
 
 
+def _message_continues_project_context(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    return any(hint in text for hint in _PROJECT_CONTINUE_HINTS)
+
+
 def _infer_project_name_from_message(message: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9\s-]+", " ", (message or "").strip())
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -1168,7 +1184,8 @@ def _resolve_chat_project(project_id: str, user_message: str, user_name: str) ->
             return pid, project, False
 
     latest_pid = _latest_chat_project_id()
-    if latest_pid and not _message_starts_new_project(user_message):
+    should_resume_latest = _message_requests_execution(user_message) or _message_continues_project_context(user_message)
+    if latest_pid and should_resume_latest and not _message_starts_new_project(user_message):
         latest_project = state_manager.get_project(latest_pid)
         if latest_project:
             return latest_pid, latest_project, False
@@ -1215,6 +1232,23 @@ def _build_context_prompt(
         f"Always refer to yourself as {ceo_name} and address the user as {user_name} or 'Chairman'.]"
     )
     parts.append("")
+
+    configured_agents = cfg.get("agents", {}) if isinstance(cfg.get("agents"), dict) else {}
+    roster_lines: list[str] = []
+    for agent_id, default_name in DEFAULT_CONFIG.get("agents", {}).items():
+        assigned_name = str(configured_agents.get(agent_id, default_name) or default_name).strip()
+        if not assigned_name:
+            continue
+        role = str(AGENT_REGISTRY.get(agent_id, {}).get("role", "") or "").strip()
+        if role:
+            roster_lines.append(f"- {agent_id}: {assigned_name} ({role})")
+        else:
+            roster_lines.append(f"- {agent_id}: {assigned_name}")
+    if roster_lines:
+        parts.append("[CURRENT TEAM ROSTER: Use these exact names when referring to team members.]")
+        parts.extend(roster_lines)
+        parts.append("[Do not fall back to baseline/default crew names if these names differ.]")
+        parts.append("")
 
     if active_project:
         workspace_path = str(active_project.get("workspace_path", "") or "")
@@ -1286,6 +1320,23 @@ def _build_context_prompt(
         "For build requests, execute concrete implementation actions and report files/commands explicitly."
     )
     return "\n".join(parts)
+
+
+def _apply_agent_name_overrides(text: str, config: dict) -> str:
+    """Replace baseline crew names with configured names in final CEO output."""
+    if not text:
+        return text
+    configured_agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    updated = text
+    for agent_id, default_name in DEFAULT_CONFIG.get("agents", {}).items():
+        baseline = str(default_name or "").strip()
+        if not baseline:
+            continue
+        configured_name = str(configured_agents.get(agent_id, baseline) or baseline).strip()
+        if not configured_name or configured_name == baseline:
+            continue
+        updated = re.sub(rf"\b{re.escape(baseline)}\b", configured_name, updated)
+    return updated
 
 
 _MICRO_COMPLEX_KEYWORDS = (
@@ -2624,6 +2675,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     project_id=active_project_id,
                     run_id=run_id,
                 )
+
+            full_response = _apply_agent_name_overrides(full_response or "", config) or None
 
             if full_response:
                 async with _chat_lock:
