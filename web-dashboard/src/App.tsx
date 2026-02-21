@@ -563,6 +563,7 @@ export default function App() {
             <CompassRoseLogo size={40} />
           </div>
           <p className="text-sm">Loading COMPaaS...</p>
+          <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>Built by Idan Hen</p>
         </div>
       </div>
     );

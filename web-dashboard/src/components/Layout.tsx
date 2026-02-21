@@ -229,6 +229,9 @@ export default function Layout({
                 <p className="text-xs leading-tight" style={{ color: 'var(--tf-text-muted)' }}>
                   Company as a Service
                 </p>
+                <p className="text-[10px] leading-tight" style={{ color: 'var(--tf-text-muted)' }}>
+                  Built by Idan Hen
+                </p>
               </div>
             )}
           </div>
@@ -456,7 +459,7 @@ export default function Layout({
                 {PAGE_LABELS[activeTab] ?? 'Dashboard'}
               </h2>
               <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-                COMPaaS — Company as a Service
+                COMPaaS — Company as a Service · Built by Idan Hen
               </p>
             </div>
           </div>

@@ -40,6 +40,7 @@ Y88b  d88P Y88b. .d88P 888   "   888 888       888  888 888  888 Y88b  d88P
 WORDMARK
     echo -e "${NC}"
     echo -e "${BLUE}=== COMPaaS Virtual Company - Installation ===${NC}"
+    echo -e "${BLUE}=== Built by Idan Hen ===${NC}"
     echo ""
 }
 
@@ -162,6 +163,7 @@ echo ""
 echo -e "${PURPLE}═══════════════════════════════════════════${NC}"
 echo -e "${GREEN}  Installation Complete!${NC}"
 echo -e "${PURPLE}═══════════════════════════════════════════${NC}"
+echo -e "${BLUE}  Built by Idan Hen${NC}"
 echo ""
 echo -e "  ${BLUE}Getting started:${NC}"
 echo ""
