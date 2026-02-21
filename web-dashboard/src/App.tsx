@@ -35,6 +35,14 @@ const MAX_POLL_INTERVAL_MS = 30000;
 const TASK_POLL_MULTIPLIER = 3;
 const MIN_TASK_POLL_INTERVAL_MS = 15000;
 const MICRO_PROJECT_MODE_KEY = 'compaas_micro_project_mode';
+const ONBOARDING_TOUR_DONE_KEY = 'compaas_onboarding_tour_done';
+
+const ONBOARDING_STEPS: Array<{ tab: string; title: string; body: string }> = [
+  { tab: 'overview', title: 'Overview', body: 'Track team health, org activity, and project progress in one place.' },
+  { tab: 'projects', title: 'Projects', body: 'Create, switch, and manage projects with artifacts, milestones, and plans.' },
+  { tab: 'activity', title: 'Activity', body: 'Inspect live execution events and deployment/build traces.' },
+  { tab: 'settings', title: 'Settings', body: 'Configure AI vendors, workspace mode, GitHub, and Vercel connectors.' },
+];
 
 // Agent slug/name → display name for activity tagging (Map for O(1) exact lookups)
 const AGENT_SLUG_MAP = new Map<string, string>([
@@ -182,6 +190,7 @@ export default function App() {
   useThemeInit();
 
   const [activeTab, setActiveTab] = useState<string>('overview');
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
 
   // Config / setup state
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -202,13 +211,19 @@ export default function App() {
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
+  const [tourOpen, setTourOpen] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
 
-  const navigateToProject = (projectId: string) => {
+  const navigateToProject = useCallback((projectId: string) => {
     setActiveTab('projects');
     setPendingProjectId(projectId);
     setActiveProjectId(projectId);
     setChatOpen(false);
-  };
+  }, []);
+
+  const handleActiveProjectChange = useCallback((projectId: string) => {
+    setActiveProjectId(projectId);
+  }, []);
 
   // Shortcuts panel
   const { visible: shortcutsVisible, hide: hideShortcuts } = useShortcutsPanel();
@@ -241,6 +256,20 @@ export default function App() {
       setConfigLoading(false);
     });
   }, []);
+
+  useEffect(() => {
+    if (configLoading || showWizard) return;
+    const toursEnabled = config?.feature_flags?.onboarding_tours !== false;
+    if (!toursEnabled) return;
+    try {
+      if (localStorage.getItem(ONBOARDING_TOUR_DONE_KEY) === '1') return;
+    } catch {
+      // ignore localStorage access issues
+    }
+    setTourStep(0);
+    setActiveTab(ONBOARDING_STEPS[0].tab);
+    setTourOpen(true);
+  }, [config?.feature_flags?.onboarding_tours, configLoading, showWizard]);
 
   const handleSetupComplete = useCallback(() => {
     setShowWizard(false);
@@ -470,6 +499,52 @@ export default function App() {
     }
   }, [microProjectMode]);
 
+  const normalizedSearch = globalSearchQuery.trim().toLowerCase();
+
+  const filteredProjects = useMemo(() => {
+    if (!normalizedSearch) return projects;
+    return projects.filter((p) => {
+      const hay = `${p.name} ${p.description ?? ''} ${p.type ?? ''} ${p.status ?? ''}`.toLowerCase();
+      return hay.includes(normalizedSearch);
+    });
+  }, [projects, normalizedSearch]);
+
+  const filteredTasksByProject = useMemo(() => {
+    if (!normalizedSearch) return tasksByProject;
+    const next: Record<string, Task[]> = {};
+    for (const [pid, tasks] of Object.entries(tasksByProject)) {
+      next[pid] = tasks.filter((t) => {
+        const hay = `${t.title} ${t.description ?? ''} ${t.assigned_to ?? ''} ${t.priority ?? ''} ${t.status ?? ''}`.toLowerCase();
+        return hay.includes(normalizedSearch);
+      });
+    }
+    return next;
+  }, [tasksByProject, normalizedSearch]);
+
+  const filteredAllTasks = useMemo(() => {
+    if (!normalizedSearch) return allTasks;
+    return allTasks.filter((t) => {
+      const hay = `${t.title} ${t.description ?? ''} ${t.assigned_to ?? ''} ${t.priority ?? ''} ${t.status ?? ''}`.toLowerCase();
+      return hay.includes(normalizedSearch);
+    });
+  }, [allTasks, normalizedSearch]);
+
+  const filteredActivityEvents = useMemo(() => {
+    if (!normalizedSearch) return activityEvents;
+    return activityEvents.filter((evt) => {
+      const hay = `${evt.agent ?? ''} ${evt.action ?? ''} ${evt.detail ?? ''} ${evt.project_id ?? ''}`.toLowerCase();
+      return hay.includes(normalizedSearch);
+    });
+  }, [activityEvents, normalizedSearch]);
+
+  const filteredAgents = useMemo(() => {
+    if (!normalizedSearch) return agents;
+    return agents.filter((a) => {
+      const hay = `${a.name} ${a.role} ${a.model} ${a.status} ${a.team ?? ''}`.toLowerCase();
+      return hay.includes(normalizedSearch);
+    });
+  }, [agents, normalizedSearch]);
+
   // ---- Loading / wizard screens ----
 
   if (configLoading) {
@@ -497,12 +572,22 @@ export default function App() {
   const renderContent = () => {
     switch (activeTab) {
       case 'overview':
+        if (normalizedSearch && filteredProjects.length === 0 && filteredAgents.length === 0 && filteredAllTasks.length === 0) {
+          return (
+            <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
+              <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No results</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                No overview data matches "{globalSearchQuery}". Refine or clear the search query.
+              </p>
+            </div>
+          );
+        }
         return (
           <Overview
-            agents={agents}
-            projects={projects}
-            tasks={allTasks}
-            events={activityEvents}
+            agents={filteredAgents}
+            projects={filteredProjects}
+            tasks={filteredAllTasks}
+            events={filteredActivityEvents}
             loadingAgents={loadingAgents}
             loadingProjects={loadingProjects}
             loadingTasks={loadingTasks}
@@ -510,20 +595,40 @@ export default function App() {
         );
 
       case 'agents':
+        if (normalizedSearch && filteredAgents.length === 0) {
+          return (
+            <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
+              <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching agents</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                No agent matches "{globalSearchQuery}".
+              </p>
+            </div>
+          );
+        }
         return (
           <AgentPanel
-            agents={agents}
+            agents={filteredAgents}
             loading={loadingAgents}
             microProjectMode={microProjectMode}
           />
         );
 
       case 'projects':
+        if (normalizedSearch && filteredProjects.length === 0) {
+          return (
+            <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
+              <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching projects</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                No project or task matches "{globalSearchQuery}".
+              </p>
+            </div>
+          );
+        }
         return (
           <ProjectPanel
-            projects={projects}
+            projects={filteredProjects}
             loading={loadingProjects}
-            tasksByProject={tasksByProject}
+            tasksByProject={filteredTasksByProject}
             initialProjectId={pendingProjectId}
             selectedProjectId={activeProjectId}
             onSelectProject={(projectId) => setActiveProjectId(projectId)}
@@ -538,9 +643,19 @@ export default function App() {
         );
 
       case 'activity':
+        if (normalizedSearch && filteredActivityEvents.length === 0) {
+          return (
+            <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
+              <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching activity</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                No activity entry matches "{globalSearchQuery}".
+              </p>
+            </div>
+          );
+        }
         return (
           <ActivityPanel
-            events={activityEvents}
+            events={filteredActivityEvents}
           />
         );
 
@@ -550,6 +665,8 @@ export default function App() {
             tokenReport={tokenReport}
             budgets={budgets}
             loading={loadingMetrics}
+            projects={filteredProjects}
+            tasksByProject={filteredTasksByProject}
           />
         );
 
@@ -559,10 +676,10 @@ export default function App() {
       default:
         return (
           <Overview
-            agents={agents}
-            projects={projects}
-            tasks={allTasks}
-            events={activityEvents}
+            agents={filteredAgents}
+            projects={filteredProjects}
+            tasks={filteredAllTasks}
+            events={filteredActivityEvents}
             loadingAgents={loadingAgents}
             loadingProjects={loadingProjects}
             loadingTasks={loadingTasks}
@@ -573,6 +690,16 @@ export default function App() {
 
   const ceoName = config?.agents?.['ceo'] || 'CEO';
   const userName = config?.user?.name || 'You';
+  const currentTourStep = ONBOARDING_STEPS[Math.max(0, Math.min(tourStep, ONBOARDING_STEPS.length - 1))];
+
+  const finishTour = () => {
+    setTourOpen(false);
+    try {
+      localStorage.setItem(ONBOARDING_TOUR_DONE_KEY, '1');
+    } catch {
+      // ignore storage failures
+    }
+  };
 
   return (
     <>
@@ -591,6 +718,8 @@ export default function App() {
         ceoName={ceoName}
         pollIntervalMs={pollIntervalMs}
         microProjectMode={microProjectMode}
+        globalSearchQuery={globalSearchQuery}
+        onGlobalSearchQueryChange={setGlobalSearchQuery}
         chatPanel={
           <ChatPanel
             floating
@@ -611,12 +740,78 @@ export default function App() {
             onProjectApproved={() => loadProjects()}
             projects={projects}
             activeProjectId={activeProjectId}
-            onActiveProjectChange={(projectId) => setActiveProjectId(projectId)}
+            onActiveProjectChange={handleActiveProjectChange}
           />
         }
       >
         {renderContent()}
       </Layout>
+      {tourOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            right: chatOpen ? 'auto' : '18px',
+            left: chatOpen ? '18px' : 'auto',
+            bottom: '18px',
+            zIndex: 80,
+            width: 'min(360px, calc(100vw - 36px))',
+            borderRadius: '12px',
+            border: '1px solid var(--tf-border)',
+            backgroundColor: 'var(--tf-surface)',
+            boxShadow: '0 20px 45px rgba(0,0,0,0.35)',
+            padding: '14px',
+          }}
+        >
+          <div style={{ fontSize: '11px', color: 'var(--tf-text-muted)', marginBottom: '6px' }}>
+            Guided onboarding {tourStep + 1}/{ONBOARDING_STEPS.length}
+          </div>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--tf-text)', marginBottom: '6px' }}>
+            {currentTourStep.title}
+          </div>
+          <p style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', lineHeight: 1.5, marginBottom: '12px' }}>
+            {currentTourStep.body}
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+            <button
+              onClick={finishTour}
+              style={{
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'transparent',
+                color: 'var(--tf-text-muted)',
+                borderRadius: '7px',
+                padding: '6px 10px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              Skip
+            </button>
+            <button
+              onClick={() => {
+                if (tourStep >= ONBOARDING_STEPS.length - 1) {
+                  finishTour();
+                  return;
+                }
+                const nextIndex = tourStep + 1;
+                setTourStep(nextIndex);
+                setActiveTab(ONBOARDING_STEPS[nextIndex].tab);
+              }}
+              style={{
+                border: 'none',
+                backgroundColor: 'var(--tf-accent-blue)',
+                color: 'var(--tf-bg)',
+                borderRadius: '7px',
+                padding: '6px 10px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+              }}
+            >
+              {tourStep >= ONBOARDING_STEPS.length - 1 ? 'Finish' : 'Next'}
+            </button>
+          </div>
+        </div>
+      )}
       {shortcutsVisible && <ShortcutsModal onClose={hideShortcuts} />}
     </>
   );

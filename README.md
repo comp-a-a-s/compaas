@@ -43,6 +43,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bo
 The installer clones/updates COMPaaS, installs dependencies, verifies the setup,
 and asks whether you want to start immediately.
 
+For private repository access, use an authenticated bootstrap request:
+
+```bash
+bash <(curl -fsSL -H "Authorization: Bearer $(gh auth token)" "https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bootstrap.sh")
+```
+
 ## Installation (Detailed)
 
 ### Automated Installation
@@ -142,6 +148,19 @@ Features:
 - Improved readability — rebalanced contrast and unique palettes across Midnight, Twilight, Dawn, and Sahara
 - Perceived-speed tuning — tab-aware polling and reduced forced smooth scrolling during live updates
 - Provider runtimes — Anthropic (`Claude CLI` / `API key`), OpenAI (`API` / `Codex CLI`), and local OpenAI-compatible (`Ollama`, `LM Studio`, `llama.cpp`)
+
+### API v1 (Advanced Controls)
+
+The web backend now includes a versioned orchestration API at `/api/v1` with:
+
+- Feature flags and health/version introspection
+- Run lifecycle APIs (create/list/get/cancel/replay/guardrails/retry-step)
+- Project metadata lifecycle (clone/archive/restore/delta/readme-quality/analytics/artifacts)
+- Chat policy APIs (memory scope + retention)
+- Sandbox profile discovery (`safe`, `standard`, `full`)
+- GitHub controls (repo/branch/template/scan/sync/drift/rollback/issue projection)
+- Vercel controls (link/deploy/domain/env)
+- Deployment live feed stream source (from activity log)
 
 ### TUI Dashboard
 

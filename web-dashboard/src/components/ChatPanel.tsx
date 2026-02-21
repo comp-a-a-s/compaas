@@ -1,6 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { ChatMessage, Project } from '../types';
-import { fetchChatHistory, clearChatHistory, createChatWebSocket, approveProjectPlan, fetchMemory, addMemory, clearMemory, summarizeChat } from '../api/client';
+import {
+  fetchChatHistory,
+  clearChatHistory,
+  createChatWebSocket,
+  approveProjectPlan,
+  fetchMemory,
+  addMemory,
+  clearMemory,
+  summarizeChat,
+  retryRunStep,
+  fetchMemoryPolicy,
+  updateMemoryPolicy,
+} from '../api/client';
 
 // ---- Tone presets ----
 
@@ -59,6 +71,8 @@ function parseActionText(text: string): ActionInfo {
   }
   if (lower.includes('task tool') || lower.includes('launching agent'))
     return { label: 'Launching specialist agent…', icon: '→', color: 'var(--tf-accent)' };
+  if (lower.includes('command_execution'))
+    return { label: 'Running internal command…', icon: '⚡', color: 'var(--tf-accent)' };
   if (lower.includes('websearch') || lower.includes('web search') || lower.includes('searching web'))
     return { label: 'Searching the web…', icon: '⊕', color: 'var(--tf-accent-blue)' };
   if (lower.includes('webfetch') || lower.includes('fetching') || lower.includes('web fetch'))
@@ -239,7 +253,7 @@ function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You'
       <div style={{ maxWidth: '75%', position: 'relative' }}>
         {pinned && (
           <div style={{ position: 'absolute', top: '-8px', right: isUser ? '8px' : 'auto', left: !isUser ? '8px' : 'auto', fontSize: '10px', color: 'var(--tf-warning)', zIndex: 1 }}>
-            📌
+            PIN
           </div>
         )}
         <div
@@ -295,7 +309,7 @@ function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You'
               zIndex: 10, whiteSpace: 'nowrap',
             }}
           >
-            {pinned ? '📌 Unpin' : '📌'}
+            {pinned ? 'Unpin' : 'Pin'}
           </button>
         )}
       </div>
@@ -336,6 +350,18 @@ interface ActionEntry {
   text: string;
   status: 'running' | 'done';
   result?: string;
+  at: string;
+}
+
+interface ActionDetailEntry {
+  label: string;
+  command?: string;
+  cwd?: string;
+  duration_ms?: number;
+  exit_code?: number;
+  output_preview?: string;
+  state?: string;
+  run_id?: string;
   at: string;
 }
 
@@ -470,7 +496,7 @@ function PinnedPanel({ messages, ceoName, userName, onClose, onUnpin }: {
   return (
     <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'var(--tf-bg)', zIndex: 20, display: 'flex', flexDirection: 'column' }}>
       <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid var(--tf-border)' }}>
-        <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>📌 Pinned ({messages.length})</span>
+        <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>Pinned ({messages.length})</span>
         <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--tf-text-muted)', fontSize: '14px' }}>✕</button>
       </div>
       <div className="flex-1 overflow-y-auto px-3 py-3">
@@ -503,16 +529,59 @@ function PinnedPanel({ messages, ceoName, userName, onClose, onUnpin }: {
 // ---- WebSocket types ----
 
 interface WsMessage {
-  type: 'user_ack' | 'thinking' | 'chunk' | 'done' | 'error' | 'action' | 'action_result' | 'micro_project_warning' | 'project_context';
-  content?: string;
+  type:
+    | 'user_ack'
+    | 'thinking'
+    | 'chunk'
+    | 'done'
+    | 'error'
+    | 'warning'
+    | 'action'
+    | 'action_result'
+    | 'action_detail'
+    | 'run'
+    | 'micro_project_warning'
+    | 'planning_approval_required'
+    | 'project_context';
+  content?: string | {
+    id?: string;
+    status?: string;
+    mode?: string;
+    intent?: { intent?: string; confidence?: number; needs_planning?: boolean };
+    reason?: string;
+    run_id?: string;
+    [k: string]: unknown;
+  };
   message?: ChatMessage;
   project_id?: string;
   created?: boolean;
   project?: Project;
+  run_id?: string;
+  structured?: {
+    summary?: string;
+    delegations?: Array<Record<string, unknown>>;
+    risks?: string[];
+    next_actions?: string[];
+  };
 }
 function isWsMessage(data: unknown): data is WsMessage {
   return typeof data === 'object' && data !== null && typeof (data as Record<string, unknown>).type === 'string';
 }
+
+function wsContentObject(content: WsMessage['content']): Record<string, unknown> | null {
+  return typeof content === 'object' && content !== null ? (content as Record<string, unknown>) : null;
+}
+
+function wsContentText(content: WsMessage['content'], fallback = ''): string {
+  if (typeof content === 'string') return content;
+  const payload = wsContentObject(content);
+  if (!payload) return fallback;
+  if (typeof payload.message === 'string') return payload.message;
+  if (typeof payload.summary === 'string') return payload.summary;
+  if (typeof payload.detail === 'string') return payload.detail;
+  return fallback;
+}
+
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
 function StatusBadge({ status }: { status: ConnectionStatus }) {
@@ -605,6 +674,11 @@ export default function ChatPanel({
   const [showThinking, setShowThinking] = useState(false);
   const [thinkingContent, setThinkingContent] = useState('');
   const [actionLog, setActionLog] = useState<ActionEntry[]>([]);
+  const [actionDetails, setActionDetails] = useState<ActionDetailEntry[]>([]);
+  const [showActionDetails, setShowActionDetails] = useState(false);
+  const [latestRunId, setLatestRunId] = useState('');
+  const [noDelegationMode, setNoDelegationMode] = useState(false);
+  const [planningPendingDecision, setPlanningPendingDecision] = useState<{ message: string; reason: string } | null>(null);
   const [dismissedProjectIds, setDismissedProjectIds] = useState<Set<string>>(new Set());
 
   // Feature: Tone presets — validate stored value is a known ToneId
@@ -640,6 +714,8 @@ export default function ChatPanel({
   const [showMemory, setShowMemory] = useState(false);
   const [newMemoryText, setNewMemoryText] = useState('');
   const [memorySaving, setMemorySaving] = useState(false);
+  const [memoryScope, setMemoryScope] = useState<'global' | 'project' | 'session-only'>('project');
+  const [memoryRetentionDays, setMemoryRetentionDays] = useState(30);
 
   // Feature: Session token estimate + context summary
   const [summarizing, setSummarizing] = useState(false);
@@ -650,12 +726,21 @@ export default function ChatPanel({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldReconnectRef = useRef(true);
+  const pendingOutboundRef = useRef<string | null>(null);
   const chatOpenRef = useRef(chatOpen);
+  const ceoNameRef = useRef(ceoName);
+  const activeProjectIdRef = useRef(activeProjectId);
+  const onActiveProjectChangeRef = useRef(onActiveProjectChange);
   const onNewCeoMessageRef = useRef(onNewCeoMessage);
   const streamingAccumRef = useRef('');
   const turnErroredRef = useRef(false);
+  const lastOutboundMessageRef = useRef('');
 
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
+  useEffect(() => { ceoNameRef.current = ceoName; }, [ceoName]);
+  useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
+  useEffect(() => { onActiveProjectChangeRef.current = onActiveProjectChange; }, [onActiveProjectChange]);
   useEffect(() => { onNewCeoMessageRef.current = onNewCeoMessage; }, [onNewCeoMessage]);
   useEffect(() => { if (showSearch) setTimeout(() => searchRef.current?.focus(), 50); }, [showSearch]);
 
@@ -716,6 +801,11 @@ export default function ChatPanel({
   // Load CEO memories
   useEffect(() => {
     fetchMemory().then((m) => setMemoryEntries(m.entries)).catch(() => {});
+    fetchMemoryPolicy().then((policy) => {
+      if (!policy) return;
+      setMemoryScope(policy.scope ?? 'project');
+      setMemoryRetentionDays(policy.retention_days ?? 30);
+    }).catch(() => {});
   }, []);
 
   const handleAddMemory = async () => {
@@ -732,6 +822,18 @@ export default function ChatPanel({
   const handleClearMemory = async () => {
     await clearMemory();
     setMemoryEntries([]);
+  };
+
+  const persistMemoryPolicy = async (
+    scope: 'global' | 'project' | 'session-only',
+    retentionDays: number,
+  ) => {
+    setMemoryScope(scope);
+    setMemoryRetentionDays(retentionDays);
+    await updateMemoryPolicy({
+      scope,
+      retention_days: retentionDays,
+    });
   };
 
   const handleSummarize = async () => {
@@ -753,12 +855,18 @@ export default function ChatPanel({
 
   // WebSocket
   const connectWebSocket = useCallback(function connectWebSocketImpl() {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
     setConnectionStatus('connecting');
     try {
       const ws = createChatWebSocket();
       wsRef.current = ws;
-      ws.onopen = () => setConnectionStatus('connected');
+      ws.onopen = () => {
+        setConnectionStatus('connected');
+        if (pendingOutboundRef.current) {
+          ws.send(pendingOutboundRef.current);
+          pendingOutboundRef.current = null;
+        }
+      };
       ws.onmessage = (evt) => {
         try {
           const raw: unknown = JSON.parse(evt.data);
@@ -766,13 +874,40 @@ export default function ChatPanel({
           const data: WsMessage = raw;
           switch (data.type) {
             case 'user_ack': break;
-            case 'thinking': setThinkingContent(data.content || `${ceoName} is thinking…`); break;
+            case 'thinking':
+              setThinkingContent(wsContentText(data.content, `${ceoNameRef.current} is thinking…`));
+              break;
+            case 'run':
+              {
+                const payload = wsContentObject(data.content);
+                if (!payload) break;
+                const rid = String(payload.id || '');
+                if (rid) setLatestRunId(rid);
+              }
+              break;
             case 'action':
               setActionLog((prev) => [...prev, {
-                text: data.content || '',
+                text: wsContentText(data.content, ''),
                 status: 'running',
                 at: new Date().toISOString(),
               }]);
+              break;
+            case 'action_detail':
+              {
+                const payload = wsContentObject(data.content);
+                if (!payload) break;
+                setActionDetails((prev) => [...prev, {
+                  label: String(payload.label || 'Action detail'),
+                  command: payload.command ? String(payload.command) : undefined,
+                  cwd: payload.cwd ? String(payload.cwd) : undefined,
+                  duration_ms: typeof payload.duration_ms === 'number' ? payload.duration_ms : undefined,
+                  exit_code: typeof payload.exit_code === 'number' ? payload.exit_code : undefined,
+                  output_preview: payload.output_preview ? String(payload.output_preview) : undefined,
+                  state: payload.state ? String(payload.state) : undefined,
+                  run_id: payload.run_id ? String(payload.run_id) : undefined,
+                  at: new Date().toISOString(),
+                }].slice(-120));
+              }
               break;
             case 'action_result':
               setActionLog((prev) => prev.length > 0 ? [
@@ -780,23 +915,29 @@ export default function ChatPanel({
                 {
                   ...prev[prev.length - 1],
                   status: 'done',
-                  result: data.content || prev[prev.length - 1].result,
+                  result: wsContentText(data.content, prev[prev.length - 1].result || ''),
                 },
-              ] : prev);
+              ] : [{
+                text: 'Action completed',
+                status: 'done',
+                result: wsContentText(data.content, ''),
+                at: new Date().toISOString(),
+              }]);
               break;
             case 'chunk': {
               setActionLog((prev) =>
-                prev.length > 0 && prev[prev.length - 1].status === 'running'
-                  ? [...prev.slice(0, -1), { ...prev[prev.length - 1], status: 'done' }] : prev
+                prev.length > 0
+                  ? prev.map((entry) => (entry.status === 'running' ? { ...entry, status: 'done' } : entry))
+                  : prev
               );
-              const chunk = data.content || '';
+              const chunk = wsContentText(data.content, '');
               streamingAccumRef.current += chunk;
               setStreamingContent(streamingAccumRef.current);
               break;
             }
             case 'project_context': {
-              if (data.project_id && data.project_id !== activeProjectId) {
-                onActiveProjectChange?.(data.project_id);
+              if (data.project_id && data.project_id !== activeProjectIdRef.current) {
+                onActiveProjectChangeRef.current?.(data.project_id);
                 fetchChatHistory(150, data.project_id).then((history) => {
                   if (Array.isArray(history)) setMessages(history);
                 }).catch(() => {});
@@ -804,14 +945,15 @@ export default function ChatPanel({
               break;
             }
             case 'done': {
-              const finalContent = streamingAccumRef.current || data.content || '';
+              const finalContent = streamingAccumRef.current || wsContentText(data.content, '');
               streamingAccumRef.current = '';
+              if (data.run_id) setLatestRunId(data.run_id);
               if (!turnErroredRef.current && finalContent.trim()) {
                 setMessages((prev) => [...prev, {
                   role: 'ceo',
                   content: finalContent,
                   timestamp: new Date().toISOString(),
-                  project_id: data.project_id || activeProjectId,
+                  project_id: data.project_id || activeProjectIdRef.current,
                 }]);
               }
               turnErroredRef.current = false;
@@ -822,15 +964,42 @@ export default function ChatPanel({
             case 'error':
               turnErroredRef.current = true;
               streamingAccumRef.current = '';
-              setMessages((prev) => [...prev, { role: 'ceo', content: `[Error] ${data.content || 'Unknown error'}`, timestamp: new Date().toISOString() }]);
+              setMessages((prev) => [...prev, {
+                role: 'ceo',
+                content: `[Error] ${wsContentText(data.content, 'Unknown error')}`,
+                timestamp: new Date().toISOString(),
+                project_id: activeProjectIdRef.current,
+              }]);
               setStreamingContent(''); setThinkingContent(''); setActionLog([]); setIsWaiting(false);
+              break;
+            case 'warning':
+              setMessages((prev) => [...prev, {
+                role: 'ceo',
+                content: `[Warning] ${typeof data.content === 'string' ? data.content : 'Warning received.'}`,
+                timestamp: new Date().toISOString(),
+                project_id: activeProjectIdRef.current,
+              }]);
               break;
             case 'micro_project_warning':
               setMessages((prev) => [...prev, {
                 role: 'ceo',
-                content: `⚠️ Micro Project warning: ${data.content || 'This request may need full crew mode.'}`,
+                content: `Micro Project warning: ${wsContentText(data.content, 'This request may need full crew mode.')}`,
                 timestamp: new Date().toISOString(),
+                project_id: activeProjectIdRef.current,
               }]);
+              break;
+            case 'planning_approval_required':
+              {
+                const payload = wsContentObject(data.content);
+                if (!payload) break;
+                const reason = String(payload.reason || 'Planning approval required.');
+                setPlanningPendingDecision({
+                  message: lastOutboundMessageRef.current || '',
+                  reason,
+                });
+              }
+              setIsWaiting(false);
+              setThinkingContent('');
               break;
           }
         } catch { /* ignore */ }
@@ -838,17 +1007,25 @@ export default function ChatPanel({
       ws.onclose = () => {
         setConnectionStatus('disconnected');
         wsRef.current = null;
-        reconnectTimerRef.current = setTimeout(connectWebSocketImpl, 3000);
+        if (shouldReconnectRef.current) {
+          reconnectTimerRef.current = setTimeout(connectWebSocketImpl, 3000);
+        }
       };
       ws.onerror = () => setConnectionStatus('error');
     } catch { setConnectionStatus('error'); }
-  }, [activeProjectId, ceoName, onActiveProjectChange]);
+  }, []);
 
   useEffect(() => {
+    shouldReconnectRef.current = true;
     connectWebSocket();
     return () => {
+      shouldReconnectRef.current = false;
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      wsRef.current?.close();
+      pendingOutboundRef.current = null;
+      if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+        wsRef.current.close();
+      }
+      wsRef.current = null;
     };
   }, [connectWebSocket]);
 
@@ -869,11 +1046,11 @@ export default function ChatPanel({
     textOverride?: string;
     forceMicroMode?: boolean;
     forceMicroOverride?: boolean;
+    planningApproved?: boolean;
   }) => {
     const text = (opts?.textOverride ?? input).trim();
     if (!text || isWaiting) return;
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) { connectWebSocket(); return; }
 
     const effectiveMicroMode = opts?.forceMicroMode ?? microProjectMode;
     const microOverride = opts?.forceMicroOverride ?? false;
@@ -898,16 +1075,32 @@ export default function ChatPanel({
     setStreamingContent('');
     setThinkingContent('');
     setActionLog([]);
+    setActionDetails([]);
     streamingAccumRef.current = '';
     turnErroredRef.current = false;
     setMicroPendingDecision(null);
-    ws.send(JSON.stringify({
+    setPlanningPendingDecision(null);
+    lastOutboundMessageRef.current = text;
+    const idempotencyKey = `chat-${activeProjectId || 'global'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const payload = JSON.stringify({
       message: prefix + text,
       micro_project_mode: effectiveMicroMode,
       micro_project_override: microOverride,
+      no_delegation_mode: noDelegationMode,
+      planning_approved: Boolean(opts?.planningApproved),
+      structured_response: true,
+      sandbox_profile: effectiveMicroMode ? 'safe' : 'standard',
+      idempotency_key: idempotencyKey,
       project_id: activeProjectId,
-    }));
-  }, [input, isWaiting, tone, connectWebSocket, microProjectMode, activeProjectId]);
+    });
+    if (inputRef.current) inputRef.current.style.height = '44px';
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      pendingOutboundRef.current = payload;
+      connectWebSocket();
+      return;
+    }
+    ws.send(payload);
+  }, [input, isWaiting, tone, connectWebSocket, microProjectMode, activeProjectId, noDelegationMode]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -940,6 +1133,7 @@ export default function ChatPanel({
         <select
           value={activeProjectId}
           onChange={(e) => onActiveProjectChange?.(e.target.value)}
+          disabled={isWaiting}
           style={{
             fontSize: '12px',
             borderRadius: '6px',
@@ -948,6 +1142,8 @@ export default function ChatPanel({
             color: 'var(--tf-text)',
             padding: '4px 8px',
             minWidth: '130px',
+            opacity: isWaiting ? 0.7 : 1,
+            cursor: isWaiting ? 'not-allowed' : 'pointer',
           }}
         >
           <option value="">General</option>
@@ -981,7 +1177,42 @@ export default function ChatPanel({
           fontWeight: microProjectMode ? 600 : 500,
         }}
       >
-        ⚡ Micro
+        Micro
+      </button>
+
+      <button
+        onClick={() => setNoDelegationMode((v) => !v)}
+        title="No-Delegation guarantee mode"
+        style={{
+          padding: '5px 9px',
+          borderRadius: '6px',
+          fontSize: '12px',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          border: `1px solid ${noDelegationMode ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+          backgroundColor: noDelegationMode ? 'rgba(59,142,255,0.12)' : 'transparent',
+          color: noDelegationMode ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+          fontWeight: noDelegationMode ? 600 : 500,
+        }}
+      >
+        Solo CEO
+      </button>
+
+      <button
+        onClick={() => setShowActionDetails((v) => !v)}
+        title="Toggle live execution details"
+        style={{
+          padding: '5px 9px',
+          borderRadius: '6px',
+          fontSize: '12px',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          border: `1px solid ${showActionDetails ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+          backgroundColor: showActionDetails ? 'rgba(63,185,80,0.12)' : 'transparent',
+          color: showActionDetails ? 'var(--tf-success)' : 'var(--tf-text-muted)',
+        }}
+      >
+        Live Logs
       </button>
 
       {/* Tone selector */}
@@ -996,7 +1227,7 @@ export default function ChatPanel({
             color: tone !== 'default' ? 'var(--tf-accent)' : 'var(--tf-text-muted)',
           }}
         >
-          🎭 {currentTone.label}
+          Tone: {currentTone.label}
         </button>
         {showToneMenu && (
           <div onClick={(e) => e.stopPropagation()} style={{
@@ -1029,7 +1260,7 @@ export default function ChatPanel({
       {pinnedIds.size > 0 && (
         <button onClick={() => setShowPinned((v) => !v)} title={`${pinnedIds.size} pinned`}
           style={{ padding: '5px 9px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', border: `1px solid ${showPinned ? 'var(--tf-warning)' : 'var(--tf-border)'}`, backgroundColor: showPinned ? 'rgba(255,180,0,0.1)' : 'transparent', color: showPinned ? 'var(--tf-warning)' : 'var(--tf-text-muted)', whiteSpace: 'nowrap' }}>
-          📌 {pinnedIds.size}
+          Pin {pinnedIds.size}
         </button>
       )}
 
@@ -1153,6 +1384,37 @@ export default function ChatPanel({
                 ))}
               </ul>
             )}
+            <div style={{ display: 'grid', gap: '6px', marginBottom: '8px', padding: '8px', borderRadius: '6px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Memory scope</label>
+                <select
+                  value={memoryScope}
+                  onChange={(e) => {
+                    const scope = e.target.value as 'global' | 'project' | 'session-only';
+                    persistMemoryPolicy(scope, memoryRetentionDays);
+                  }}
+                  style={{ fontSize: '11px', borderRadius: '4px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)', color: 'var(--tf-text)', padding: '2px 6px' }}
+                >
+                  <option value="global">Global</option>
+                  <option value="project">Project</option>
+                  <option value="session-only">Session only</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Retention (days)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={memoryRetentionDays}
+                  onChange={(e) => {
+                    const days = Math.max(1, Math.min(365, Number(e.target.value) || 30));
+                    persistMemoryPolicy(memoryScope, days);
+                  }}
+                  style={{ width: '72px', fontSize: '11px', borderRadius: '4px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)', color: 'var(--tf-text)', padding: '2px 6px' }}
+                />
+              </div>
+            </div>
             <div style={{ display: 'flex', gap: '4px' }}>
               <input
                 value={newMemoryText}
@@ -1282,6 +1544,23 @@ export default function ChatPanel({
               </div>
             )}
 
+            {noDelegationMode && (
+              <div
+                className="mb-3 rounded-xl px-3 py-2 animate-slide-up"
+                style={{
+                  backgroundColor: 'rgba(59,142,255,0.10)',
+                  border: '1px solid rgba(59,142,255,0.35)',
+                }}
+              >
+                <p className="text-xs font-semibold" style={{ color: 'var(--tf-accent-blue)' }}>
+                  No-Delegation guarantee is ON
+                </p>
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
+                  {ceoName} will avoid specialist delegation and execute directly.
+                </p>
+              </div>
+            )}
+
             {showMicroApprovalCard && (
               <div
                 className="mb-3 rounded-xl px-4 py-3 animate-pop-in"
@@ -1370,6 +1649,42 @@ export default function ChatPanel({
               </div>
             )}
 
+            {planningPendingDecision && (
+              <div
+                className="mb-3 rounded-xl px-4 py-3 animate-pop-in"
+                style={{
+                  backgroundColor: 'var(--tf-surface)',
+                  border: '1px solid var(--tf-accent-blue)',
+                }}
+              >
+                <p className="text-xs font-semibold" style={{ color: 'var(--tf-accent-blue)' }}>
+                  Planning approval required
+                </p>
+                <p className="text-xs mt-1.5" style={{ color: 'var(--tf-text-secondary)', lineHeight: 1.5 }}>
+                  {planningPendingDecision.reason}
+                </p>
+                <div className="flex items-center gap-2 mt-3 flex-wrap">
+                  <button
+                    onClick={() => {
+                      const queued = planningPendingDecision.message;
+                      sendMessage({ textOverride: queued, planningApproved: true });
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                    style={{ backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)', border: 'none', cursor: 'pointer' }}
+                  >
+                    Approve Plan + Continue
+                  </button>
+                  <button
+                    onClick={() => setPlanningPendingDecision(null)}
+                    className="text-xs px-3 py-1.5 rounded-lg"
+                    style={{ backgroundColor: 'transparent', color: 'var(--tf-text-muted)', border: '1px solid var(--tf-border)', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
             {filteredMessages.map((msg, i) => {
               const key = msgKey(msg);
               return (
@@ -1392,6 +1707,28 @@ export default function ChatPanel({
               <ThinkingIndicator ceoName={ceoName} customText={thinkingContent || undefined} />
             )}
             {isWaiting && actionLog.length > 0 && <ActionLog entries={actionLog} ceoName={ceoName} />}
+            {showActionDetails && actionDetails.length > 0 && (
+              <div className="mx-1 mb-3 rounded-lg overflow-hidden" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-bg)' }}>
+                <div className="px-3 py-1.5 text-xs font-medium" style={{ color: 'var(--tf-text-secondary)', borderBottom: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
+                  Execution Details {latestRunId ? `• Run ${latestRunId}` : ''}
+                </div>
+                <div className="px-3 py-2 space-y-2 max-h-44 overflow-y-auto">
+                  {actionDetails.map((d, idx) => (
+                    <div key={`${d.at}-${idx}`} style={{ borderBottom: '1px dashed var(--tf-border)', paddingBottom: '6px' }}>
+                      <div className="text-xs font-medium" style={{ color: 'var(--tf-text-secondary)' }}>{d.label}</div>
+                      {d.command && <div className="text-xs mt-0.5" style={{ color: 'var(--tf-accent)' }}>cmd: {d.command}</div>}
+                      {d.cwd && <div className="text-xs mt-0.5" style={{ color: 'var(--tf-text-muted)' }}>cwd: {d.cwd}</div>}
+                      {(typeof d.exit_code === 'number' || typeof d.duration_ms === 'number') && (
+                        <div className="text-xs mt-0.5" style={{ color: 'var(--tf-text-muted)' }}>
+                          {typeof d.exit_code === 'number' ? `exit=${d.exit_code}` : ''}{typeof d.exit_code === 'number' && typeof d.duration_ms === 'number' ? ' • ' : ''}{typeof d.duration_ms === 'number' ? `${d.duration_ms}ms` : ''}
+                        </div>
+                      )}
+                      {d.output_preview && <div className="text-xs mt-0.5" style={{ color: 'var(--tf-text-muted)' }}>{d.output_preview}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Approval cards */}
             {visibleApprovals.map((project) => (
@@ -1425,6 +1762,31 @@ export default function ChatPanel({
               t.style.height = `${Math.min(t.scrollHeight, 120)}px`;
             }} />
         </div>
+        <button
+          onClick={async () => {
+            if (!latestRunId) return;
+            const ok = await retryRunStep(latestRunId, 'last_failed_step');
+            setMessages((prev) => [...prev, {
+              role: 'ceo',
+              content: ok
+                ? `Retry requested for run ${latestRunId}.`
+                : `Retry request failed for run ${latestRunId}.`,
+              timestamp: new Date().toISOString(),
+              project_id: activeProjectId,
+            }]);
+          }}
+          disabled={!latestRunId || isWaiting}
+          className="px-2.5 h-11 rounded-xl transition-all duration-200 flex-shrink-0 text-xs"
+          style={{
+            border: '1px solid var(--tf-border)',
+            backgroundColor: !latestRunId || isWaiting ? 'var(--tf-surface-raised)' : 'var(--tf-surface)',
+            color: !latestRunId || isWaiting ? 'var(--tf-text-muted)' : 'var(--tf-text-secondary)',
+            cursor: !latestRunId || isWaiting ? 'not-allowed' : 'pointer',
+          }}
+          title={latestRunId ? `Retry last failed step in run ${latestRunId}` : 'No active run yet'}
+        >
+          Retry
+        </button>
         <button onClick={() => sendMessage()} disabled={isWaiting || !input.trim()}
           className="flex items-center justify-center w-11 h-11 rounded-xl transition-all duration-200 flex-shrink-0"
           style={{ backgroundColor: isWaiting || !input.trim() ? 'var(--tf-surface-raised)' : 'var(--tf-accent)', color: isWaiting || !input.trim() ? 'var(--tf-border)' : 'var(--tf-bg)', cursor: isWaiting || !input.trim() ? 'not-allowed' : 'pointer' }}

@@ -1,5 +1,20 @@
 import { useState, useEffect } from 'react';
-import { fetchConfig, updateConfig, testLlmConnection, saveIntegrations } from '../api/client';
+import {
+  fetchConfig,
+  updateConfig,
+  testLlmConnection,
+  saveIntegrations,
+  fetchGithubRepos,
+  createGithubRepo,
+  githubSecretScan,
+  githubSync,
+  githubDrift,
+  githubRollback,
+  vercelLinkProject,
+  vercelDeploy,
+  vercelAssignDomain,
+  vercelSetEnv,
+} from '../api/client';
 import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
@@ -57,8 +72,8 @@ const POLL_INTERVAL_OPTIONS = [
 const THEMES = [
   { id: 'midnight', label: 'Midnight', description: 'High-contrast deep blue', preview: ['#070f19', '#17293d', '#edf5ff'] },
   { id: 'twilight', label: 'Twilight', description: 'Moody indigo dusk', preview: ['#181626', '#312f4a', '#f3f4ff'] },
-  { id: 'dawn', label: 'Dawn', description: 'Muted warm daylight', preview: ['#efe9de', '#ece4d6', '#2f3a45'] },
-  { id: 'sahara', label: 'Sahara', description: 'Soft desert parchment', preview: ['#f2e7d4', '#efe1cb', '#3f3325'] },
+  { id: 'dawn', label: 'Dawn', description: 'Soft daylight with strong readability', preview: ['#f6f3ea', '#efe8d8', '#273242'] },
+  { id: 'sahara', label: 'Sahara', description: 'Warm sand, softer contrast', preview: ['#f7efe3', '#f2e6d2', '#3f3428'] },
 ];
 
 type SettingsTab = 'general' | 'ai' | 'agents' | 'integrations' | 'appearance';
@@ -1095,6 +1110,139 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
   const [vercelTokenMasked, setVercelTokenMasked] = useState(false);
   const [slackTokenMasked, setSlackTokenMasked] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [githubRepoOptions, setGithubRepoOptions] = useState<Array<{ full_name: string; default_branch: string }>>([]);
+  const [integrationOpsStatus, setIntegrationOpsStatus] = useState('');
+  const [integrationOpsBusy, setIntegrationOpsBusy] = useState(false);
+  const [repoPathForOps, setRepoPathForOps] = useState('');
+  const [rollbackCommit, setRollbackCommit] = useState('');
+  const [vercelDomain, setVercelDomain] = useState('');
+  const [vercelEnvKey, setVercelEnvKey] = useState('');
+  const [vercelEnvValue, setVercelEnvValue] = useState('');
+
+  const runIntegrationOp = async (label: string, fn: () => Promise<unknown>) => {
+    setIntegrationOpsBusy(true);
+    setIntegrationOpsStatus(`${label}...`);
+    try {
+      const result = await fn();
+      setIntegrationOpsStatus(`${label}: ${JSON.stringify(result).slice(0, 320)}`);
+    } catch (err) {
+      setIntegrationOpsStatus(`${label} failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIntegrationOpsBusy(false);
+    }
+  };
+
+  const handleLoadGithubRepos = async () => {
+    const token = githubTokenMasked ? '' : githubToken.trim();
+    if (!token) {
+      setIntegrationOpsStatus('GitHub token is required for repo listing.');
+      return;
+    }
+    await runIntegrationOp('GitHub repo listing', async () => {
+      const repos = await fetchGithubRepos(token);
+      setGithubRepoOptions(repos);
+      return { repos: repos.length };
+    });
+  };
+
+  const handleCreateGithubRepo = async () => {
+    const token = githubTokenMasked ? '' : githubToken.trim();
+    if (!token || !githubRepo.trim()) {
+      setIntegrationOpsStatus('Set both GitHub token and owner/repo before creating repo.');
+      return;
+    }
+    const repoName = githubRepo.includes('/') ? githubRepo.split('/').pop() || githubRepo : githubRepo;
+    await runIntegrationOp('GitHub repo creation', async () =>
+      createGithubRepo({
+        token,
+        name: repoName,
+        private: false,
+        description: 'Created via COMPaaS',
+      }),
+    );
+  };
+
+  const handleGithubOps = async (mode: 'scan' | 'sync' | 'drift' | 'rollback') => {
+    if (!repoPathForOps.trim()) {
+      setIntegrationOpsStatus('Set a local repo path for GitHub ops.');
+      return;
+    }
+    if (mode === 'scan') {
+      await runIntegrationOp('Secret scan', async () => githubSecretScan(repoPathForOps.trim()));
+      return;
+    }
+    if (mode === 'sync') {
+      await runIntegrationOp('Remote sync', async () => githubSync(repoPathForOps.trim(), githubDefaultBranch || 'master'));
+      return;
+    }
+    if (mode === 'drift') {
+      await runIntegrationOp('Drift check', async () => githubDrift(repoPathForOps.trim(), githubDefaultBranch || 'master'));
+      return;
+    }
+    if (!rollbackCommit.trim()) {
+      setIntegrationOpsStatus('Set commit SHA before rollback.');
+      return;
+    }
+    await runIntegrationOp('Rollback', async () => githubRollback(repoPathForOps.trim(), rollbackCommit.trim()));
+  };
+
+  const handleVercelOp = async (mode: 'link' | 'preview' | 'production' | 'domain' | 'env') => {
+    const token = vercelTokenMasked ? '' : vercelToken.trim();
+    if (!token || !vercelProjectName.trim()) {
+      setIntegrationOpsStatus('Set Vercel token and project name first.');
+      return;
+    }
+    if (mode === 'link') {
+      await runIntegrationOp('Vercel project link', async () =>
+        vercelLinkProject({
+          token,
+          project_name: vercelProjectName.trim(),
+          team_id: vercelTeamId.trim(),
+        }),
+      );
+      return;
+    }
+    if (mode === 'preview' || mode === 'production') {
+      await runIntegrationOp(`Vercel ${mode} deploy`, async () =>
+        vercelDeploy({
+          token,
+          project_name: vercelProjectName.trim(),
+          team_id: vercelTeamId.trim(),
+          target: mode,
+        }),
+      );
+      return;
+    }
+    if (mode === 'domain') {
+      if (!vercelDomain.trim()) {
+        setIntegrationOpsStatus('Set domain before assigning.');
+        return;
+      }
+      await runIntegrationOp('Vercel domain assignment', async () =>
+        vercelAssignDomain({
+          token,
+          project_name: vercelProjectName.trim(),
+          domain: vercelDomain.trim(),
+          team_id: vercelTeamId.trim(),
+        }),
+      );
+      return;
+    }
+    if (!vercelEnvKey.trim() || !vercelEnvValue.trim()) {
+      setIntegrationOpsStatus('Set env key and value before sync.');
+      return;
+    }
+    await runIntegrationOp('Vercel env sync', async () =>
+      vercelSetEnv({
+        token,
+        project_name: vercelProjectName.trim(),
+        key: vercelEnvKey.trim(),
+        value: vercelEnvValue,
+        team_id: vercelTeamId.trim(),
+        target: ['preview', 'production'],
+      }),
+    );
+  };
 
   useEffect(() => {
     // Apply compact mode on mount
@@ -1508,6 +1656,81 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
                 <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>
                   Webhook URL: <code style={{ color: C.accent }}>/api/integrations/github/webhook</code>
                 </p>
+                <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={handleLoadGithubRepos}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Load repos
+                    </button>
+                    <button
+                      onClick={handleCreateGithubRepo}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Create repo
+                    </button>
+                    <button
+                      onClick={() => handleGithubOps('scan')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Secret scan
+                    </button>
+                    <button
+                      onClick={() => handleGithubOps('sync')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Sync remote
+                    </button>
+                    <button
+                      onClick={() => handleGithubOps('drift')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Drift check
+                    </button>
+                  </div>
+                  {githubRepoOptions.length > 0 && (
+                    <select
+                      value={githubRepo}
+                      onChange={(e) => setGithubRepo(e.target.value)}
+                      style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    >
+                      {githubRepoOptions.map((repo) => (
+                        <option key={repo.full_name} value={repo.full_name}>
+                          {repo.full_name} ({repo.default_branch})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <input
+                    type="text"
+                    value={repoPathForOps}
+                    onChange={(e) => setRepoPathForOps(e.target.value)}
+                    placeholder="/absolute/path/to/local/repo (for sync, drift, scan, rollback)"
+                    style={{ ...inputStyle({ maxWidth: '520px', fontSize: '12px' }) }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={rollbackCommit}
+                      onChange={(e) => setRollbackCommit(e.target.value)}
+                      placeholder="Commit SHA for rollback"
+                      style={{ ...inputStyle({ maxWidth: '260px', fontSize: '12px' }) }}
+                    />
+                    <button
+                      onClick={() => handleGithubOps('rollback')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.error}`, backgroundColor: 'transparent', color: C.error, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Rollback commit
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
@@ -1549,6 +1772,70 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
                     onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
                   />
                 </div>
+                <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => handleVercelOp('link')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Link project
+                    </button>
+                    <button
+                      onClick={() => handleVercelOp('preview')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Preview deploy
+                    </button>
+                    <button
+                      onClick={() => handleVercelOp('production')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.warning}`, backgroundColor: 'transparent', color: C.warning, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Production deploy
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={vercelDomain}
+                      onChange={(e) => setVercelDomain(e.target.value)}
+                      placeholder="example.com"
+                      style={{ ...inputStyle({ maxWidth: '220px', fontSize: '12px' }) }}
+                    />
+                    <button
+                      onClick={() => handleVercelOp('domain')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Assign domain
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={vercelEnvKey}
+                      onChange={(e) => setVercelEnvKey(e.target.value)}
+                      placeholder="ENV_KEY"
+                      style={{ ...inputStyle({ maxWidth: '160px', fontSize: '12px' }) }}
+                    />
+                    <input
+                      type="text"
+                      value={vercelEnvValue}
+                      onChange={(e) => setVercelEnvValue(e.target.value)}
+                      placeholder="ENV_VALUE"
+                      style={{ ...inputStyle({ maxWidth: '220px', fontSize: '12px' }) }}
+                    />
+                    <button
+                      onClick={() => handleVercelOp('env')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Sync env
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
@@ -1585,6 +1872,13 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
                 />
               </div>
             </div>
+            {integrationOpsStatus && (
+              <div style={{ marginTop: '12px', padding: '10px', borderRadius: '8px', border: `1px solid ${C.border}`, backgroundColor: C.surface }}>
+                <p style={{ margin: 0, fontSize: '11px', color: C.textSecondary, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {integrationOpsStatus}
+                </p>
+              </div>
+            )}
           </Section>
         </>
       )}

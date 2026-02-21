@@ -1,0 +1,627 @@
+"""Versioned API router (/api/v1) for expanded orchestration capabilities."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from fastapi import APIRouter, Header, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from src.utils import emit_activity
+from src.web.problem import problem_http_exception
+from src.web.services.integration_service import IntegrationService
+from src.web.services.project_service import ProjectService
+from src.web.services.run_service import RunService
+from src.web.settings import FeatureFlags, merge_feature_flags, resolve_sandbox_profile
+
+
+@dataclass
+class V1Context:
+    data_dir: str
+    load_config: Callable[[], dict]
+    save_config: Callable[[dict], None]
+    run_service: RunService
+    project_service: ProjectService
+    integration_service: IntegrationService
+
+
+class RunCreateRequest(BaseModel):
+    project_id: str = Field(default="")
+    message: str = Field(min_length=1, max_length=4000)
+    provider: str = Field(default="anthropic")
+    mode: str = Field(default="full_crew")
+    sandbox_profile: str = Field(default="standard")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=180)
+    description: str = Field(default="", max_length=5000)
+    type: str = Field(default="general", max_length=100)
+
+
+class GithubRepoCreateRequest(BaseModel):
+    token: str = Field(min_length=8)
+    name: str = Field(min_length=1, max_length=120)
+    private: bool = True
+    description: str = ""
+
+
+class GithubBranchRequest(BaseModel):
+    repo_path: str = Field(min_length=1)
+    base_branch: str = Field(default="master")
+    new_branch: str = Field(min_length=1)
+
+
+class GithubSyncRequest(BaseModel):
+    repo_path: str = Field(min_length=1)
+    default_branch: str = Field(default="master")
+
+
+class GithubRollbackRequest(BaseModel):
+    repo_path: str = Field(min_length=1)
+    commit_sha: str = Field(min_length=6)
+
+
+class VercelLinkRequest(BaseModel):
+    token: str = Field(min_length=8)
+    project_name: str = Field(min_length=1)
+    team_id: str = ""
+
+
+class VercelDeployRequest(BaseModel):
+    token: str = Field(min_length=8)
+    project_name: str = Field(min_length=1)
+    team_id: str = ""
+    target: str = Field(default="preview")
+    git_source: dict[str, Any] | None = None
+
+
+class VercelDomainRequest(BaseModel):
+    token: str = Field(min_length=8)
+    project_name: str = Field(min_length=1)
+    domain: str = Field(min_length=3)
+    team_id: str = ""
+
+
+class VercelEnvRequest(BaseModel):
+    token: str = Field(min_length=8)
+    project_name: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    target: list[str] = Field(default_factory=lambda: ["preview", "production"])
+    team_id: str = ""
+
+
+def _classify_intent(message: str) -> dict[str, Any]:
+    text = (message or "").strip().lower()
+    if not text:
+        return {"intent": "unknown", "confidence": 0.0, "needs_planning": False}
+
+    execution_terms = ("build", "implement", "create", "generate", "write code", "deploy", "fix")
+    planning_terms = ("plan", "architecture", "roadmap", "requirements", "research")
+    simple_terms = ("quick", "small", "tiny", "simple", "micro")
+
+    execution_hits = sum(1 for t in execution_terms if t in text)
+    planning_hits = sum(1 for t in planning_terms if t in text)
+    simple_hits = sum(1 for t in simple_terms if t in text)
+
+    if planning_hits > execution_hits:
+        confidence = min(0.98, 0.55 + (planning_hits * 0.15))
+        return {"intent": "planning", "confidence": round(confidence, 2), "needs_planning": True}
+    if execution_hits:
+        complexity_hint = len(text.split()) > 30 or planning_hits > 0
+        confidence = min(0.98, 0.62 + (execution_hits * 0.08))
+        needs_planning = complexity_hint and simple_hits == 0
+        return {"intent": "execution", "confidence": round(confidence, 2), "needs_planning": needs_planning}
+    return {"intent": "qa", "confidence": 0.52, "needs_planning": False}
+
+
+def create_v1_router(ctx: V1Context) -> APIRouter:
+    router = APIRouter(prefix="/api/v1", tags=["v1"])
+
+    @router.get("/health")
+    def v1_health() -> dict[str, Any]:
+        cfg = ctx.load_config()
+        flags = merge_feature_flags(cfg)
+        return {
+            "status": "ok",
+            "version": "v1",
+            "features": flags.model_dump(),
+        }
+
+    @router.get("/feature-flags")
+    def v1_feature_flags() -> dict[str, Any]:
+        cfg = ctx.load_config()
+        flags = merge_feature_flags(cfg)
+        return {"status": "ok", "feature_flags": flags.model_dump()}
+
+    @router.patch("/feature-flags")
+    def v1_update_feature_flags(updates: dict[str, Any]) -> dict[str, Any]:
+        cfg = ctx.load_config()
+        existing = cfg.get("feature_flags", {})
+        if not isinstance(existing, dict):
+            existing = {}
+        for key, value in (updates or {}).items():
+            if key in FeatureFlags.model_fields:
+                existing[key] = bool(value)
+        cfg["feature_flags"] = existing
+        ctx.save_config(cfg)
+        return {"status": "ok", "feature_flags": merge_feature_flags(cfg).model_dump()}
+
+    @router.get("/chat/response-schema")
+    def v1_response_schema() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "schema": {
+                "type": "object",
+                "required": ["summary", "delegations", "risks", "next_actions"],
+                "properties": {
+                    "summary": {"type": "string"},
+                    "delegations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["agent", "why", "action"],
+                            "properties": {
+                                "agent": {"type": "string"},
+                                "why": {"type": "string"},
+                                "action": {"type": "string"},
+                            },
+                        },
+                    },
+                    "risks": {"type": "array", "items": {"type": "string"}},
+                    "next_actions": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        }
+
+    @router.post("/chat/intents")
+    def v1_classify_intent(body: dict[str, Any]) -> dict[str, Any]:
+        message = str(body.get("message", "") or "")
+        result = _classify_intent(message)
+        return {"status": "ok", **result}
+
+    @router.post("/chat/planning-approval")
+    def v1_planning_approval(body: dict[str, Any]) -> dict[str, Any]:
+        message = str(body.get("message", "") or "")
+        classification = _classify_intent(message)
+        required = bool(classification.get("needs_planning", False))
+        return {
+            "status": "ok",
+            "planning_required": required,
+            "reason": "Task complexity suggests planning before execution." if required else "No planning gate required.",
+            "classification": classification,
+        }
+
+    @router.get("/chat/memory-policy")
+    def v1_memory_policy() -> dict[str, Any]:
+        cfg = ctx.load_config()
+        policy = cfg.get("chat_policy", {})
+        if not isinstance(policy, dict):
+            policy = {}
+        return {
+            "status": "ok",
+            "scope": policy.get("memory_scope", "project"),
+            "retention_days": int(policy.get("retention_days", 30) or 30),
+            "auto_summary_every_messages": int(policy.get("auto_summary_every_messages", 18) or 18),
+        }
+
+    @router.patch("/chat/memory-policy")
+    def v1_update_memory_policy(body: dict[str, Any]) -> dict[str, Any]:
+        cfg = ctx.load_config()
+        policy = cfg.get("chat_policy", {})
+        if not isinstance(policy, dict):
+            policy = {}
+        scope = str(body.get("scope", policy.get("memory_scope", "project")) or "project").lower()
+        if scope not in {"global", "project", "session-only"}:
+            raise problem_http_exception(
+                status=400,
+                title="Invalid Memory Scope",
+                detail="Scope must be one of: global, project, session-only.",
+                type_="https://compaas.dev/problems/invalid-memory-scope",
+            )
+        policy["memory_scope"] = scope
+        policy["retention_days"] = max(1, int(body.get("retention_days", policy.get("retention_days", 30)) or 30))
+        policy["auto_summary_every_messages"] = max(
+            4, int(body.get("auto_summary_every_messages", policy.get("auto_summary_every_messages", 18)) or 18)
+        )
+        cfg["chat_policy"] = policy
+        ctx.save_config(cfg)
+        return {"status": "ok", "chat_policy": policy}
+
+    @router.post("/projects")
+    def v1_create_project(
+        body: ProjectCreateRequest,
+        idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+    ) -> dict[str, Any]:
+        project, created = ctx.project_service.create_project(
+            name=body.name,
+            description=body.description,
+            project_type=body.type,
+            idempotency_key=idempotency_key.strip(),
+        )
+        project_id = str(project.get("id", "") or "")
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "CREATED",
+            f"Project '{body.name}' initialized",
+            project_id=project_id,
+            metadata={"idempotency_key": idempotency_key[:80]},
+        )
+        return {"status": "ok", "created": created, "project": project}
+
+    @router.get("/projects/{project_id}/metadata")
+    def v1_project_metadata(project_id: str) -> dict[str, Any]:
+        try:
+            metadata = ctx.project_service.get_metadata(project_id)
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=404,
+                title="Project Not Found",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/project-not-found",
+            )
+        return {"status": "ok", "metadata": metadata}
+
+    @router.patch("/projects/{project_id}/metadata")
+    def v1_project_metadata_update(project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            metadata = ctx.project_service.update_metadata(project_id, body)
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=404,
+                title="Project Not Found",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/project-not-found",
+            )
+        return {"status": "ok", "metadata": metadata}
+
+    @router.post("/projects/{project_id}/clone")
+    def v1_clone_project(project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        new_name = str(body.get("name", "") or "")
+        try:
+            cloned = ctx.project_service.clone_project(project_id, new_name=new_name)
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=404,
+                title="Project Not Found",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/project-not-found",
+            )
+        return {"status": "ok", "project": cloned}
+
+    @router.post("/projects/{project_id}/archive")
+    def v1_archive_project(project_id: str) -> dict[str, Any]:
+        try:
+            meta = ctx.project_service.set_archived(project_id, True)
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=404,
+                title="Project Not Found",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/project-not-found",
+            )
+        return {"status": "ok", "metadata": meta}
+
+    @router.post("/projects/{project_id}/restore")
+    def v1_restore_project(project_id: str) -> dict[str, Any]:
+        try:
+            project = ctx.project_service.restore_project(project_id)
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=404,
+                title="Project Not Found",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/project-not-found",
+            )
+        return {"status": "ok", "project": project}
+
+    @router.get("/projects/archived")
+    def v1_archived_projects() -> dict[str, Any]:
+        return {"status": "ok", "projects": ctx.project_service.list_archived()}
+
+    @router.get("/projects/{project_id}/delta")
+    def v1_project_delta(project_id: str, since: str = Query(default="")) -> dict[str, Any]:
+        return {"status": "ok", "delta": ctx.project_service.delta_since(project_id, since_iso=since or None)}
+
+    @router.get("/projects/{project_id}/readme-quality")
+    def v1_readme_quality(project_id: str) -> dict[str, Any]:
+        try:
+            report = ctx.project_service.readme_quality(project_id)
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=404,
+                title="Project Not Found",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/project-not-found",
+            )
+        return {"status": "ok", "report": report}
+
+    @router.get("/projects/{project_id}/analytics")
+    def v1_project_analytics(project_id: str) -> dict[str, Any]:
+        try:
+            analytics = ctx.project_service.analytics(project_id)
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=404,
+                title="Project Not Found",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/project-not-found",
+            )
+        return {"status": "ok", "analytics": analytics}
+
+    @router.get("/projects/{project_id}/artifacts")
+    def v1_project_artifacts(project_id: str) -> dict[str, Any]:
+        metadata = ctx.project_service.get_metadata(project_id)
+        artifacts = metadata.get("artifacts", [])
+        return {"status": "ok", "artifacts": artifacts if isinstance(artifacts, list) else []}
+
+    @router.post("/projects/{project_id}/artifacts")
+    def v1_register_artifact(project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        file_path = str(body.get("file_path", "") or "").strip()
+        action = str(body.get("action", "created") or "created").strip()
+        if not file_path:
+            raise problem_http_exception(
+                status=400,
+                title="Invalid Artifact",
+                detail="file_path is required.",
+                type_="https://compaas.dev/problems/invalid-artifact",
+            )
+        meta = ctx.project_service.register_artifact(
+            project_id,
+            file_path=file_path,
+            action=action,
+            run_id=str(body.get("run_id", "") or ""),
+            agent=str(body.get("agent", "ceo") or "ceo"),
+        )
+        return {"status": "ok", "metadata": meta}
+
+    @router.post("/runs")
+    def v1_create_run(
+        body: RunCreateRequest,
+        idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+    ) -> dict[str, Any]:
+        try:
+            run, created = ctx.run_service.create_run(
+                project_id=body.project_id,
+                message=body.message,
+                provider=body.provider,
+                sandbox_profile=body.sandbox_profile,
+                idempotency_key=idempotency_key.strip(),
+                mode=body.mode,
+                metadata=body.metadata,
+            )
+        except RuntimeError as exc:
+            raise problem_http_exception(
+                status=409,
+                title="Concurrency Limit Reached",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/project-concurrency-limit",
+            )
+        return {"status": "ok", "created": created, "run": run}
+
+    @router.get("/runs")
+    def v1_list_runs(project_id: str = Query(default=""), limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+        return {"status": "ok", "runs": ctx.run_service.list_runs(project_id=project_id, limit=limit)}
+
+    @router.get("/runs/{run_id}")
+    def v1_get_run(run_id: str) -> dict[str, Any]:
+        run = ctx.run_service.get_run(run_id)
+        if not run:
+            raise problem_http_exception(
+                status=404,
+                title="Run Not Found",
+                detail=f"Run '{run_id}' does not exist.",
+                type_="https://compaas.dev/problems/run-not-found",
+            )
+        return {"status": "ok", "run": run}
+
+    @router.post("/runs/{run_id}/cancel")
+    def v1_cancel_run(run_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        reason = str(body.get("reason", "Cancelled by user") or "Cancelled by user")
+        run = ctx.run_service.cancel_run(run_id, reason=reason)
+        if not run:
+            raise problem_http_exception(
+                status=404,
+                title="Run Not Found",
+                detail=f"Run '{run_id}' does not exist.",
+                type_="https://compaas.dev/problems/run-not-found",
+            )
+        return {"status": "ok", "run": run}
+
+    @router.get("/runs/{run_id}/replay")
+    def v1_replay(run_id: str) -> dict[str, Any]:
+        replay = ctx.run_service.replay(run_id)
+        if not replay:
+            raise problem_http_exception(
+                status=404,
+                title="Run Not Found",
+                detail=f"Run '{run_id}' does not exist.",
+                type_="https://compaas.dev/problems/run-not-found",
+            )
+        return {"status": "ok", "replay": replay}
+
+    @router.get("/runs/{run_id}/guardrails")
+    def v1_guardrails(run_id: str) -> dict[str, Any]:
+        guardrails = ctx.run_service.guardrail_status(run_id)
+        if guardrails is None:
+            raise problem_http_exception(
+                status=404,
+                title="Run Not Found",
+                detail=f"Run '{run_id}' does not exist.",
+                type_="https://compaas.dev/problems/run-not-found",
+            )
+        return {"status": "ok", "guardrails": guardrails}
+
+    @router.post("/runs/{run_id}/retry-step")
+    def v1_retry_step(run_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        step_label = str(body.get("step", "manual retry") or "manual retry").strip()
+        run = ctx.run_service.transition_run(
+            run_id,
+            state="executing",
+            label=f"Retry requested: {step_label}",
+            metadata={"retry_step": step_label},
+        )
+        if not run:
+            raise problem_http_exception(
+                status=404,
+                title="Run Not Found",
+                detail=f"Run '{run_id}' does not exist.",
+                type_="https://compaas.dev/problems/run-not-found",
+            )
+        return {"status": "ok", "run": run}
+
+    @router.get("/sandbox/profiles")
+    def v1_sandbox_profiles() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "profiles": {
+                "safe": resolve_sandbox_profile("safe").model_dump(),
+                "standard": resolve_sandbox_profile("standard").model_dump(),
+                "full": resolve_sandbox_profile("full").model_dump(),
+            },
+        }
+
+    @router.post("/github/repos")
+    def v1_github_repos(body: dict[str, Any]) -> dict[str, Any]:
+        token = str(body.get("token", "") or "").strip()
+        if not token:
+            raise HTTPException(status_code=400, detail="token is required")
+        return ctx.integration_service.list_github_repos(token)
+
+    @router.post("/github/repo/create")
+    def v1_github_repo_create(body: GithubRepoCreateRequest) -> dict[str, Any]:
+        return ctx.integration_service.create_github_repo(
+            body.token,
+            name=body.name,
+            private=body.private,
+            description=body.description,
+        )
+
+    @router.post("/github/branch/create")
+    def v1_github_branch_create(body: GithubBranchRequest) -> dict[str, Any]:
+        return ctx.integration_service.create_branch(
+            body.repo_path,
+            base_branch=body.base_branch,
+            new_branch=body.new_branch,
+        )
+
+    @router.post("/github/pr/template")
+    def v1_github_pr_template(body: dict[str, Any]) -> dict[str, Any]:
+        title = str(body.get("title", "") or "AI-generated update")
+        summary = str(body.get("summary", "") or "")
+        run_id = str(body.get("run_id", "") or "unknown")
+        provider = str(body.get("provider", "") or "unknown")
+        label = ctx.integration_service.infer_change_type_label(summary)
+        template = ctx.integration_service.build_pr_template(
+            title=title,
+            summary=summary,
+            run_id=run_id,
+            provider=provider,
+        )
+        return {"status": "ok", "label": label, "template": template}
+
+    @router.post("/github/prepush/scan")
+    def v1_github_secret_scan(body: dict[str, Any]) -> dict[str, Any]:
+        repo_path = str(body.get("repo_path", "") or "").strip()
+        if not repo_path:
+            raise HTTPException(status_code=400, detail="repo_path is required")
+        return ctx.integration_service.pre_push_secret_scan(repo_path)
+
+    @router.post("/github/sync")
+    def v1_github_sync(body: GithubSyncRequest) -> dict[str, Any]:
+        return ctx.integration_service.sync_remote(body.repo_path, default_branch=body.default_branch)
+
+    @router.post("/github/drift")
+    def v1_github_drift(body: GithubSyncRequest) -> dict[str, Any]:
+        return ctx.integration_service.detect_drift(body.repo_path, default_branch=body.default_branch)
+
+    @router.post("/github/rollback")
+    def v1_github_rollback(body: GithubRollbackRequest) -> dict[str, Any]:
+        return ctx.integration_service.rollback_commit(body.repo_path, body.commit_sha)
+
+    @router.post("/github/issues/sync")
+    def v1_github_issue_sync(body: dict[str, Any]) -> dict[str, Any]:
+        project_id = str(body.get("project_id", "") or "").strip()
+        if not project_id:
+            raise HTTPException(status_code=400, detail="project_id is required")
+        tasks = ctx.project_service.task_board.get_board(project_id)
+        issues = []
+        for task in tasks:
+            issues.append(
+                {
+                    "title": task.get("title", ""),
+                    "body": task.get("description", ""),
+                    "labels": [ctx.integration_service.infer_change_type_label(task.get("title", ""))],
+                    "state": "closed" if str(task.get("status", "")).lower() == "done" else "open",
+                }
+            )
+        return {"status": "ok", "issues": issues, "count": len(issues)}
+
+    @router.post("/vercel/link")
+    def v1_vercel_link(body: VercelLinkRequest) -> dict[str, Any]:
+        return ctx.integration_service.vercel_link_project(body.token, name=body.project_name, team_id=body.team_id)
+
+    @router.post("/vercel/deploy")
+    def v1_vercel_deploy(body: VercelDeployRequest) -> dict[str, Any]:
+        target = body.target.lower().strip() or "preview"
+        if target not in {"preview", "production"}:
+            raise HTTPException(status_code=400, detail="target must be preview or production")
+        return ctx.integration_service.vercel_deploy(
+            body.token,
+            project_name=body.project_name,
+            team_id=body.team_id,
+            target=target,
+            git_source=body.git_source,
+        )
+
+    @router.post("/vercel/domain")
+    def v1_vercel_domain(body: VercelDomainRequest) -> dict[str, Any]:
+        return ctx.integration_service.vercel_assign_domain(
+            body.token,
+            project_name=body.project_name,
+            domain=body.domain,
+            team_id=body.team_id,
+        )
+
+    @router.post("/vercel/env")
+    def v1_vercel_env(body: VercelEnvRequest) -> dict[str, Any]:
+        return ctx.integration_service.vercel_set_env(
+            body.token,
+            project_name=body.project_name,
+            key=body.key,
+            value=body.value,
+            target=body.target,
+            team_id=body.team_id,
+        )
+
+    @router.get("/deployment/live-feed")
+    def v1_deployment_live_feed(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+        # Uses activity.log as single source; client can filter deployment actions.
+        activity_path = f"{ctx.data_dir}/activity.log"
+        events: list[dict[str, Any]] = []
+        try:
+            with open(activity_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = __import__("json").loads(line)
+                    except Exception:
+                        continue
+                    if str(payload.get("action", "")).upper() in {
+                        "DEPLOY",
+                        "DEPLOY_PREVIEW",
+                        "DEPLOY_PRODUCTION",
+                        "ROLLBACK",
+                    }:
+                        events.append(payload)
+        except OSError:
+            pass
+        return {"status": "ok", "events": events[-limit:]}
+
+    return router

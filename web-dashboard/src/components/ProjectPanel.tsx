@@ -50,11 +50,11 @@ interface PriorityInfo { bg: string; text: string; label: string; icon: string }
 
 function priorityBadge(priority: string): PriorityInfo {
   const p = (priority || '').toUpperCase();
-  if (p === 'P0' || p === 'CRITICAL') return { bg: '#2d1519', text: 'var(--tf-error)',    label: 'Critical', icon: '🔴' };
-  if (p === 'P1' || p === 'HIGH')     return { bg: '#2d2213', text: 'var(--tf-warning)',  label: 'High',     icon: '🟠' };
-  if (p === 'P2' || p === 'MEDIUM')   return { bg: '#2d2213', text: 'var(--tf-warning)',  label: 'Medium',   icon: '🟡' };
-  if (p === 'P3' || p === 'LOW')      return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)', label: 'Low', icon: '🟢' };
-  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-muted)', label: priority || 'None', icon: '⚪' };
+  if (p === 'P0' || p === 'CRITICAL') return { bg: '#2d1519', text: 'var(--tf-error)',    label: 'Critical', icon: '●' };
+  if (p === 'P1' || p === 'HIGH')     return { bg: '#2d2213', text: 'var(--tf-warning)',  label: 'High',     icon: '●' };
+  if (p === 'P2' || p === 'MEDIUM')   return { bg: '#2d2213', text: 'var(--tf-warning)',  label: 'Medium',   icon: '●' };
+  if (p === 'P3' || p === 'LOW')      return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)', label: 'Low', icon: '●' };
+  return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-muted)', label: priority || 'None', icon: '○' };
 }
 
 // ---- Health Score ----
@@ -752,7 +752,7 @@ function MilestonesTab({ project, tasks }: MilestonesTabProps) {
           <div key={i} className="rounded-xl p-4 flex flex-col gap-2" style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-base">{ms.status === 'done' ? '✅' : ms.status === 'active' ? '🔵' : '⭕'}</span>
+                <span className="text-base">{ms.status === 'done' ? '●' : ms.status === 'active' ? '◉' : '○'}</span>
                 <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>{ms.name}</span>
               </div>
               <span className="text-xs font-bold" style={{ color }}>{ms.pct}%</span>
