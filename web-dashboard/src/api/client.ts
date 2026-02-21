@@ -88,12 +88,15 @@ export function createActivityStream(onMessage: (line: string) => void): EventSo
   return es;
 }
 
-export async function fetchChatHistory(limit = 50): Promise<ChatMessage[]> {
-  return safeFetch<ChatMessage[]>(`${BASE}/chat/history?limit=${limit}`, []);
+export async function fetchChatHistory(limit = 50, projectId = ''): Promise<ChatMessage[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (projectId) params.set('project_id', projectId);
+  return safeFetch<ChatMessage[]>(`${BASE}/chat/history?${params.toString()}`, []);
 }
 
-export async function clearChatHistory(): Promise<void> {
-  await safeMutate(`${BASE}/chat/history`, 'DELETE');
+export async function clearChatHistory(projectId = ''): Promise<void> {
+  const suffix = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  await safeMutate(`${BASE}/chat/history${suffix}`, 'DELETE');
 }
 
 export function createChatWebSocket(): WebSocket {
@@ -147,6 +150,29 @@ export async function fetchProjectSpecs(id: string): Promise<{ filename: string;
 
 export async function approveProjectPlan(id: string): Promise<boolean> {
   return safeMutate(`${BASE}/projects/${encodeURIComponent(id)}/approve`, 'POST');
+}
+
+export async function createProject(data: {
+  name: string;
+  description?: string;
+  type?: string;
+}): Promise<{ status: string; project?: Project } | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE}/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function testLlmConnection(opts: {

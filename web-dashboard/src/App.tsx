@@ -145,7 +145,7 @@ function inferAgentFromText(lower: string): string {
 }
 
 function eventKey(evt: ActivityEvent): string {
-  return `${evt.timestamp}|${evt.agent}|${evt.action}`;
+  return `${evt.timestamp}|${evt.agent}|${evt.action}|${evt.project_id ?? ''}|${evt.detail ?? ''}`;
 }
 
 function parseActivityLine(line: string): ActivityEvent | null {
@@ -201,10 +201,12 @@ export default function App() {
 
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string>('');
 
   const navigateToProject = (projectId: string) => {
     setActiveTab('projects');
     setPendingProjectId(projectId);
+    setActiveProjectId(projectId);
     setChatOpen(false);
   };
 
@@ -275,6 +277,9 @@ export default function App() {
       const projectList = await fetchProjects();
       const list = Array.isArray(projectList) ? projectList : [];
       setProjects(list);
+      if (activeProjectId && !list.some((p) => p.id === activeProjectId)) {
+        setActiveProjectId('');
+      }
 
       if (includeTasks) {
         // Fetch task details only when needed to keep UI responsive on larger project sets.
@@ -302,7 +307,7 @@ export default function App() {
         setLoadingTasks(false);
       }
     }
-  }, []);
+  }, [activeProjectId]);
 
   const loadMetrics = useCallback(async () => {
     try {
@@ -520,8 +525,15 @@ export default function App() {
             loading={loadingProjects}
             tasksByProject={tasksByProject}
             initialProjectId={pendingProjectId}
+            selectedProjectId={activeProjectId}
+            onSelectProject={(projectId) => setActiveProjectId(projectId)}
             onProjectIdConsumed={() => setPendingProjectId(null)}
             onRefresh={loadProjects}
+            onProjectCreated={(projectId) => {
+              setActiveProjectId(projectId);
+              setPendingProjectId(projectId);
+              loadProjects(true);
+            }}
           />
         );
 
@@ -597,6 +609,9 @@ export default function App() {
             onNavigateToProject={navigateToProject}
             pendingApprovalProjects={pendingApprovalProjects}
             onProjectApproved={() => loadProjects()}
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onActiveProjectChange={(projectId) => setActiveProjectId(projectId)}
           />
         }
       >

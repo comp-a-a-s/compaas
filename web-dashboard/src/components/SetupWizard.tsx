@@ -81,10 +81,10 @@ const NAME_TEMPLATES: Record<string, Record<string, string>> = {
 
 // Theme options
 const THEMES = [
-  { id: 'midnight', label: 'Midnight', description: 'Deep dark — high contrast', preview: ['#08131a', '#183548', '#edf5fb'] },
-  { id: 'twilight', label: 'Twilight', description: 'Softer dark with clearer text', preview: ['#121425', '#272b42', '#f2f4ff'] },
-  { id: 'dawn', label: 'Dawn', description: 'Ultra-light daytime palette', preview: ['#fcfeff', '#f7fbff', '#384f61'] },
-  { id: 'sahara', label: 'Sahara', description: 'Warm dusk with stronger readability', preview: ['#1d1711', '#362a20', '#f6eadf'] },
+  { id: 'midnight', label: 'Midnight', description: 'High-contrast deep blue', preview: ['#070f19', '#17293d', '#edf5ff'] },
+  { id: 'twilight', label: 'Twilight', description: 'Moody indigo dusk', preview: ['#181626', '#312f4a', '#f3f4ff'] },
+  { id: 'dawn', label: 'Dawn', description: 'Muted warm daylight', preview: ['#efe9de', '#ece4d6', '#2f3a45'] },
+  { id: 'sahara', label: 'Sahara', description: 'Soft desert parchment', preview: ['#f2e7d4', '#efe1cb', '#3f3325'] },
 ];
 
 // ---- Colours (CSS variables only) ----
@@ -102,6 +102,24 @@ const C = {
   success: 'var(--tf-success)',
   warning: 'var(--tf-warning)',
   error: 'var(--tf-error)',
+} as const;
+
+function MaterialIcon({ path, size = 20 }: { path: string; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d={path} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+const ICON_PATHS = {
+  agents: 'M16 11a4 4 0 1 0-8 0m11 8v-1a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v1M8 7a2 2 0 1 0-4 0m20 0a2 2 0 1 1-4 0',
+  chat: 'M8 10h8M8 14h5M4 20l3-3h11a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12z',
+  projects: 'M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z',
+  monitor: 'M4 18h16M7 14l3-4 3 2 4-6',
+  anthropic: 'M12 3l7 4v10l-7 4-7-4V7l7-4z',
+  openai: 'M12 4l3 2 3 0 2 3-1 3 1 3-2 3-3 0-3 2-3-2-3 0-2-3 1-3-1-3 2-3 3 0 3-2z',
+  local: 'M5 18h14M6 6h12l2 8H4l2-8z',
 } as const;
 
 // ---- Step indicator ----
@@ -169,10 +187,10 @@ function StepIndicator({ current, total }: { current: number; total: number }) {
 
 function StepWelcome() {
   const features = [
-    { icon: '🤖', label: 'Team of 15 AI agents', desc: 'Engineering, Product, Research & Ops' },
-    { icon: '💬', label: 'Chat with CEO', desc: 'Direct access to your AI CEO' },
-    { icon: '📋', label: 'Track projects & tasks', desc: 'Kanban boards and task management' },
-    { icon: '📊', label: 'Real-time monitoring', desc: 'Live activity feed and metrics' },
+    { icon: <MaterialIcon path={ICON_PATHS.agents} />, label: 'Team of 15 AI agents', desc: 'Engineering, Product, Research & Ops' },
+    { icon: <MaterialIcon path={ICON_PATHS.chat} />, label: 'Chat with CEO', desc: 'Direct access to your AI CEO' },
+    { icon: <MaterialIcon path={ICON_PATHS.projects} />, label: 'Track projects & tasks', desc: 'Kanban boards and task management' },
+    { icon: <MaterialIcon path={ICON_PATHS.monitor} />, label: 'Real-time monitoring', desc: 'Live activity feed and metrics' },
   ];
 
   return (
@@ -204,7 +222,7 @@ function StepWelcome() {
               alignItems: 'flex-start',
             }}
           >
-            <span style={{ fontSize: '18px', flexShrink: 0, marginTop: '1px' }}>{f.icon}</span>
+            <span style={{ fontSize: '18px', flexShrink: 0, marginTop: '1px', color: C.accent }}>{f.icon}</span>
             <div>
               <div style={{ fontSize: '12px', fontWeight: 600, color: C.textPrimary, marginBottom: '2px' }}>{f.label}</div>
               <div style={{ fontSize: '11px', color: C.textSecondary }}>{f.desc}</div>
@@ -320,7 +338,7 @@ function SubTab({ label, active, onClick }: { label: string; active: boolean; on
 }
 
 interface ProviderCardProps {
-  icon: string;
+  icon: React.ReactNode;
   title: string;
   description: string;
   selected: boolean;
@@ -345,7 +363,7 @@ function ProviderCard({ icon, title, description, selected, onClick, children }:
       onBlur={(e) => { e.currentTarget.style.boxShadow = 'none'; }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: selected && children ? '14px' : 0 }}>
-        <span style={{ fontSize: '22px', flexShrink: 0 }}>{icon}</span>
+        <span style={{ fontSize: '22px', flexShrink: 0, color: selected ? C.accent : C.textSecondary }}>{icon}</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: '14px', fontWeight: 600, color: C.textPrimary, marginBottom: '2px' }}>{title}</div>
           <div style={{ fontSize: '12px', color: C.textSecondary }}>{description}</div>
@@ -444,7 +462,7 @@ function StepAiProvider({
 
       {/* ── Anthropic ── */}
       <ProviderCard
-        icon="⚡" selected={llmProvider === 'anthropic'}
+        icon={<MaterialIcon path={ICON_PATHS.anthropic} />} selected={llmProvider === 'anthropic'}
         title="Anthropic (Recommended)"
         description="Claude Opus 4 / Sonnet 4 / Haiku 4.5 — world's best reasoning and tool-use. Via CLI or direct API key."
         onClick={() => setLlmProvider('anthropic')}
@@ -572,7 +590,7 @@ function StepAiProvider({
 
       {/* ── OpenAI ── */}
       <ProviderCard
-        icon="🤖" selected={llmProvider === 'openai'}
+        icon={<MaterialIcon path={ICON_PATHS.openai} />} selected={llmProvider === 'openai'}
         title="OpenAI"
         description="GPT-4o, o3-mini, o1 — cloud models. Works via API key or the Codex CLI."
         onClick={() => setLlmProvider('openai')}
@@ -697,7 +715,7 @@ function StepAiProvider({
 
       {/* ── Local Model ── */}
       <ProviderCard
-        icon="🖥️" selected={llmProvider === 'openai_compat'}
+        icon={<MaterialIcon path={ICON_PATHS.local} />} selected={llmProvider === 'openai_compat'}
         title="Local / Self-Hosted"
         description="Ollama, LM Studio, llama.cpp, Jan, vLLM — run models on your own machine. Free, private, no cloud."
         onClick={() => setLlmProvider('openai_compat')}
@@ -1560,6 +1578,18 @@ function StepComplete({
 }
 
 function WizardBackdrop() {
+  const particles = [
+    { left: '8%', top: '14%', delay: '0s' },
+    { left: '19%', top: '28%', delay: '0.8s' },
+    { left: '30%', top: '20%', delay: '1.4s' },
+    { left: '62%', top: '18%', delay: '0.6s' },
+    { left: '74%', top: '30%', delay: '1.1s' },
+    { left: '84%', top: '22%', delay: '1.8s' },
+    { left: '18%', top: '70%', delay: '1.2s' },
+    { left: '48%', top: '78%', delay: '0.5s' },
+    { left: '70%', top: '74%', delay: '1.6s' },
+    { left: '90%', top: '66%', delay: '0.9s' },
+  ];
   return (
     <div
       aria-hidden="true"
@@ -1601,6 +1631,29 @@ function WizardBackdrop() {
         }}
       />
       <div
+        className="wizard-halo-ring"
+        style={{
+          position: 'absolute',
+          width: '72vw',
+          height: '72vw',
+          minWidth: '560px',
+          minHeight: '560px',
+          left: '50%',
+          top: '52%',
+          transform: 'translate(-50%, -50%)',
+          borderRadius: '50%',
+          background:
+            'conic-gradient(from 120deg, ' +
+            'color-mix(in srgb, var(--tf-accent-blue) 35%, transparent), ' +
+            'transparent 30%, ' +
+            'color-mix(in srgb, var(--tf-accent) 30%, transparent) 64%, ' +
+            'transparent 88%)',
+          maskImage: 'radial-gradient(circle, transparent 44%, black 46%, black 52%, transparent 57%)',
+          opacity: 0.4,
+          filter: 'blur(2px)',
+        }}
+      />
+      <div
         className="wizard-grid-glow"
         style={{
           position: 'absolute',
@@ -1611,6 +1664,38 @@ function WizardBackdrop() {
             'linear-gradient(to bottom, color-mix(in srgb, var(--tf-border) 60%, transparent) 1px, transparent 1px)',
           backgroundSize: '44px 44px',
           maskImage: 'radial-gradient(circle at 50% 20%, black, transparent 72%)',
+        }}
+      />
+      {particles.map((p, idx) => (
+        <div
+          key={`${p.left}-${p.top}`}
+          className="wizard-particle"
+          style={{
+            position: 'absolute',
+            left: p.left,
+            top: p.top,
+            width: idx % 3 === 0 ? '5px' : '3px',
+            height: idx % 3 === 0 ? '5px' : '3px',
+            borderRadius: '999px',
+            background: 'color-mix(in srgb, var(--tf-accent-blue) 75%, white)',
+            boxShadow: '0 0 16px color-mix(in srgb, var(--tf-accent-blue) 45%, transparent)',
+            opacity: 0.75,
+            animationDelay: p.delay,
+          }}
+        />
+      ))}
+      <div
+        className="wizard-wave"
+        style={{
+          position: 'absolute',
+          left: '-10%',
+          right: '-10%',
+          bottom: '-8%',
+          height: '46%',
+          background:
+            'radial-gradient(70% 110% at 50% 100%, color-mix(in srgb, var(--tf-accent) 22%, transparent), transparent 72%)',
+          filter: 'blur(6px)',
+          opacity: 0.65,
         }}
       />
       <div
@@ -2052,6 +2137,19 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
           0%, 100% { opacity: 0.16; }
           50% { opacity: 0.28; }
         }
+        @keyframes wizardHaloSpin {
+          0% { transform: translate(-50%, -50%) rotate(0deg); opacity: 0.22; }
+          50% { opacity: 0.46; }
+          100% { transform: translate(-50%, -50%) rotate(360deg); opacity: 0.22; }
+        }
+        @keyframes wizardParticleFloat {
+          0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.35; }
+          50% { transform: translate3d(0, -10px, 0) scale(1.3); opacity: 0.95; }
+        }
+        @keyframes wizardWaveShift {
+          0%, 100% { transform: translateX(0); opacity: 0.45; }
+          50% { transform: translateX(2.5%); opacity: 0.7; }
+        }
         @keyframes wizardScan {
           0% { transform: translateY(-30vh); opacity: 0; }
           20% { opacity: 0.42; }
@@ -2061,6 +2159,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         .wizard-orb-a { animation: wizardFloatA 12s ease-in-out infinite; }
         .wizard-orb-b { animation: wizardFloatB 14s ease-in-out infinite; }
         .wizard-grid-glow { animation: wizardGridPulse 8s ease-in-out infinite; }
+        .wizard-halo-ring { animation: wizardHaloSpin 26s linear infinite; }
+        .wizard-particle { animation: wizardParticleFloat 4.2s ease-in-out infinite; }
+        .wizard-wave { animation: wizardWaveShift 13s ease-in-out infinite; }
         .wizard-scanline { animation: wizardScan 9.5s linear infinite; }
       `}</style>
     </div>

@@ -159,6 +159,24 @@ class TestListProjectsEndpoint:
         assert names == {"Project Alpha", "Project Beta"}
 
 
+class TestCreateProjectEndpoint:
+    def test_creates_project_and_returns_metadata(self, client):
+        response = client.post("/api/projects", json={
+            "name": "Chat Project",
+            "description": "Created from UI",
+            "type": "app",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["project"]["name"] == "Chat Project"
+        assert payload["project"]["workspace_path"]
+
+    def test_rejects_missing_name(self, client):
+        response = client.post("/api/projects", json={"description": "No name"})
+        assert response.status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # GET /api/projects/{project_id}
 # ---------------------------------------------------------------------------

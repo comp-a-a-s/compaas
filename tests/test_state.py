@@ -27,6 +27,8 @@ class TestProjectState:
         assert project["description"] == "A test application"
         assert project["type"] == "web"
         assert project["status"] == "planning"
+        assert project["workspace_path"].endswith(pid)
+        assert os.path.isdir(project["workspace_path"])
 
     def test_create_project_creates_subdirs(self, data_dir):
         mgr = ProjectStateManager(data_dir)
@@ -43,6 +45,16 @@ class TestProjectState:
         project_path = os.path.join(data_dir, "projects", pid)
         assert os.path.exists(os.path.join(project_path, "tasks.yaml"))
         assert os.path.exists(os.path.join(project_path, "decisions.yaml"))
+
+    def test_create_project_seeds_required_docs(self, data_dir):
+        mgr = ProjectStateManager(data_dir)
+        pid = mgr.create_project("Test", "Test", "general")
+
+        project_path = os.path.join(data_dir, "projects", pid)
+        assert os.path.exists(os.path.join(project_path, "specs", "00_stakeholder_meeting_summary.md"))
+        assert os.path.exists(os.path.join(project_path, "specs", "01_full_execution_plan.md"))
+        assert os.path.exists(os.path.join(project_path, "artifacts", "02_activation_guide.md"))
+        assert os.path.exists(os.path.join(project_path, "artifacts", "03_project_handoff.md"))
 
     def test_get_nonexistent_project(self, data_dir):
         mgr = ProjectStateManager(data_dir)

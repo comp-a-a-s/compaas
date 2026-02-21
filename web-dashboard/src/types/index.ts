@@ -26,6 +26,7 @@ export interface Project {
   task_counts?: Record<string, number>;
   total_tasks?: number;
   plan_approved?: boolean;
+  workspace_path?: string;
 }
 
 export interface Task {
@@ -60,6 +61,8 @@ export interface ActivityEvent {
   agent: string;
   action: string;
   detail: string;
+  project_id?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TokenReport {
@@ -93,9 +96,10 @@ export interface Budget {
 }
 
 export interface ChatMessage {
-  role: 'user' | 'ceo';
+  role: 'user' | 'ceo' | 'system';
   content: string;
   timestamp: string;
+  project_id?: string;
 }
 
 export interface LlmConfig {

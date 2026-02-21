@@ -46,6 +46,13 @@ interface ActionInfo { label: string; icon: string; color: string; }
 
 function parseActionText(text: string): ActionInfo {
   const lower = text.toLowerCase();
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const runningMatch = normalized.match(/^(running|run|execute|executing)\s*:?\s*(.+)$/i);
+  if (runningMatch?.[2]) {
+    const cmd = runningMatch[2].trim();
+    const clipped = cmd.length > 72 ? `${cmd.slice(0, 69)}…` : cmd;
+    return { label: `Running: ${clipped}`, icon: '⚡', color: 'var(--tf-accent)' };
+  }
   if (lower.includes('delegat') || lower.includes('spawn') || lower.includes('subagent')) {
     const m = text.match(/\b(ceo|cto|cfo|ciso|backend|frontend|devops|qa|designer|researcher|security|writer)\b/i);
     return { label: `Delegating to ${m ? m[1] : 'team'}…`, icon: '→', color: 'var(--tf-accent)' };
@@ -66,8 +73,14 @@ function parseActionText(text: string): ActionInfo {
     const f = text.match(/[A-Za-z0-9_-]+\.[a-z]{2,5}/);
     return { label: f ? `Writing ${f[0]}` : 'Writing code…', icon: '✎', color: 'var(--tf-success)' };
   }
-  if (lower.includes('bash') || lower.includes('run') || lower.includes('execut') || lower.includes('command'))
+  if (lower.includes('bash') || lower.includes('run') || lower.includes('execut') || lower.includes('command')) {
+    const commandHint = normalized.match(/`([^`]+)`/)?.[1] ?? '';
+    if (commandHint) {
+      const clipped = commandHint.length > 72 ? `${commandHint.slice(0, 69)}…` : commandHint;
+      return { label: `Running: ${clipped}`, icon: '⚡', color: 'var(--tf-accent)' };
+    }
     return { label: 'Running command…', icon: '⚡', color: 'var(--tf-accent)' };
+  }
   if (lower.includes('plan') || lower.includes('analyz') || lower.includes('review'))
     return { label: 'Analyzing…', icon: '◈', color: 'var(--tf-warning)' };
   const clean = text.replace(/\/home\/[^\s/]+\/[^\s/]+\//g, '…/').replace(/\s+/g, ' ').trim();
@@ -319,7 +332,12 @@ function EmptyState({ ceoName = 'CEO' }: { ceoName?: string }) {
 
 // ---- Action log ----
 
-interface ActionEntry { text: string; status: 'running' | 'done'; }
+interface ActionEntry {
+  text: string;
+  status: 'running' | 'done';
+  result?: string;
+  at: string;
+}
 
 function ActionLog({ entries, ceoName }: { entries: ActionEntry[]; ceoName: string }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -343,11 +361,29 @@ function ActionLog({ entries, ceoName }: { entries: ActionEntry[]; ceoName: stri
           {entries.map((entry, i) => {
             const info = parseActionText(entry.text);
             return (
-              <div key={i} className="flex items-center gap-2">
+              <div key={i} className="flex items-start gap-2">
                 {entry.status === 'done'
                   ? <span className="text-xs flex-shrink-0 w-3 text-center" style={{ color: 'var(--tf-success)' }}>✓</span>
                   : <span className="text-xs flex-shrink-0 w-3 text-center animate-pulse-dot" style={{ color: info.color }}>{info.icon}</span>}
-                <span className="text-xs leading-snug" style={{ color: entry.status === 'done' ? 'var(--tf-text-muted)' : info.color }}>{info.label}</span>
+                <div style={{ minWidth: 0 }}>
+                  <div className="text-xs leading-snug" style={{ color: entry.status === 'done' ? 'var(--tf-text-muted)' : info.color }}>
+                    {info.label}
+                  </div>
+                  {entry.result && (
+                    <div
+                      className="text-xs leading-snug mt-0.5"
+                      style={{
+                        color: 'var(--tf-text-muted)',
+                        maxWidth: '100%',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {entry.result}
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -467,9 +503,12 @@ function PinnedPanel({ messages, ceoName, userName, onClose, onUnpin }: {
 // ---- WebSocket types ----
 
 interface WsMessage {
-  type: 'user_ack' | 'thinking' | 'chunk' | 'done' | 'error' | 'action' | 'action_result' | 'micro_project_warning';
+  type: 'user_ack' | 'thinking' | 'chunk' | 'done' | 'error' | 'action' | 'action_result' | 'micro_project_warning' | 'project_context';
   content?: string;
   message?: ChatMessage;
+  project_id?: string;
+  created?: boolean;
+  project?: Project;
 }
 function isWsMessage(data: unknown): data is WsMessage {
   return typeof data === 'object' && data !== null && typeof (data as Record<string, unknown>).type === 'string';
@@ -536,6 +575,9 @@ interface ChatPanelProps {
   onNavigateToProjects?: () => void;
   pendingApprovalProjects?: Project[];
   onProjectApproved?: (projectId: string) => void;
+  projects?: Project[];
+  activeProjectId?: string;
+  onActiveProjectChange?: (projectId: string) => void;
 }
 
 export default function ChatPanel({
@@ -550,6 +592,9 @@ export default function ChatPanel({
   onNavigateToProject,
   pendingApprovalProjects = [],
   onProjectApproved,
+  projects = [],
+  activeProjectId = '',
+  onActiveProjectChange,
 }: ChatPanelProps) {
   // Core state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -663,10 +708,10 @@ export default function ChatPanel({
 
   // Load history
   useEffect(() => {
-    fetchChatHistory(100).then((history) => {
-      if (Array.isArray(history) && history.length > 0) setMessages(history);
+    fetchChatHistory(150, activeProjectId).then((history) => {
+      if (Array.isArray(history)) setMessages(history);
     }).catch(() => {});
-  }, []);
+  }, [activeProjectId]);
 
   // Load CEO memories
   useEffect(() => {
@@ -696,7 +741,7 @@ export default function ChatPanel({
     setSummarizing(false);
     if (result.status === 'ok') {
       // Reload history to see compressed version
-      fetchChatHistory(100).then((h) => { if (Array.isArray(h)) setMessages(h); }).catch(() => {});
+      fetchChatHistory(100, activeProjectId).then((h) => { if (Array.isArray(h)) setMessages(h); }).catch(() => {});
     }
   };
 
@@ -722,9 +767,22 @@ export default function ChatPanel({
           switch (data.type) {
             case 'user_ack': break;
             case 'thinking': setThinkingContent(data.content || `${ceoName} is thinking…`); break;
-            case 'action': setActionLog((prev) => [...prev, { text: data.content || '', status: 'running' }]); break;
+            case 'action':
+              setActionLog((prev) => [...prev, {
+                text: data.content || '',
+                status: 'running',
+                at: new Date().toISOString(),
+              }]);
+              break;
             case 'action_result':
-              setActionLog((prev) => prev.length > 0 ? [...prev.slice(0, -1), { ...prev[prev.length - 1], status: 'done' }] : prev);
+              setActionLog((prev) => prev.length > 0 ? [
+                ...prev.slice(0, -1),
+                {
+                  ...prev[prev.length - 1],
+                  status: 'done',
+                  result: data.content || prev[prev.length - 1].result,
+                },
+              ] : prev);
               break;
             case 'chunk': {
               setActionLog((prev) =>
@@ -736,11 +794,25 @@ export default function ChatPanel({
               setStreamingContent(streamingAccumRef.current);
               break;
             }
+            case 'project_context': {
+              if (data.project_id && data.project_id !== activeProjectId) {
+                onActiveProjectChange?.(data.project_id);
+                fetchChatHistory(150, data.project_id).then((history) => {
+                  if (Array.isArray(history)) setMessages(history);
+                }).catch(() => {});
+              }
+              break;
+            }
             case 'done': {
               const finalContent = streamingAccumRef.current || data.content || '';
               streamingAccumRef.current = '';
               if (!turnErroredRef.current && finalContent.trim()) {
-                setMessages((prev) => [...prev, { role: 'ceo', content: finalContent, timestamp: new Date().toISOString() }]);
+                setMessages((prev) => [...prev, {
+                  role: 'ceo',
+                  content: finalContent,
+                  timestamp: new Date().toISOString(),
+                  project_id: data.project_id || activeProjectId,
+                }]);
               }
               turnErroredRef.current = false;
               setStreamingContent(''); setThinkingContent(''); setActionLog([]); setIsWaiting(false);
@@ -770,7 +842,7 @@ export default function ChatPanel({
       };
       ws.onerror = () => setConnectionStatus('error');
     } catch { setConnectionStatus('error'); }
-  }, [ceoName]);
+  }, [activeProjectId, ceoName, onActiveProjectChange]);
 
   useEffect(() => {
     connectWebSocket();
@@ -815,7 +887,12 @@ export default function ChatPanel({
 
     const toneOption = TONE_OPTIONS.find((t) => t.id === tone);
     const prefix = toneOption?.prefix ?? '';
-    setMessages((prev) => [...prev, { role: 'user', content: text, timestamp: new Date().toISOString() }]);
+    setMessages((prev) => [...prev, {
+      role: 'user',
+      content: text,
+      timestamp: new Date().toISOString(),
+      project_id: activeProjectId,
+    }]);
     setInput('');
     setIsWaiting(true);
     setStreamingContent('');
@@ -828,15 +905,16 @@ export default function ChatPanel({
       message: prefix + text,
       micro_project_mode: effectiveMicroMode,
       micro_project_override: microOverride,
+      project_id: activeProjectId,
     }));
-  }, [input, isWaiting, tone, connectWebSocket, microProjectMode]);
+  }, [input, isWaiting, tone, connectWebSocket, microProjectMode, activeProjectId]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
   const handleClear = async () => {
-    await clearChatHistory();
+    await clearChatHistory(activeProjectId);
     setMessages([]); setStreamingContent(''); setThinkingContent('');
     streamingAccumRef.current = '';
     setPinnedIds(new Set()); localStorage.removeItem('tf_pinned_msgs');
@@ -852,10 +930,35 @@ export default function ChatPanel({
   const visibleApprovals = pendingApprovalProjects.filter((p) => !dismissedProjectIds.has(p.id));
   const hasMessages = messages.length > 0 || streamingContent;
   const currentTone = TONE_OPTIONS.find((t) => t.id === tone)!;
+  const activeProject = projects.find((p) => p.id === activeProjectId) || null;
 
   // ---- Shared header controls ----
   const headerControls = (
     <div className="chat-toolbar flex items-center gap-1" style={{ flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '2px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Project</label>
+        <select
+          value={activeProjectId}
+          onChange={(e) => onActiveProjectChange?.(e.target.value)}
+          style={{
+            fontSize: '12px',
+            borderRadius: '6px',
+            border: '1px solid var(--tf-border)',
+            backgroundColor: 'var(--tf-surface)',
+            color: 'var(--tf-text)',
+            padding: '4px 8px',
+            minWidth: '130px',
+          }}
+        >
+          <option value="">General</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {/* Micro Project toggle */}
       <button
         onClick={() => {
@@ -1136,6 +1239,31 @@ export default function ChatPanel({
                 {filteredMessages.length} of {messages.length} messages match "{searchQuery}"
               </div>
             )}
+
+            <div
+              className="mb-3 rounded-xl px-3 py-2 animate-slide-up"
+              style={{
+                backgroundColor: 'var(--tf-surface)',
+                border: '1px solid var(--tf-border)',
+              }}
+            >
+              <p className="text-xs font-semibold" style={{ color: 'var(--tf-text-secondary)' }}>
+                Active context: {activeProject ? activeProject.name : 'General (no project selected)'}
+              </p>
+              {activeProject?.workspace_path && (
+                <p
+                  className="text-xs mt-1"
+                  style={{
+                    color: 'var(--tf-text-muted)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Workspace: {activeProject.workspace_path}
+                </p>
+              )}
+            </div>
 
             {microProjectMode && (
               <div
