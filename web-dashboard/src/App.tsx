@@ -480,10 +480,15 @@ export default function App() {
   useKeyboardShortcuts(shortcuts);
 
   // Must be declared before any early returns to satisfy Rules of Hooks
-  const pendingApprovalProjects = useMemo(
-    () => projects.filter((p) => p.plan_approved !== true && p.status === 'planning'),
-    [projects]
-  );
+  const pendingApprovalProjects = useMemo(() => {
+    if (!activeProjectId) return [];
+    return projects.filter(
+      (project) =>
+        project.id === activeProjectId
+        && project.plan_approved !== true
+        && project.status === 'planning'
+    );
+  }, [projects, activeProjectId]);
   const handleConfigUpdated = useCallback(() => {
     loadAgents();
     fetchConfig().then((cfg) => {

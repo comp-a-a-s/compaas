@@ -8,22 +8,9 @@ import {
   fetchMemory,
   addMemory,
   clearMemory,
-  summarizeChat,
-  retryRunStep,
   fetchMemoryPolicy,
   updateMemoryPolicy,
 } from '../api/client';
-
-// ---- Tone presets ----
-
-const TONE_OPTIONS = [
-  { id: 'default',   label: 'Default',   prefix: '' },
-  { id: 'formal',    label: 'Formal',    prefix: 'Respond formally and professionally. ' },
-  { id: 'direct',    label: 'Direct',    prefix: 'Be direct and concise. ' },
-  { id: 'friendly',  label: 'Friendly',  prefix: 'Be warm and conversational. ' },
-  { id: 'technical', label: 'Technical', prefix: 'Include technical details and precision. ' },
-] as const;
-type ToneId = typeof TONE_OPTIONS[number]['id'];
 
 // ---- Helpers ----
 
@@ -677,17 +664,8 @@ export default function ChatPanel({
   const [actionDetails, setActionDetails] = useState<ActionDetailEntry[]>([]);
   const [showActionDetails, setShowActionDetails] = useState(false);
   const [latestRunId, setLatestRunId] = useState('');
-  const [noDelegationMode, setNoDelegationMode] = useState(false);
   const [planningPendingDecision, setPlanningPendingDecision] = useState<{ message: string; reason: string } | null>(null);
   const [dismissedProjectIds, setDismissedProjectIds] = useState<Set<string>>(new Set());
-
-  // Feature: Tone presets — validate stored value is a known ToneId
-  const [tone, setTone] = useState<ToneId>(() => {
-    const stored = localStorage.getItem('tf_chat_tone');
-    const valid = TONE_OPTIONS.map((t) => t.id as string);
-    return stored && valid.includes(stored) ? (stored as ToneId) : 'default';
-  });
-  const [showToneMenu, setShowToneMenu] = useState(false);
 
   // Feature: Conversation search
   const [searchQuery, setSearchQuery] = useState('');
@@ -717,9 +695,6 @@ export default function ChatPanel({
   const [memoryScope, setMemoryScope] = useState<'global' | 'project' | 'session-only'>('project');
   const [memoryRetentionDays, setMemoryRetentionDays] = useState(30);
 
-  // Feature: Session token estimate + context summary
-  const [summarizing, setSummarizing] = useState(false);
-
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -743,11 +718,6 @@ export default function ChatPanel({
   useEffect(() => { onActiveProjectChangeRef.current = onActiveProjectChange; }, [onActiveProjectChange]);
   useEffect(() => { onNewCeoMessageRef.current = onNewCeoMessage; }, [onNewCeoMessage]);
   useEffect(() => { if (showSearch) setTimeout(() => searchRef.current?.focus(), 50); }, [showSearch]);
-
-  // Tone
-  const handleToneChange = (t: ToneId) => {
-    setTone(t); localStorage.setItem('tf_chat_tone', t); setShowToneMenu(false);
-  };
 
   // Pin
   const handlePin = useCallback((key: string) => {
@@ -834,17 +804,6 @@ export default function ChatPanel({
       scope,
       retention_days: retentionDays,
     });
-  };
-
-  const handleSummarize = async () => {
-    setShowMoreMenu(false);
-    setSummarizing(true);
-    const result = await summarizeChat();
-    setSummarizing(false);
-    if (result.status === 'ok') {
-      // Reload history to see compressed version
-      fetchChatHistory(100, activeProjectId).then((h) => { if (Array.isArray(h)) setMessages(h); }).catch(() => {});
-    }
   };
 
   // Rough session token estimate: ~1.3 tokens per word
@@ -1041,7 +1000,7 @@ export default function ChatPanel({
     setShowMicroApprovalCard(true);
   }, []);
 
-  // Send (with tone prefix)
+  // Send message
   const sendMessage = useCallback((opts?: {
     textOverride?: string;
     forceMicroMode?: boolean;
@@ -1062,8 +1021,6 @@ export default function ChatPanel({
       }
     }
 
-    const toneOption = TONE_OPTIONS.find((t) => t.id === tone);
-    const prefix = toneOption?.prefix ?? '';
     setMessages((prev) => [...prev, {
       role: 'user',
       content: text,
@@ -1083,10 +1040,9 @@ export default function ChatPanel({
     lastOutboundMessageRef.current = text;
     const idempotencyKey = `chat-${activeProjectId || 'global'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const payload = JSON.stringify({
-      message: prefix + text,
+      message: text,
       micro_project_mode: effectiveMicroMode,
       micro_project_override: microOverride,
-      no_delegation_mode: noDelegationMode,
       planning_approved: Boolean(opts?.planningApproved),
       structured_response: true,
       sandbox_profile: effectiveMicroMode ? 'safe' : 'standard',
@@ -1100,7 +1056,7 @@ export default function ChatPanel({
       return;
     }
     ws.send(payload);
-  }, [input, isWaiting, tone, connectWebSocket, microProjectMode, activeProjectId, noDelegationMode]);
+  }, [input, isWaiting, connectWebSocket, microProjectMode, activeProjectId]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -1115,14 +1071,13 @@ export default function ChatPanel({
 
   // Close menus on outside click
   useEffect(() => {
-    const close = () => { setShowToneMenu(false); setShowMoreMenu(false); setShowMemory(false); };
+    const close = () => { setShowMoreMenu(false); setShowMemory(false); };
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, []);
 
   const visibleApprovals = pendingApprovalProjects.filter((p) => !dismissedProjectIds.has(p.id));
   const hasMessages = messages.length > 0 || streamingContent;
-  const currentTone = TONE_OPTIONS.find((t) => t.id === tone)!;
   const activeProject = projects.find((p) => p.id === activeProjectId) || null;
 
   // ---- Shared header controls ----
@@ -1134,6 +1089,7 @@ export default function ChatPanel({
           value={activeProjectId}
           onChange={(e) => onActiveProjectChange?.(e.target.value)}
           disabled={isWaiting}
+          title="Select chat project context"
           style={{
             fontSize: '12px',
             borderRadius: '6px',
@@ -1181,24 +1137,6 @@ export default function ChatPanel({
       </button>
 
       <button
-        onClick={() => setNoDelegationMode((v) => !v)}
-        title="No-Delegation guarantee mode"
-        style={{
-          padding: '5px 9px',
-          borderRadius: '6px',
-          fontSize: '12px',
-          cursor: 'pointer',
-          whiteSpace: 'nowrap',
-          border: `1px solid ${noDelegationMode ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
-          backgroundColor: noDelegationMode ? 'rgba(59,142,255,0.12)' : 'transparent',
-          color: noDelegationMode ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
-          fontWeight: noDelegationMode ? 600 : 500,
-        }}
-      >
-        Solo CEO
-      </button>
-
-      <button
         onClick={() => setShowActionDetails((v) => !v)}
         title="Toggle live execution details"
         style={{
@@ -1214,41 +1152,6 @@ export default function ChatPanel({
       >
         Live Logs
       </button>
-
-      {/* Tone selector */}
-      <div style={{ position: 'relative' }}>
-        <button
-          onClick={(e) => { e.stopPropagation(); setShowToneMenu((v) => !v); }}
-          title="Response tone"
-          style={{
-            padding: '5px 9px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap',
-            border: `1px solid ${tone !== 'default' ? 'var(--tf-accent)' : 'var(--tf-border)'}`,
-            backgroundColor: tone !== 'default' ? 'rgba(88,166,255,0.1)' : 'transparent',
-            color: tone !== 'default' ? 'var(--tf-accent)' : 'var(--tf-text-muted)',
-          }}
-        >
-          Tone: {currentTone.label}
-        </button>
-        {showToneMenu && (
-          <div onClick={(e) => e.stopPropagation()} style={{
-            position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50,
-            backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)',
-            borderRadius: '8px', padding: '4px', minWidth: '140px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-          }}>
-            {TONE_OPTIONS.map((t) => (
-              <button key={t.id} onClick={() => handleToneChange(t.id)} style={{
-                display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px',
-                borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none',
-                backgroundColor: tone === t.id ? 'var(--tf-accent-dim)' : 'transparent',
-                color: tone === t.id ? 'var(--tf-accent)' : 'var(--tf-text-secondary)',
-                fontWeight: tone === t.id ? 600 : 400,
-              }}>
-                {tone === t.id ? '✓ ' : '\u00a0\u00a0 '}{t.label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
 
       {/* Search */}
       <button onClick={() => { setShowSearch((v) => { if (v) setSearchQuery(''); return !v; }); }} title="Search messages"
@@ -1301,12 +1204,14 @@ export default function ChatPanel({
               <>
                 <button
                   onClick={() => handleExport('markdown')}
+                  title="Download chat as Markdown"
                   style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
                 >
                   Export as Markdown
                 </button>
                 <button
                   onClick={() => handleExport('json')}
+                  title="Download chat as JSON"
                   style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
                 >
                   Export as JSON
@@ -1326,26 +1231,17 @@ export default function ChatPanel({
                 setShowMemory((v) => !v);
                 setShowMoreMenu(false);
               }}
+              title="Open CEO memory notes"
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
             >
               CEO Memory{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
             </button>
-            {messages.length >= 6 && (
-              <button
-                onClick={() => {
-                  if (window.confirm('Compress history to summary? Keeps last 5 messages and saves context space.')) handleSummarize();
-                }}
-                disabled={summarizing}
-                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: summarizing ? 'wait' : 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)', opacity: summarizing ? 0.7 : 1 }}
-              >
-                {summarizing ? 'Compressing…' : 'Compress history'}
-              </button>
-            )}
             <button
               onClick={() => {
                 setShowThinking((t) => !t);
                 setShowMoreMenu(false);
               }}
+              title="Toggle CEO thinking trace preview"
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: showThinking ? 'var(--tf-surface-raised)' : 'transparent', color: 'var(--tf-text-secondary)' }}
             >
               {showThinking ? 'Hide thinking traces' : 'Show thinking traces'}
@@ -1356,6 +1252,7 @@ export default function ChatPanel({
                   setShowMoreMenu(false);
                   handleClear();
                 }}
+                title="Clear the current chat history"
                 style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-error)' }}
               >
                 Clear chat
@@ -1466,7 +1363,7 @@ export default function ChatPanel({
           <div className="flex items-center gap-2">
             <StatusBadge status={connectionStatus} />
             {onNavigateToProjects && (
-              <button onClick={onNavigateToProjects} style={{ padding: '2px 8px', borderRadius: '4px', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-accent-blue)', fontSize: '11px', cursor: 'pointer' }}>
+              <button onClick={onNavigateToProjects} title="Open the Projects tab" style={{ padding: '2px 8px', borderRadius: '4px', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-accent-blue)', fontSize: '11px', cursor: 'pointer' }}>
                 Projects ↗
               </button>
             )}
@@ -1540,23 +1437,6 @@ export default function ChatPanel({
                 </p>
                 <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
                   {ceoName} will work solo for speed. Output may be rougher than full-crew execution.
-                </p>
-              </div>
-            )}
-
-            {noDelegationMode && (
-              <div
-                className="mb-3 rounded-xl px-3 py-2 animate-slide-up"
-                style={{
-                  backgroundColor: 'rgba(59,142,255,0.10)',
-                  border: '1px solid rgba(59,142,255,0.35)',
-                }}
-              >
-                <p className="text-xs font-semibold" style={{ color: 'var(--tf-accent-blue)' }}>
-                  No-Delegation guarantee is ON
-                </p>
-                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
-                  {ceoName} will avoid specialist delegation and execute directly.
                 </p>
               </div>
             )}
@@ -1745,11 +1625,6 @@ export default function ChatPanel({
       {/* Input */}
       <div className={`flex items-end gap-2 flex-shrink-0 ${floating ? 'px-3 py-2' : 'mt-3'}`}
         style={floating ? { borderTop: '1px solid var(--tf-surface-raised)' } : undefined}>
-        {tone !== 'default' && (
-          <div style={{ fontSize: '10px', color: 'var(--tf-accent)', backgroundColor: 'var(--tf-accent-dim)', border: '1px solid var(--tf-accent)', borderRadius: '4px', padding: '2px 6px', flexShrink: 0, alignSelf: 'center', whiteSpace: 'nowrap' }}>
-            {currentTone.label}
-          </div>
-        )}
         <div className="flex-1 rounded-xl overflow-hidden" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
           <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
             placeholder={isWaiting ? `${ceoName} is working…` : microProjectMode ? `Message ${ceoName} (Micro Project)…` : `Message ${ceoName}…`}
@@ -1762,31 +1637,6 @@ export default function ChatPanel({
               t.style.height = `${Math.min(t.scrollHeight, 120)}px`;
             }} />
         </div>
-        <button
-          onClick={async () => {
-            if (!latestRunId) return;
-            const ok = await retryRunStep(latestRunId, 'last_failed_step');
-            setMessages((prev) => [...prev, {
-              role: 'ceo',
-              content: ok
-                ? `Retry requested for run ${latestRunId}.`
-                : `Retry request failed for run ${latestRunId}.`,
-              timestamp: new Date().toISOString(),
-              project_id: activeProjectId,
-            }]);
-          }}
-          disabled={!latestRunId || isWaiting}
-          className="px-2.5 h-11 rounded-xl transition-all duration-200 flex-shrink-0 text-xs"
-          style={{
-            border: '1px solid var(--tf-border)',
-            backgroundColor: !latestRunId || isWaiting ? 'var(--tf-surface-raised)' : 'var(--tf-surface)',
-            color: !latestRunId || isWaiting ? 'var(--tf-text-muted)' : 'var(--tf-text-secondary)',
-            cursor: !latestRunId || isWaiting ? 'not-allowed' : 'pointer',
-          }}
-          title={latestRunId ? `Retry last failed step in run ${latestRunId}` : 'No active run yet'}
-        >
-          Retry
-        </button>
         <button onClick={() => sendMessage()} disabled={isWaiting || !input.trim()}
           className="flex items-center justify-center w-11 h-11 rounded-xl transition-all duration-200 flex-shrink-0"
           style={{ backgroundColor: isWaiting || !input.trim() ? 'var(--tf-surface-raised)' : 'var(--tf-accent)', color: isWaiting || !input.trim() ? 'var(--tf-border)' : 'var(--tf-bg)', cursor: isWaiting || !input.trim() ? 'not-allowed' : 'pointer' }}
