@@ -13,6 +13,8 @@ interface LayoutProps {
   ceoName?: string;
   pollIntervalMs?: number;
   microProjectMode?: boolean;
+  globalSearchQuery?: string;
+  onGlobalSearchQueryChange?: (value: string) => void;
 }
 
 const NAV_ITEMS = [
@@ -25,6 +27,7 @@ const NAV_ITEMS = [
 ] as const;
 
 const SIDEBAR_COLLAPSED_KEY = 'compaas_sidebar_collapsed';
+const CHAT_SPLIT_WIDTH_KEY = 'compaas_chat_split_width';
 const TELEGRAM_CONFIGURED_KEY = 'compaas_telegram_configured';
 
 const PAGE_LABELS: Record<string, string> = {
@@ -100,23 +103,38 @@ export default function Layout({
   ceoName = 'CEO',
   pollIntervalMs = 5000,
   microProjectMode = false,
+  globalSearchQuery = '',
+  onGlobalSearchQueryChange,
 }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getStoredBoolean(SIDEBAR_COLLAPSED_KEY));
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [chatSplitWidth, setChatSplitWidth] = useState(() => {
+    const raw = localStorage.getItem(CHAT_SPLIT_WIDTH_KEY);
+    const parsed = Number(raw || 420);
+    return Number.isFinite(parsed) ? Math.max(300, Math.min(760, parsed)) : 420;
+  });
+  const [draggingSplit, setDraggingSplit] = useState(false);
 
   useEffect(() => {
-    const onResize = () => setViewportWidth(window.innerWidth);
+    const onResize = () => {
+      const width = window.innerWidth;
+      setViewportWidth(width);
+      if (width > 900) {
+        setMobileSidebarOpen(false);
+      }
+    };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
   const isMobileViewport = viewportWidth <= 900;
   const sidebarIsCollapsed = isMobileViewport ? false : sidebarCollapsed;
+  const maxChatWidth = Math.min(760, Math.round(viewportWidth * 0.58));
+  const effectiveChatWidth = Math.max(300, Math.min(maxChatWidth, chatSplitWidth));
 
   useEffect(() => {
     if (!isMobileViewport) {
-      setMobileSidebarOpen(false);
       document.body.style.overflow = '';
       return;
     }
@@ -127,8 +145,22 @@ export default function Layout({
   }, [isMobileViewport, mobileSidebarOpen]);
 
   useEffect(() => {
-    if (isMobileViewport) setMobileSidebarOpen(false);
-  }, [activeTab, isMobileViewport]);
+    if (isMobileViewport || !draggingSplit) return;
+    const onMove = (evt: MouseEvent) => {
+      const next = Math.max(300, Math.min(maxChatWidth, window.innerWidth - evt.clientX));
+      setChatSplitWidth(next);
+    };
+    const onUp = () => {
+      setDraggingSplit(false);
+      localStorage.setItem(CHAT_SPLIT_WIDTH_KEY, String(chatSplitWidth));
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [draggingSplit, isMobileViewport, maxChatWidth, chatSplitWidth]);
 
   const today = useMemo(() => new Date().toLocaleDateString('en-US', {
     weekday: 'short',
@@ -498,6 +530,37 @@ export default function Layout({
             >
               {today}
             </div>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 8px',
+                borderRadius: '999px',
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-surface)',
+                minWidth: '210px',
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: 'var(--tf-text-muted)', flexShrink: 0 }}>
+                <circle cx="11" cy="11" r="7" />
+                <path d="M20 20l-3.5-3.5" />
+              </svg>
+              <input
+                value={globalSearchQuery}
+                onChange={(e) => onGlobalSearchQueryChange?.(e.target.value)}
+                placeholder="Search projects, tasks, activity..."
+                style={{
+                  width: '100%',
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  color: 'var(--tf-text)',
+                  fontSize: '12px',
+                }}
+                aria-label="Global search"
+              />
+            </div>
           </div>
         </header>
 
@@ -541,7 +604,7 @@ export default function Layout({
             className="flex-1 overflow-hidden"
             style={{
               display: 'grid',
-              gridTemplateColumns: chatOpen ? 'minmax(0, 1fr) min(420px, 38vw)' : 'minmax(0, 1fr) 0px',
+              gridTemplateColumns: chatOpen ? `minmax(0, 1fr) 6px ${effectiveChatWidth}px` : 'minmax(0, 1fr) 0px 0px',
               transition: 'grid-template-columns 280ms cubic-bezier(0.16, 1, 0.3, 1)',
             }}
           >
@@ -552,6 +615,20 @@ export default function Layout({
             >
               {children}
             </main>
+
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize CEO chat panel"
+              onMouseDown={() => chatOpen && setDraggingSplit(true)}
+              style={{
+                cursor: chatOpen ? 'col-resize' : 'default',
+                backgroundColor: draggingSplit ? 'var(--tf-accent-blue)' : 'var(--tf-border)',
+                opacity: chatOpen ? 0.45 : 0,
+                transition: 'opacity 160ms ease, background-color 160ms ease',
+                pointerEvents: chatOpen ? 'auto' : 'none',
+              }}
+            />
 
             <aside
               className={`split-chat-panel ${chatOpen ? 'split-chat-panel-open' : ''}`}

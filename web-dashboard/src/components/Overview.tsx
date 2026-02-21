@@ -153,6 +153,7 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false }: O
       tabIndex={onAgentClick ? 0 : undefined}
       onKeyDown={(e) => {
         if (onAgentClick && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
           onAgentClick(agent);
         }
       }}
@@ -359,18 +360,18 @@ interface TreeNodeProps {
   node: OrgTreeNode;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
-  events: ActivityEvent[];
+  recentActiveIds: Set<string>;
   activeIds: Set<string>;
 }
 
-function TreeNode({ node, agentMap, onAgentClick, events, activeIds }: TreeNodeProps) {
+function TreeNode({ node, agentMap, onAgentClick, recentActiveIds, activeIds }: TreeNodeProps) {
   const agent = agentMap.get(node.id);
   const children = node.children ?? [];
 
   if (!agent) return null;
 
   const hasChildren = children.length > 0;
-  const recentlyActive = isAgentRecentlyActive(node.id, agent.name, events);
+  const recentlyActive = recentActiveIds.has(node.id);
   // The vertical stem from this node to its children is active if ANY descendant is active
   const childSubtreeActive = children.some((c) => subtreeHasActive(c, activeIds));
 
@@ -389,7 +390,13 @@ function TreeNode({ node, agentMap, onAgentClick, events, activeIds }: TreeNodeP
         <>
           {/* Vertical stem: animated if any child's subtree is active */}
           <Connector vertical size={24} active={childSubtreeActive} />
-          <ChildrenGroup node={node} agentMap={agentMap} onAgentClick={onAgentClick} events={events} activeIds={activeIds} />
+          <ChildrenGroup
+            node={node}
+            agentMap={agentMap}
+            onAgentClick={onAgentClick}
+            recentActiveIds={recentActiveIds}
+            activeIds={activeIds}
+          />
         </>
       )}
     </div>
@@ -400,11 +407,11 @@ interface ChildrenGroupProps {
   node: OrgTreeNode;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
-  events: ActivityEvent[];
+  recentActiveIds: Set<string>;
   activeIds: Set<string>;
 }
 
-function ChildrenGroup({ node, agentMap, onAgentClick, events, activeIds }: ChildrenGroupProps) {
+function ChildrenGroup({ node, agentMap, onAgentClick, recentActiveIds, activeIds }: ChildrenGroupProps) {
   const children = node.children ?? [];
   const visibleChildren = children.filter((c) => agentMap.has(c.id));
 
@@ -415,7 +422,13 @@ function ChildrenGroup({ node, agentMap, onAgentClick, events, activeIds }: Chil
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <Connector vertical size={20} active={childActive} />
-        <TreeNode node={visibleChildren[0]} agentMap={agentMap} onAgentClick={onAgentClick} events={events} activeIds={activeIds} />
+        <TreeNode
+          node={visibleChildren[0]}
+          agentMap={agentMap}
+          onAgentClick={onAgentClick}
+          recentActiveIds={recentActiveIds}
+          activeIds={activeIds}
+        />
       </div>
     );
   }
@@ -459,7 +472,13 @@ function ChildrenGroup({ node, agentMap, onAgentClick, events, activeIds }: Chil
 
             {/* Vertical stub to child */}
             <Connector vertical size={20} active={childActive} />
-            <TreeNode node={child} agentMap={agentMap} onAgentClick={onAgentClick} events={events} activeIds={activeIds} />
+            <TreeNode
+              node={child}
+              agentMap={agentMap}
+              onAgentClick={onAgentClick}
+              recentActiveIds={recentActiveIds}
+              activeIds={activeIds}
+            />
           </div>
         );
       })}
@@ -477,6 +496,14 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const [compactLayout, setCompactLayout] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<'hierarchy' | 'cluster' | 'timeline'>('hierarchy');
+  const [microMode] = useState(() => {
+    try {
+      return localStorage.getItem('compaas_micro_project_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   const agentMap = useMemo(() => {
     const map = new Map<string, Agent>();
@@ -486,8 +513,8 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
     return map;
   }, [agents]);
 
-  // Set of currently active agent IDs for connector animations
-  const activeIds = useMemo(() => {
+  // Set of recently active IDs inferred from live activity events.
+  const recentActiveIds = useMemo(() => {
     const s = new Set<string>();
     for (const agent of agents) {
       if (isAgentRecentlyActive(agent.id, agent.name, events)) {
@@ -497,9 +524,49 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
     return s;
   }, [agents, events]);
 
+  // Broader active set to drive connector highlights even when events are sparse.
+  const activeIds = useMemo(() => {
+    const s = new Set(recentActiveIds);
+    for (const agent of agents) {
+      if (agent.status === 'active' || agent.status === 'permanent') s.add(agent.id);
+      if ((agent.recent_activity ?? []).length > 0) s.add(agent.id);
+    }
+    return s;
+  }, [agents, recentActiveIds]);
+
   const handleAgentClick = (agent: Agent) => {
     setSelectedAgent(prev => prev?.id === agent.id ? null : agent);
   };
+
+  const workloadMap = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const evt of events) {
+      const key = (evt.agent || '').toLowerCase();
+      if (!key) continue;
+      out.set(key, (out.get(key) || 0) + 1);
+    }
+    return out;
+  }, [events]);
+
+  const handoffPairs = useMemo(() => {
+    const edges = new Map<string, number>();
+    for (const evt of events) {
+      const detail = (evt.detail || '').toLowerCase();
+      const m = detail.match(/delegating to ([a-z0-9\- ]+)/i);
+      if (!m) continue;
+      const target = m[1].trim();
+      const key = `CEO -> ${target}`;
+      edges.set(key, (edges.get(key) || 0) + 1);
+    }
+    return Array.from(edges.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  }, [events]);
+
+  const timelineEvents = useMemo(() => {
+    return [...events]
+      .filter((e) => e.agent || e.detail)
+      .slice(-220)
+      .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+  }, [events]);
 
   useEffect(() => {
     const node = chartContainerRef.current;
@@ -556,7 +623,42 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
         Organization Chart
       </p>
 
-      {compactLayout ? (
+      <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '14px' }}>
+        {(['hierarchy', 'cluster', 'timeline'] as const).map((mode) => (
+          <button
+            key={mode}
+            onClick={() => setLayoutMode(mode)}
+            style={{
+              borderRadius: '999px',
+              border: `1px solid ${layoutMode === mode ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+              backgroundColor: layoutMode === mode ? 'rgba(59,142,255,0.12)' : 'var(--tf-surface)',
+              color: layoutMode === mode ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+              fontSize: '11px',
+              fontWeight: 600,
+              padding: '4px 10px',
+              cursor: 'pointer',
+              textTransform: 'capitalize',
+            }}
+          >
+            {mode}
+          </button>
+        ))}
+      </div>
+
+      {layoutMode === 'timeline' ? (
+        <div style={{ border: '1px solid var(--tf-border)', borderRadius: '10px', backgroundColor: 'var(--tf-surface-raised)', maxHeight: '320px', overflowY: 'auto' }}>
+          {timelineEvents.length === 0 ? (
+            <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>No timeline data yet.</p>
+          ) : (
+            timelineEvents.map((evt, idx) => (
+              <div key={`${evt.timestamp}-${idx}`} style={{ padding: '8px 10px', borderBottom: '1px solid var(--tf-border)' }}>
+                <div className="text-xs font-semibold" style={{ color: 'var(--tf-text-secondary)' }}>{evt.agent || 'System'} · {evt.action}</div>
+                <div className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>{evt.detail || '(no detail)'}</div>
+              </div>
+            ))
+          )}
+        </div>
+      ) : (layoutMode === 'cluster' || compactLayout) ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {ceoAgent && (
             <div
@@ -572,7 +674,7 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
                   <OrgNode
                     agent={ceoAgent}
                     onAgentClick={handleAgentClick}
-                    recentlyActive={isAgentRecentlyActive(ceoAgent.id, ceoAgent.name, events)}
+                    recentlyActive={activeIds.has(ceoAgent.id)}
                   />
                 </div>
               </Tooltip>
@@ -616,7 +718,9 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
                   </p>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     {sectionAgents.map((agent) => {
-                      const active = isAgentRecentlyActive(agent.id, agent.name, events);
+                      const active = activeIds.has(agent.id);
+                      const workload = workloadMap.get(agent.name.toLowerCase()) || workloadMap.get(agent.id.toLowerCase()) || 0;
+                      const mutedInMicro = microMode && agent.id !== 'ceo' && !active;
                       return (
                         <button
                           key={agent.id}
@@ -632,8 +736,9 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
                             display: 'flex',
                             alignItems: 'center',
                             gap: '6px',
+                            opacity: mutedInMicro ? 0.45 : 1,
                           }}
-                          title={`${agent.role} · ${agent.model}`}
+                          title={mutedInMicro ? `${agent.role} · ${agent.model} · Inactive in Micro mode` : `${agent.role} · ${agent.model}`}
                         >
                           <span
                             style={{
@@ -645,6 +750,7 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
                             }}
                           />
                           {agent.name}
+                          <span style={{ fontSize: '10px', color: 'var(--tf-text-muted)' }}>{workload}</span>
                         </button>
                       );
                     })}
@@ -676,7 +782,7 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
               node={ORG_TREE}
               agentMap={agentMap}
               onAgentClick={handleAgentClick}
-              events={events}
+              recentActiveIds={recentActiveIds}
               activeIds={activeIds}
             />
           </div>
@@ -690,6 +796,41 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
           onClose={() => setSelectedAgent(null)}
         />
       )}
+
+      <div style={{ marginTop: '12px', display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+        <div style={{ border: '1px solid var(--tf-border)', borderRadius: '10px', padding: '10px', backgroundColor: 'var(--tf-surface)' }}>
+          <p style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--tf-text-muted)', marginBottom: '6px' }}>
+            Capability Snapshot
+          </p>
+          {agents.slice(0, 4).map((agent) => {
+            const load = workloadMap.get(agent.name.toLowerCase()) || workloadMap.get(agent.id.toLowerCase()) || 0;
+            const pct = Math.max(6, Math.min(100, load * 8));
+            return (
+              <div key={agent.id} style={{ marginBottom: '6px' }}>
+                <div style={{ fontSize: '11px', color: 'var(--tf-text-secondary)' }}>{agent.name}</div>
+                <div style={{ height: '4px', borderRadius: '999px', backgroundColor: 'var(--tf-surface-raised)' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', borderRadius: '999px', backgroundColor: 'var(--tf-accent-blue)' }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ border: '1px solid var(--tf-border)', borderRadius: '10px', padding: '10px', backgroundColor: 'var(--tf-surface)' }}>
+          <p style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--tf-text-muted)', marginBottom: '6px' }}>
+            Handoff Map
+          </p>
+          {handoffPairs.length === 0 ? (
+            <p style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>No handoffs detected yet.</p>
+          ) : (
+            handoffPairs.map(([edge, count]) => (
+              <div key={edge} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--tf-text-secondary)', marginBottom: '4px' }}>
+                <span>{edge}</span>
+                <span style={{ color: 'var(--tf-accent)' }}>{count}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
     </div>
   );
 }

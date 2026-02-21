@@ -414,6 +414,7 @@ export default function AgentPanel({ agents, loading, microProjectMode = false }
   const [detailedAgent, setDetailedAgent] = useState<Agent | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const effectiveSelectedId = microProjectMode && selectedId && selectedId !== 'ceo' ? null : selectedId;
 
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -423,20 +424,20 @@ export default function AgentPanel({ agents, loading, microProjectMode = false }
 
   // Fetch full detail when an agent is selected
   useEffect(() => {
-    if (!selectedId) return;
+    if (!effectiveSelectedId) return;
     let cancelled = false;
-    fetchAgentDetail(selectedId).then((data) => {
+    fetchAgentDetail(effectiveSelectedId).then((data) => {
       if (!cancelled && data) setDetailedAgent(data);
     });
     return () => { cancelled = true; };
-  }, [selectedId]);
+  }, [effectiveSelectedId]);
 
   // Keep selection source-of-truth on selectedId so closing always hides the panel.
-  const selectedAgent = selectedId
+  const selectedAgent = effectiveSelectedId
     ? (
-        detailedAgent && detailedAgent.id === selectedId
+        detailedAgent && detailedAgent.id === effectiveSelectedId
           ? detailedAgent
-          : agents.find((a) => a.id === selectedId) ?? null
+          : agents.find((a) => a.id === effectiveSelectedId) ?? null
       )
     : null;
 
@@ -458,13 +459,6 @@ export default function AgentPanel({ agents, loading, microProjectMode = false }
       return next;
     });
   };
-
-  useEffect(() => {
-    if (microProjectMode && selectedId && selectedId !== 'ceo') {
-      setSelectedId(null);
-      setDetailedAgent(null);
-    }
-  }, [microProjectMode, selectedId]);
 
   if (loading) {
     return (
@@ -559,7 +553,7 @@ export default function AgentPanel({ agents, loading, microProjectMode = false }
                   <AgentCard
                     key={agent.id}
                     agent={agent}
-                    selected={selectedId === agent.id}
+                    selected={effectiveSelectedId === agent.id}
                     disabled={disabled}
                     onSelect={() => handleSelect(agent.id)}
                   />

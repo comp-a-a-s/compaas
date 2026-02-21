@@ -1,9 +1,11 @@
-import type { TokenReport, Budget } from '../types';
+import type { TokenReport, Budget, Project, Task } from '../types';
 
 interface MetricsPanelProps {
   tokenReport: TokenReport | null;
   budgets: Budget[];
   loading: boolean;
+  projects?: Project[];
+  tasksByProject?: Record<string, Task[]>;
 }
 
 // ---- Helpers ----
@@ -275,7 +277,7 @@ function BudgetCard({ budget }: BudgetCardProps) {
 }
 
 // ---- Main MetricsPanel ----
-export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsPanelProps) {
+export default function MetricsPanel({ tokenReport, budgets, loading, projects = [], tasksByProject = {} }: MetricsPanelProps) {
   if (loading) {
     return (
       <div className="space-y-6 animate-fade-in">
@@ -318,6 +320,13 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
   }, 0);
 
   const activeBudgets = budgets.filter((b) => b.status === 'OK' || b.usage_percent < 100);
+  const projectAnalytics = projects.map((project) => {
+    const tasks = tasksByProject[project.id] || [];
+    const done = tasks.filter((t) => (t.status || '').toLowerCase() === 'done').length;
+    const total = tasks.length;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    return { project, total, done, pct };
+  });
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -375,6 +384,38 @@ export default function MetricsPanel({ tokenReport, budgets, loading }: MetricsP
           Model Breakdown
         </h3>
         <ModelTable byModel={byModel} />
+      </div>
+
+      {/* Budget status */}
+      <div
+        className="rounded-xl p-5"
+        style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
+      >
+        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
+          Project Delivery Analytics
+        </h3>
+        {projectAnalytics.length === 0 ? (
+          <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>
+            No projects available yet.
+          </p>
+        ) : (
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+            {projectAnalytics.map(({ project, total, done, pct }) => (
+              <div key={project.id} className="rounded-lg p-3" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>{project.name}</div>
+                  <div className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>{project.status}</div>
+                </div>
+                <div className="text-xs mb-1" style={{ color: 'var(--tf-text-secondary)' }}>
+                  {done}/{total} tasks done ({pct}%)
+                </div>
+                <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--tf-surface)' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', backgroundColor: pct >= 75 ? 'var(--tf-success)' : pct >= 40 ? 'var(--tf-warning)' : 'var(--tf-error)' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Budget status */}

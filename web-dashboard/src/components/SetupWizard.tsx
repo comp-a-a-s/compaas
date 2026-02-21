@@ -83,8 +83,8 @@ const NAME_TEMPLATES: Record<string, Record<string, string>> = {
 const THEMES = [
   { id: 'midnight', label: 'Midnight', description: 'High-contrast deep blue', preview: ['#070f19', '#17293d', '#edf5ff'] },
   { id: 'twilight', label: 'Twilight', description: 'Moody indigo dusk', preview: ['#181626', '#312f4a', '#f3f4ff'] },
-  { id: 'dawn', label: 'Dawn', description: 'Muted warm daylight', preview: ['#efe9de', '#ece4d6', '#2f3a45'] },
-  { id: 'sahara', label: 'Sahara', description: 'Soft desert parchment', preview: ['#f2e7d4', '#efe1cb', '#3f3325'] },
+  { id: 'dawn', label: 'Dawn', description: 'Soft daylight with strong readability', preview: ['#f6f3ea', '#efe8d8', '#273242'] },
+  { id: 'sahara', label: 'Sahara', description: 'Warm sand, softer contrast', preview: ['#f7efe3', '#f2e6d2', '#3f3428'] },
 ];
 
 // ---- Colours (CSS variables only) ----

@@ -27,6 +27,7 @@ export interface Project {
   total_tasks?: number;
   plan_approved?: boolean;
   workspace_path?: string;
+  metadata?: ProjectMetadata;
 }
 
 export interface Task {
@@ -102,6 +103,86 @@ export interface ChatMessage {
   project_id?: string;
 }
 
+export interface RunTimelineEntry {
+  timestamp: string;
+  state: string;
+  label: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RunRecord {
+  id: string;
+  project_id: string;
+  provider: string;
+  mode: string;
+  status: string;
+  message: string;
+  checksum: string;
+  sandbox_profile: string;
+  tool_budget?: {
+    max_commands: number;
+    max_runtime_seconds: number;
+    max_files_touched: number;
+  };
+  created_at: string;
+  updated_at: string;
+  started_at?: string;
+  ended_at?: string;
+  timeline?: RunTimelineEntry[];
+  cancel_requested?: boolean;
+  command_count?: number;
+  files_touched?: number;
+}
+
+export interface ProjectMetadata {
+  project_id: string;
+  charter?: {
+    scope?: string;
+    constraints?: string[];
+    acceptance_criteria?: string[];
+  };
+  definition_of_done?: { label: string; done: boolean }[];
+  stakeholder_notes?: { timestamp: string; author: string; note: string }[];
+  artifacts?: {
+    id: string;
+    timestamp: string;
+    file_path: string;
+    action: string;
+    run_id?: string;
+    agent?: string;
+  }[];
+  branch_policy?: {
+    pattern?: string;
+    enforced?: boolean;
+    merge_strategy?: string;
+  };
+  dependency_graph?: {
+    nodes?: string[];
+    edges?: { from: string; to: string; label?: string }[];
+  };
+  archived?: boolean;
+}
+
+export interface FeatureFlags {
+  planning_approval_gate?: boolean;
+  structured_ceo_response?: boolean;
+  explain_delegation?: boolean;
+  no_delegation_mode?: boolean;
+  execution_intent_classifier?: boolean;
+  run_replay?: boolean;
+  memory_scopes?: boolean;
+  memory_retention?: boolean;
+  auto_chat_summarization?: boolean;
+  prompt_injection_guard?: boolean;
+  tool_budget_guardrails?: boolean;
+  diff_summary?: boolean;
+  github_advanced_controls?: boolean;
+  vercel_deploy_lifecycle?: boolean;
+  org_chart_advanced_layouts?: boolean;
+  ui_global_search?: boolean;
+  onboarding_tours?: boolean;
+}
+
 export interface LlmConfig {
   /** "anthropic" | "openai" | "openai_compat" */
   provider: 'anthropic' | 'openai' | 'openai_compat';
@@ -149,5 +230,12 @@ export interface AppConfig {
     slack_token?: string;
     webhook_url?: string;
   };
+  chat_policy?: {
+    memory_scope?: 'global' | 'project' | 'session-only';
+    retention_days?: number;
+    auto_summary_every_messages?: number;
+  };
+  feature_flags?: FeatureFlags;
+  routing_models?: Record<string, string>;
   llm: LlmConfig;
 }
