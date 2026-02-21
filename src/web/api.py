@@ -1228,8 +1228,9 @@ def _build_context_prompt(
     company_label = f" of {company_name}" if company_name else ""
     parts.append(
         f"[CONTEXT: You are {ceo_name}, the CEO{company_label}. "
-        f"The person you are speaking with is {user_name}, the Chairman of the company. "
-        f"Always refer to yourself as {ceo_name} and address the user as {user_name} or 'Chairman'.]"
+        f"The person you are speaking with is {user_name}. "
+        f"Always refer to yourself as {ceo_name} and address the user as {user_name}. "
+        "Do not call the user 'Chairman' unless they explicitly ask for that title.]"
     )
     parts.append("")
 
@@ -1323,7 +1324,7 @@ def _build_context_prompt(
 
 
 def _apply_agent_name_overrides(text: str, config: dict) -> str:
-    """Replace baseline crew names with configured names in final CEO output."""
+    """Replace baseline crew names and user title references in final CEO output."""
     if not text:
         return text
     configured_agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
@@ -1336,6 +1337,16 @@ def _apply_agent_name_overrides(text: str, config: dict) -> str:
         if not configured_name or configured_name == baseline:
             continue
         updated = re.sub(rf"\b{re.escape(baseline)}\b", configured_name, updated)
+
+    configured_user = str((config.get("user", {}) or {}).get("name", "") or "").strip()
+    if configured_user:
+        updated = re.sub(
+            rf"\bChairman\s+{re.escape(configured_user)}\b",
+            configured_user,
+            updated,
+            flags=re.IGNORECASE,
+        )
+        updated = re.sub(r"\bChairman\b", configured_user, updated, flags=re.IGNORECASE)
     return updated
 
 

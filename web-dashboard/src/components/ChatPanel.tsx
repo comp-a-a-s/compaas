@@ -711,6 +711,7 @@ export default function ChatPanel({
   const streamingAccumRef = useRef('');
   const turnErroredRef = useRef(false);
   const lastOutboundMessageRef = useRef('');
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
   useEffect(() => { ceoNameRef.current = ceoName; }, [ceoName]);
@@ -812,6 +813,52 @@ export default function ChatPanel({
     return Math.round(totalChars / 4); // ~4 chars per token
   }, [messages]);
 
+  const stopTypingAnimation = useCallback(() => {
+    if (typingTimerRef.current) {
+      clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+  }, []);
+
+  const pushCeoMessage = useCallback((content: string, projectId: string) => {
+    setMessages((prev) => [...prev, {
+      role: 'ceo',
+      content,
+      timestamp: new Date().toISOString(),
+      project_id: projectId,
+    }]);
+  }, []);
+
+  const completeAssistantTurn = useCallback(() => {
+    turnErroredRef.current = false;
+    setStreamingContent('');
+    setThinkingContent('');
+    setActionLog([]);
+    setIsWaiting(false);
+    if (!chatOpenRef.current) onNewCeoMessageRef.current?.();
+  }, []);
+
+  const typewriteAndCommit = useCallback((content: string, projectId: string) => {
+    stopTypingAnimation();
+    const chars = Array.from(content);
+    let cursor = 0;
+    const stride = chars.length > 900 ? 12 : chars.length > 350 ? 8 : 5;
+
+    const step = () => {
+      cursor = Math.min(chars.length, cursor + stride);
+      setStreamingContent(chars.slice(0, cursor).join(''));
+      if (cursor < chars.length) {
+        typingTimerRef.current = setTimeout(step, 18);
+        return;
+      }
+      typingTimerRef.current = null;
+      pushCeoMessage(content, projectId);
+      completeAssistantTurn();
+    };
+
+    step();
+  }, [completeAssistantTurn, pushCeoMessage, stopTypingAnimation]);
+
   // WebSocket
   const connectWebSocket = useCallback(function connectWebSocketImpl() {
     if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
@@ -884,6 +931,7 @@ export default function ChatPanel({
               }]);
               break;
             case 'chunk': {
+              stopTypingAnimation();
               setActionLog((prev) =>
                 prev.length > 0
                   ? prev.map((entry) => (entry.status === 'running' ? { ...entry, status: 'done' } : entry))
@@ -904,23 +952,24 @@ export default function ChatPanel({
               break;
             }
             case 'done': {
-              const finalContent = streamingAccumRef.current || wsContentText(data.content, '');
+              const streamedContent = streamingAccumRef.current;
+              const finalContent = streamedContent || wsContentText(data.content, '');
               streamingAccumRef.current = '';
               if (data.run_id) setLatestRunId(data.run_id);
+              const projectId = data.project_id || activeProjectIdRef.current;
               if (!turnErroredRef.current && finalContent.trim()) {
-                setMessages((prev) => [...prev, {
-                  role: 'ceo',
-                  content: finalContent,
-                  timestamp: new Date().toISOString(),
-                  project_id: data.project_id || activeProjectIdRef.current,
-                }]);
+                // If provider doesn't stream chunk-by-chunk, simulate a typing effect.
+                if (!streamedContent.trim()) {
+                  typewriteAndCommit(finalContent, projectId);
+                  break;
+                }
+                pushCeoMessage(finalContent, projectId);
               }
-              turnErroredRef.current = false;
-              setStreamingContent(''); setThinkingContent(''); setActionLog([]); setIsWaiting(false);
-              if (!chatOpenRef.current) onNewCeoMessageRef.current?.();
+              completeAssistantTurn();
               break;
             }
             case 'error':
+              stopTypingAnimation();
               turnErroredRef.current = true;
               streamingAccumRef.current = '';
               setMessages((prev) => [...prev, {
@@ -929,7 +978,10 @@ export default function ChatPanel({
                 timestamp: new Date().toISOString(),
                 project_id: activeProjectIdRef.current,
               }]);
-              setStreamingContent(''); setThinkingContent(''); setActionLog([]); setIsWaiting(false);
+              setStreamingContent('');
+              setThinkingContent('');
+              setActionLog([]);
+              setIsWaiting(false);
               break;
             case 'warning':
               setMessages((prev) => [...prev, {
@@ -964,6 +1016,7 @@ export default function ChatPanel({
         } catch { /* ignore */ }
       };
       ws.onclose = () => {
+        stopTypingAnimation();
         setConnectionStatus('disconnected');
         wsRef.current = null;
         if (shouldReconnectRef.current) {
@@ -972,13 +1025,14 @@ export default function ChatPanel({
       };
       ws.onerror = () => setConnectionStatus('error');
     } catch { setConnectionStatus('error'); }
-  }, []);
+  }, [completeAssistantTurn, pushCeoMessage, stopTypingAnimation, typewriteAndCommit]);
 
   useEffect(() => {
     shouldReconnectRef.current = true;
     connectWebSocket();
     return () => {
       shouldReconnectRef.current = false;
+      stopTypingAnimation();
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       pendingOutboundRef.current = null;
       if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
@@ -986,7 +1040,7 @@ export default function ChatPanel({
       }
       wsRef.current = null;
     };
-  }, [connectWebSocket]);
+  }, [connectWebSocket, stopTypingAnimation]);
 
   const setMicroMode = useCallback((enabled: boolean) => {
     onMicroProjectModeChange?.(enabled);
@@ -1010,6 +1064,7 @@ export default function ChatPanel({
     const text = (opts?.textOverride ?? input).trim();
     if (!text || isWaiting) return;
     const ws = wsRef.current;
+    stopTypingAnimation();
 
     const effectiveMicroMode = opts?.forceMicroMode ?? microProjectMode;
     const microOverride = opts?.forceMicroOverride ?? false;
@@ -1056,18 +1111,19 @@ export default function ChatPanel({
       return;
     }
     ws.send(payload);
-  }, [input, isWaiting, connectWebSocket, microProjectMode, activeProjectId]);
+  }, [input, isWaiting, connectWebSocket, microProjectMode, activeProjectId, stopTypingAnimation]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
-  const handleClear = async () => {
+  const handleClear = useCallback(async () => {
+    stopTypingAnimation();
     await clearChatHistory(activeProjectId);
     setMessages([]); setStreamingContent(''); setThinkingContent('');
     streamingAccumRef.current = '';
     setPinnedIds(new Set()); localStorage.removeItem('tf_pinned_msgs');
-  };
+  }, [activeProjectId, stopTypingAnimation]);
 
   // Close menus on outside click
   useEffect(() => {
