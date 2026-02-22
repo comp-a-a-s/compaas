@@ -40,11 +40,52 @@ Y88b  d88P Y88b. .d88P 888   "   888 888       888  888 888  888 Y88b  d88P
 WORDMARK
     echo -e "${NC}"
     echo -e "${BLUE}=== COMPaaS Virtual Company - Installation ===${NC}"
-    echo -e "${BLUE}=== Built by Idan Hen ===${NC}"
+    echo -e "${BLUE}=== Built by Idan H. ===${NC}"
     echo ""
 }
 
 print_banner
+
+offer_cli_install() {
+    local cli_label="$1"
+    local cli_bin="$2"
+    local npm_package="$3"
+
+    if command -v "$cli_bin" &>/dev/null; then
+        echo -e "${GREEN}  ✓ ${cli_label} found${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}  ⚠ ${cli_label} not found${NC}"
+    echo -e "${YELLOW}    Required for ${cli_label} provider mode${NC}"
+    echo -e "${YELLOW}    Install command: npm install -g ${npm_package}${NC}"
+
+    if ! command -v npm &>/dev/null; then
+        echo -e "${YELLOW}    npm is unavailable, skipping auto-install${NC}"
+        return 0
+    fi
+
+    if [ -t 0 ]; then
+        read -r -p "  Install ${cli_label} now? [y/N] " INSTALL_NOW
+    else
+        INSTALL_NOW="n"
+    fi
+    INSTALL_NOW=${INSTALL_NOW:-N}
+
+    if [[ "$INSTALL_NOW" =~ ^[Yy]$ ]]; then
+        if npm install -g "$npm_package"; then
+            if command -v "$cli_bin" &>/dev/null; then
+                echo -e "${GREEN}  ✓ ${cli_label} installed${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ ${cli_label} install completed but command is not available yet. Re-open terminal and retry.${NC}"
+            fi
+        else
+            echo -e "${YELLOW}  ⚠ Failed to install ${cli_label}; continuing setup${NC}"
+        fi
+    else
+        echo -e "${YELLOW}  ↷ Skipping ${cli_label} installation${NC}"
+    fi
+}
 
 # 1. Check Python 3.10+
 echo -e "${YELLOW}[1/8] Checking Python...${NC}"
@@ -75,18 +116,8 @@ fi
 
 # 3. Check optional AI CLIs
 echo -e "${YELLOW}[3/8] Checking AI runtime CLIs (optional)...${NC}"
-if command -v claude &>/dev/null; then
-    echo -e "${GREEN}  ✓ Claude Code CLI found${NC}"
-else
-    echo -e "${YELLOW}  ⚠ Claude Code CLI not found (needed for Anthropic CLI mode)${NC}"
-    echo -e "${YELLOW}    Install: npm install -g @anthropic-ai/claude-code${NC}"
-fi
-if command -v codex &>/dev/null; then
-    echo -e "${GREEN}  ✓ Codex CLI found${NC}"
-else
-    echo -e "${YELLOW}  ⚠ Codex CLI not found (needed for OpenAI Codex mode)${NC}"
-    echo -e "${YELLOW}    Install: npm install -g @openai/codex${NC}"
-fi
+offer_cli_install "Claude Code CLI" "claude" "@anthropic-ai/claude-code"
+offer_cli_install "Codex CLI" "codex" "@openai/codex"
 if command -v ollama &>/dev/null; then
     echo -e "${GREEN}  ✓ Ollama found${NC}"
 else
@@ -174,7 +205,7 @@ echo ""
 echo -e "${PURPLE}═══════════════════════════════════════════${NC}"
 echo -e "${GREEN}  Installation Complete!${NC}"
 echo -e "${PURPLE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Built by Idan Hen${NC}"
+echo -e "${BLUE}  Built by Idan H.${NC}"
 echo ""
 echo -e "  ${BLUE}Getting started:${NC}"
 echo ""
@@ -184,13 +215,6 @@ echo -e "  3. Run setup wizard:   Choose provider (Anthropic / OpenAI / local Ol
 echo ""
 
 if [ -t 0 ]; then
-    read -r -p "Start COMPaaS now? [Y/n] " START_NOW
-else
-    START_NOW="n"
-fi
-START_NOW=${START_NOW:-Y}
-
-if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
     echo ""
     echo "Select startup mode:"
     echo "  1) Web dashboard (recommended)"
@@ -211,4 +235,6 @@ if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
             echo -e "${YELLOW}Unknown choice. Skipping auto-start.${NC}"
             ;;
     esac
+else
+    echo -e "${YELLOW}Non-interactive shell detected. Skipping auto-start.${NC}"
 fi
