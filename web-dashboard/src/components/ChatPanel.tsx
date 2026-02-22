@@ -1298,7 +1298,7 @@ export default function ChatPanel({
           fontSize: '12px',
           cursor: 'pointer',
           border: `1px solid ${showToolsMenu ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
-          backgroundColor: showToolsMenu ? 'rgba(88,166,255,0.1)' : 'transparent',
+          backgroundColor: showToolsMenu ? 'color-mix(in srgb, var(--tf-accent-blue) 14%, transparent)' : 'transparent',
           color: showToolsMenu ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
           whiteSpace: 'nowrap',
         }}
@@ -1526,7 +1526,7 @@ export default function ChatPanel({
         ) : (
           <>
             {searchQuery && (
-              <div className="text-xs text-center py-1 mb-2" style={{ color: 'var(--tf-text-muted)', backgroundColor: 'rgba(88,166,255,0.06)', borderRadius: '6px' }}>
+              <div className="text-xs text-center py-1 mb-2" style={{ color: 'var(--tf-text-muted)', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 9%, transparent)', borderRadius: '6px' }}>
                 {filteredMessages.length} of {messages.length} messages match "{searchQuery}"
               </div>
             )}
@@ -1582,8 +1582,8 @@ export default function ChatPanel({
               <div
                 className="mb-3 rounded-xl px-3 py-2 animate-slide-up"
                 style={{
-                  backgroundColor: 'rgba(88,166,255,0.1)',
-                  border: '1px solid rgba(88,166,255,0.35)',
+                  backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 14%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--tf-accent-blue) 38%, transparent)',
                 }}
               >
                 <p className="text-xs font-semibold" style={{ color: 'var(--tf-accent-blue)' }}>

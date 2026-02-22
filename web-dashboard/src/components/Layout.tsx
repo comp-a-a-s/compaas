@@ -605,7 +605,7 @@ export default function Layout({
                     style={{
                       ...splitHeaderButtonBase,
                       borderColor: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-border)',
-                      backgroundColor: telegramMirrorEnabled ? 'rgba(88,166,255,0.12)' : 'transparent',
+                      backgroundColor: telegramMirrorEnabled ? 'color-mix(in srgb, var(--tf-accent-blue) 16%, transparent)' : 'transparent',
                       color: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
                       opacity: telegramConfigured ? 1 : 0.7,
                     }}
@@ -701,7 +701,7 @@ export default function Layout({
                     style={{
                       ...splitHeaderButtonBase,
                       borderColor: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-border)',
-                      backgroundColor: telegramMirrorEnabled ? 'rgba(88,166,255,0.12)' : 'transparent',
+                      backgroundColor: telegramMirrorEnabled ? 'color-mix(in srgb, var(--tf-accent-blue) 16%, transparent)' : 'transparent',
                       color: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
                       opacity: telegramConfigured ? 1 : 0.7,
                     }}

@@ -13,8 +13,8 @@
   --tf-text-secondary:  #bfd0e2;
   --tf-text-muted:      #8da5bc;
   --tf-accent:          #57c8b7;
-  --tf-accent-blue:     #3c92ff;
-  --tf-accent-dim:      #2367ca;
+  --tf-accent-blue:     #6ea8d3;
+  --tf-accent-dim:      #2a4f6a;
   --tf-success:         #46c58d;
   --tf-warning:         #f2b156;
   --tf-error:           #ea7267;
@@ -23,7 +23,7 @@
   --tf-scrollbar-hover: #3d678a;
   --tf-user-bubble:     #133354;
   --tf-bg-gradient-a:   rgba(87, 200, 183, 0.22);
-  --tf-bg-gradient-b:   rgba(60, 146, 255, 0.2);
+  --tf-bg-gradient-b:   rgba(110, 168, 211, 0.16);
 }
 
 [data-theme="twilight"] {
@@ -36,8 +36,8 @@
   --tf-text-secondary:  #cfcef0;
   --tf-text-muted:      #a3a0cf;
   --tf-accent:          #7dd3b9;
-  --tf-accent-blue:     #7da6ff;
-  --tf-accent-dim:      #4d6fcc;
+  --tf-accent-blue:     #9bb0d8;
+  --tf-accent-dim:      #4d5f89;
   --tf-success:         #68c88e;
   --tf-warning:         #f1b86f;
   --tf-error:           #ef8a82;
@@ -46,7 +46,7 @@
   --tf-scrollbar-hover: #6a6597;
   --tf-user-bubble:     #343157;
   --tf-bg-gradient-a:   rgba(125, 211, 185, 0.18);
-  --tf-bg-gradient-b:   rgba(125, 166, 255, 0.18);
+  --tf-bg-gradient-b:   rgba(155, 176, 216, 0.16);
 }
 
 [data-theme="dawn"] {
@@ -59,8 +59,8 @@
   --tf-text-secondary:  #3d5064;
   --tf-text-muted:      #64768a;
   --tf-accent:          #1f8f7b;
-  --tf-accent-blue:     #2f74ca;
-  --tf-accent-dim:      #205998;
+  --tf-accent-blue:     #3a6f7f;
+  --tf-accent-dim:      #d7e2e5;
   --tf-success:         #2a855f;
   --tf-warning:         #9f702c;
   --tf-error:           #b7564f;
@@ -69,7 +69,7 @@
   --tf-scrollbar-hover: #b5a285;
   --tf-user-bubble:     #e1ebf8;
   --tf-bg-gradient-a:   rgba(31, 143, 123, 0.1);
-  --tf-bg-gradient-b:   rgba(47, 116, 202, 0.1);
+  --tf-bg-gradient-b:   rgba(58, 111, 127, 0.1);
 }
 
 [data-theme="sahara"] {
@@ -82,8 +82,8 @@
   --tf-text-secondary:  #5b4b38;
   --tf-text-muted:      #7a664e;
   --tf-accent:          #ab6a41;
-  --tf-accent-blue:     #4b8199;
-  --tf-accent-dim:      #875234;
+  --tf-accent-blue:     #6e8a8b;
+  --tf-accent-dim:      #e1d7c8;
   --tf-success:         #5a8250;
   --tf-warning:         #a67735;
   --tf-error:           #a85348;
@@ -92,7 +92,7 @@
   --tf-scrollbar-hover: #b59568;
   --tf-user-bubble:     #f0dfc5;
   --tf-bg-gradient-a:   rgba(171, 106, 65, 0.1);
-  --tf-bg-gradient-b:   rgba(75, 129, 153, 0.08);
+  --tf-bg-gradient-b:   rgba(110, 138, 139, 0.08);
 }
 
 *,
