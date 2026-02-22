@@ -225,7 +225,7 @@ class VirtualCompanyDashboard(App):
     """
 
     TITLE = "COMPaaS — Company Dashboard"
-    SUB_TITLE = "Board Head: Idan · Built by Idan Hen"
+    SUB_TITLE = "Board Head: Idan · Built by Idan H."
     BINDINGS = [
         ("r", "force_refresh", "Refresh"),
         ("q", "quit", "Quit"),

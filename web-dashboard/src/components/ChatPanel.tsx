@@ -777,6 +777,7 @@ export default function ChatPanel({
   const chatOpenRef = useRef(chatOpen);
   const ceoNameRef = useRef(ceoName);
   const activeProjectIdRef = useRef(activeProjectId);
+  const projectsRef = useRef(projects);
   const onActiveProjectChangeRef = useRef(onActiveProjectChange);
   const onNewCeoMessageRef = useRef(onNewCeoMessage);
   const streamingAccumRef = useRef('');
@@ -784,13 +785,16 @@ export default function ChatPanel({
   const isWaitingRef = useRef(false);
   const lastOutboundMessageRef = useRef('');
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const telegramMirrorEnabledRef = useRef(telegramMirrorEnabled);
 
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
   useEffect(() => { ceoNameRef.current = ceoName; }, [ceoName]);
   useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
+  useEffect(() => { projectsRef.current = projects; }, [projects]);
   useEffect(() => { onActiveProjectChangeRef.current = onActiveProjectChange; }, [onActiveProjectChange]);
   useEffect(() => { onNewCeoMessageRef.current = onNewCeoMessage; }, [onNewCeoMessage]);
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
+  useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
   useEffect(() => { if (showSearch) setTimeout(() => searchRef.current?.focus(), 50); }, [showSearch]);
   useEffect(() => {
     const syncTelegram = () => {
@@ -896,21 +900,21 @@ export default function ChatPanel({
   }, []);
 
   const mirrorTelegram = useCallback(async (speaker: string, content: string, projectId: string) => {
-    if (!telegramMirrorEnabled) return;
+    if (!telegramMirrorEnabledRef.current) return;
     const creds = readTelegramCredentials();
     if (!creds.configured) {
       setTelegramConfigured(false);
       setTelegramMirrorEnabled(false);
       return;
     }
-    const projectName = projects.find((project) => project.id === projectId)?.name || 'General';
+    const projectName = projectsRef.current.find((project) => project.id === projectId)?.name || 'General';
     const body = `[${projectName}] ${speaker}: ${content}`;
     await sendTelegramMessage({
       token: creds.token,
       chat_id: creds.chatId,
       text: body,
     });
-  }, [projects, telegramMirrorEnabled]);
+  }, []);
 
   const safeMirrorTelegram = useCallback(async (speaker: string, content: string, projectId: string) => {
     try {
@@ -934,8 +938,8 @@ export default function ChatPanel({
       timestamp: new Date().toISOString(),
       project_id: projectId,
     }]);
-    void safeMirrorTelegram(ceoName, content, projectId);
-  }, [ceoName, safeMirrorTelegram]);
+    void safeMirrorTelegram(ceoNameRef.current, content, projectId);
+  }, [safeMirrorTelegram]);
 
   const completeAssistantTurn = useCallback(() => {
     turnErroredRef.current = false;

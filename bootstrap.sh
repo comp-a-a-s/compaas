@@ -16,7 +16,7 @@ COMPAAS_BRANCH="${COMPAAS_BRANCH:-master}"
 COMPAAS_INSTALL_DIR="${COMPAAS_INSTALL_DIR:-$HOME/.compaas}"
 
 echo -e "${BLUE}COMPaaS bootstrap installer${NC}"
-echo -e "${BLUE}Built by Idan Hen${NC}"
+echo -e "${BLUE}Built by Idan H.${NC}"
 echo -e "${BLUE}Repo:${NC} ${COMPAAS_REPO_URL}"
 echo -e "${BLUE}Install dir:${NC} ${COMPAAS_INSTALL_DIR}"
 echo ""

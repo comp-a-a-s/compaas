@@ -2018,6 +2018,19 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
         </div>
       )}
 
+      <div
+        style={{
+          marginTop: '8px',
+          paddingTop: '12px',
+          borderTop: `1px solid ${C.border}`,
+          fontSize: '11px',
+          color: C.textMuted,
+          textAlign: 'right',
+        }}
+      >
+        Built by Idan H.
+      </div>
+
       <style>{`
         @keyframes spin {
           from { transform: rotate(0deg); }
