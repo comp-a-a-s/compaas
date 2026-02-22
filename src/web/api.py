@@ -1980,6 +1980,23 @@ async def _handle_ceo_claude(
                 run_service.transition_run(run_id, state="failed", label=error_msg)
             return None
 
+        if not full_response:
+            full_response = (
+                "Execution completed, but Claude returned no assistant summary text. "
+                "Please retry this request."
+            )
+            await websocket.send_json({
+                "type": "action_result",
+                "content": "Claude returned an empty response. Sending fallback summary.",
+            })
+            _emit_chat_activity(
+                "ceo",
+                "WARNING",
+                "Claude returned an empty response; fallback summary sent.",
+                project_id=project_id,
+                metadata=runtime_metadata,
+            )
+
         if micro_project_mode and saw_tool_use:
             await websocket.send_json({
                 "type": "micro_project_warning",
@@ -2800,11 +2817,23 @@ async def _handle_ceo_openai(
                 "stream_warning": stream_warning or "",
             },
         )
-    if final_response:
-        return final_response
-    if stream_warning:
-        return f"Model stream warning: {stream_warning}"
-    return None
+    if not final_response:
+        fallback = "Execution completed, but the provider returned no assistant text."
+        if stream_warning:
+            fallback = f"{fallback} Stream warning: {stream_warning}"
+        await websocket.send_json({
+            "type": "action_result",
+            "content": "Provider returned an empty response. Sending fallback summary.",
+        })
+        _emit_chat_activity(
+            "ceo",
+            "WARNING",
+            "Provider returned an empty response; fallback summary sent.",
+            project_id=project_id,
+            metadata=runtime_metadata,
+        )
+        final_response = fallback
+    return final_response
 
 
 @app.websocket("/api/chat/ws")
@@ -3043,6 +3072,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     await websocket.send_json({
                         "type": "error",
                         "content": "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
+                    })
+                    await websocket.send_json({
+                        "type": "done",
+                        "content": "",
+                        "project_id": active_project_id,
+                        "run_id": run_id,
                     })
                     continue
                 full_response = await _handle_ceo_claude(

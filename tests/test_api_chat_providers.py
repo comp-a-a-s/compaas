@@ -125,6 +125,30 @@ async def test_handle_ceo_claude_streams_chunks_actions_and_results(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_handle_ceo_claude_empty_response_returns_fallback(monkeypatch):
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess(lines=[], returncode=0)
+
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    ws = _FakeWebSocket()
+    result = await api._handle_ceo_claude(
+        websocket=ws,
+        prompt="run",
+        claude_path="/usr/bin/claude",
+        llm_cfg={"anthropic_mode": "cli"},
+        ceo_name="Marcus",
+    )
+
+    assert result is not None
+    assert "no assistant summary text" in result.lower()
+    assert any(
+        event["type"] == "action_result" and "empty response" in str(event.get("content", "")).lower()
+        for event in ws.events
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_ceo_claude_micro_mode_keeps_ceo_agent_and_warns_on_tool_use(monkeypatch):
     captured_cmd: list[str] = []
     lines = [
@@ -241,6 +265,34 @@ async def test_handle_ceo_openai_streams_chunks_and_returns_text(monkeypatch):
     event_types = [event["type"] for event in ws.events]
     assert "action_result" in event_types
     assert event_types.count("chunk") == 2
+
+
+@pytest.mark.asyncio
+async def test_handle_ceo_openai_empty_response_returns_fallback(monkeypatch):
+    async def _empty_stream(*_args, **_kwargs):
+        if False:  # pragma: no cover
+            yield ""
+
+    monkeypatch.setattr(llm_provider, "stream_openai_compat", _empty_stream)
+
+    ws = _FakeWebSocket()
+    result = await api._handle_ceo_openai(
+        websocket=ws,
+        prompt="test",
+        llm_cfg={
+            "base_url": "http://localhost:11434/v1",
+            "model": "llama3.2",
+            "api_key": "ollama",
+        },
+        ceo_name="Marcus",
+    )
+
+    assert result is not None
+    assert "no assistant text" in result.lower()
+    assert any(
+        event["type"] == "action_result" and "fallback summary" in str(event.get("content", "")).lower()
+        for event in ws.events
+    )
 
 
 @pytest.mark.asyncio
