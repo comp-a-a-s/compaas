@@ -151,7 +151,7 @@ function StepIndicator({ current, total }: { current: number; total: number }) {
                 fontSize: '12px',
                 fontWeight: 600,
                 border: `1px solid ${isActive ? C.accent : isDone ? C.accentDim : C.border}`,
-                backgroundColor: isActive ? C.accentDim : isDone ? 'rgba(31,111,235,0.2)' : C.surfaceRaised,
+                backgroundColor: isActive ? C.accentDim : isDone ? 'color-mix(in srgb, var(--tf-accent-blue) 24%, transparent)' : C.surfaceRaised,
                 color: isActive ? C.textPrimary : isDone ? C.accent : C.textMuted,
                 transition: 'all 0.2s',
               }}
@@ -328,7 +328,7 @@ function SubTab({ label, active, onClick }: { label: string; active: boolean; on
       style={{
         padding: '4px 12px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
         border: `1px solid ${active ? C.accent : C.border}`,
-        backgroundColor: active ? 'rgba(88,166,255,0.15)' : C.surface,
+        backgroundColor: active ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
         color: active ? C.accent : C.textSecondary,
         transition: 'all 0.15s',
         fontWeight: active ? 600 : 400,
@@ -356,7 +356,9 @@ function ProviderCard({ icon, title, description, selected, onClick, children }:
         width: '100%', textAlign: 'left', padding: '14px 16px',
         borderRadius: '10px', cursor: 'pointer',
         border: `2px solid ${selected ? C.accent : C.border}`,
-        backgroundColor: selected ? C.accentDim : C.surfaceRaised,
+        backgroundColor: selected
+          ? 'color-mix(in srgb, var(--tf-accent-blue) 24%, var(--tf-surface-raised))'
+          : C.surfaceRaised,
         transition: 'all 0.15s', marginBottom: '10px', outline: 'none',
       }}
       onFocus={(e) => { e.currentTarget.style.boxShadow = `0 0 0 2px ${C.accentDim}`; }}
@@ -366,7 +368,7 @@ function ProviderCard({ icon, title, description, selected, onClick, children }:
         <span style={{ fontSize: '22px', flexShrink: 0, color: selected ? C.accent : C.textSecondary }}>{icon}</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: '14px', fontWeight: 600, color: C.textPrimary, marginBottom: '2px' }}>{title}</div>
-          <div style={{ fontSize: '12px', color: C.textSecondary }}>{description}</div>
+          <div style={{ fontSize: '12px', color: selected ? C.textPrimary : C.textSecondary }}>{description}</div>
         </div>
         <div style={{
           width: '18px', height: '18px', borderRadius: '50%', flexShrink: 0,
@@ -469,7 +471,7 @@ function StepAiProvider({
       {/* ── Anthropic ── */}
       <ProviderCard
         icon={<MaterialIcon path={ICON_PATHS.anthropic} />} selected={llmProvider === 'anthropic'}
-        title="Anthropic (Recommended)"
+        title="Anthropic"
         description="Claude Opus 4 / Sonnet 4 / Haiku 4.5 — world's best reasoning and tool-use. Via CLI or direct API key."
         onClick={() => setLlmProvider('anthropic')}
       >
@@ -489,7 +491,7 @@ function StepAiProvider({
               <button key={m.id} onClick={() => setAnthropicModelPreset(m.id)} style={{
                 padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
                 border: `1px solid ${anthropicModelPreset === m.id ? C.accent : C.border}`,
-                backgroundColor: anthropicModelPreset === m.id ? 'rgba(88,166,255,0.15)' : C.surface,
+                backgroundColor: anthropicModelPreset === m.id ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
                 color: anthropicModelPreset === m.id ? C.accent : C.textSecondary,
               }}>{m.label}</button>
             ))}
@@ -540,7 +542,7 @@ function StepAiProvider({
                 <span style={{ fontSize: '11px', color: C.textMuted }}>Should print a version like "1.x.x"</span>
               </li>
             </ol>
-            <div style={{ marginTop: '10px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+            <div style={{ marginTop: '10px', padding: '8px', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
               <strong style={{ color: C.accent, fontSize: '11px' }}>Why CLI?</strong>{' '}
               <span style={{ fontSize: '11px' }}>The CLI handles auth, tool use, and streaming with built-in retries. No API key management needed in COMPaaS — the CLI handles it.</span>
             </div>
@@ -582,7 +584,7 @@ function StepAiProvider({
                 </li>
                 <li>Paste it above. COMPaaS sends it directly to <Code>api.anthropic.com</Code></li>
               </ol>
-              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Pricing:</strong>{' '}
                 <span style={{ fontSize: '11px' }}>Opus 4.6 ~$15/M input tokens. Sonnet 4.5 ~$3/M. Haiku 4.5 ~$0.80/M.{' '}
                   Set limits at{' '}
@@ -639,7 +641,7 @@ function StepAiProvider({
                     <button key={m} onClick={() => handleOpenaiModel(m)} style={{
                       padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
                       border: `1px solid ${openaiModelPreset === m ? C.accent : C.border}`,
-                      backgroundColor: openaiModelPreset === m ? 'rgba(88,166,255,0.15)' : C.surface,
+                      backgroundColor: openaiModelPreset === m ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
                       color: openaiModelPreset === m ? C.accent : C.textSecondary,
                     }}>
                       {m === 'gpt-4o' ? 'gpt-4o ★' : m}
@@ -709,7 +711,7 @@ function StepAiProvider({
                   </a>
                 </li>
               </ol>
-              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Pricing:</strong>{' '}
                 <span style={{ fontSize: '11px' }}>gpt-4o ~$2.50/M input. o3-mini ~$1.10/M. o1 ~$15/M.</span>
               </div>
@@ -740,7 +742,7 @@ function StepAiProvider({
                 </li>
                 <li>Return to this wizard and choose <strong>Codex CLI</strong>. No additional key/model fields are required here.</li>
               </ol>
-              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>About Codex CLI:</strong>{' '}
                 <span style={{ fontSize: '11px' }}>OpenAI's terminal coding agent. Same API key as above — the CLI handles tool execution locally while COMPaaS coordinates the agents via API.</span>
               </div>
@@ -767,7 +769,7 @@ function StepAiProvider({
                 <button key={p.id} onClick={() => handleLocalPreset(p.id)} style={{
                   padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
                   border: `1px solid ${localPreset === p.id ? C.accent : C.border}`,
-                  backgroundColor: localPreset === p.id ? 'rgba(88,166,255,0.15)' : C.surface,
+                  backgroundColor: localPreset === p.id ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
                   color: localPreset === p.id ? C.accent : C.textSecondary,
                 }}>
                   {p.label}
@@ -807,7 +809,7 @@ function StepAiProvider({
                   <button key={m} onClick={() => setLlmModel(m)} style={{
                     padding: '2px 7px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer',
                     border: `1px solid ${llmModel === m ? C.accent : C.border}`,
-                    backgroundColor: llmModel === m ? 'rgba(88,166,255,0.15)' : 'transparent',
+                    backgroundColor: llmModel === m ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : 'transparent',
                     color: llmModel === m ? C.accent : C.textMuted,
                   }}>{m}</button>
                 ))}
@@ -830,7 +832,7 @@ function StepAiProvider({
                 <li style={{ marginBottom: '6px' }}>Start the server (runs automatically after install):<br /><Code>ollama serve</Code></li>
                 <li>COMPaaS connects to <Code>http://localhost:11434/v1</Code> — no API key needed</li>
               </ol>
-              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Recommended models:</strong>{' '}
                 <span style={{ fontSize: '11px' }}>llama3.3 (best), deepseek-r1 (reasoning), qwen2.5-coder (coding)</span><br />
                 <span style={{ fontSize: '11px', color: C.textMuted }}>Browse all models: <a href="https://ollama.com/library" target="_blank" rel="noreferrer" style={guideLink}>ollama.com/library</a></span>
@@ -849,7 +851,7 @@ function StepAiProvider({
                 <li style={{ marginBottom: '6px' }}>Go to <strong>Local Server</strong> tab → Start Server</li>
                 <li>COMPaaS connects to <Code>http://localhost:1234/v1</Code></li>
               </ol>
-              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Recommended models:</strong>{' '}
                 <span style={{ fontSize: '11px' }}>llama-3.3-70b-instruct, deepseek-r1-distill-llama-70b, qwen2.5-coder-32b</span>
               </div>
@@ -888,7 +890,7 @@ function StepAiProvider({
                 </li>
                 <li>COMPaaS connects to <Code>http://localhost:1337/v1</Code></li>
               </ol>
-              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Note:</strong>{' '}
                 <span style={{ fontSize: '11px' }}>Jan is a great desktop-first alternative to LM Studio with a clean UI and one-click model downloads.</span>
               </div>
@@ -917,7 +919,7 @@ function StepAiProvider({
                   COMPaaS connects to <Code>http://localhost:8000/v1</Code>
                 </li>
               </ol>
-              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
+              <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>Best for:</strong>{' '}
                 <span style={{ fontSize: '11px' }}>High-throughput production deployments with NVIDIA GPU. Supports continuous batching and 70B+ models with multi-GPU. Browse models at{' '}
                   <a href="https://huggingface.co/models" target="_blank" rel="noreferrer" style={guideLink}>huggingface.co/models</a>
@@ -1145,7 +1147,7 @@ function StepTeamNames({
                 padding: '5px 12px',
                 borderRadius: '6px',
                 border: `1px solid ${selectedTemplate === name ? C.accent : C.border}`,
-                backgroundColor: selectedTemplate === name ? 'rgba(88,166,255,0.1)' : 'transparent',
+                backgroundColor: selectedTemplate === name ? 'color-mix(in srgb, var(--tf-accent-blue) 14%, transparent)' : 'transparent',
                 color: selectedTemplate === name ? C.accent : C.textSecondary,
                 fontSize: '12px',
                 cursor: 'pointer',
@@ -1161,7 +1163,7 @@ function StepTeamNames({
               padding: '5px 12px',
               borderRadius: '6px',
               border: `1px solid ${selectedTemplate === null ? C.accent : C.border}`,
-              backgroundColor: selectedTemplate === null ? 'rgba(88,166,255,0.1)' : 'transparent',
+              backgroundColor: selectedTemplate === null ? 'color-mix(in srgb, var(--tf-accent-blue) 14%, transparent)' : 'transparent',
               color: selectedTemplate === null ? C.accent : C.textSecondary,
               fontSize: '12px',
               cursor: 'pointer',

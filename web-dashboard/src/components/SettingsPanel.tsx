@@ -793,7 +793,7 @@ function AiProviderSection({
                 border: `1px solid ${selected ? C.accent : C.border}`,
                 borderRadius: '999px',
                 padding: '3px 6px',
-                backgroundColor: selected ? 'rgba(88,166,255,0.1)' : C.surface,
+                backgroundColor: selected ? 'color-mix(in srgb, var(--tf-accent-blue) 14%, transparent)' : C.surface,
               }}>{m.icon}</span>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>{m.title}</div>
@@ -823,7 +823,7 @@ function AiProviderSection({
                   fontSize: '12px',
                   cursor: 'pointer',
                   border: `1px solid ${anthropicMode === 'cli' ? C.accent : C.border}`,
-                  backgroundColor: anthropicMode === 'cli' ? 'rgba(88,166,255,0.15)' : C.surface,
+                  backgroundColor: anthropicMode === 'cli' ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
                   color: anthropicMode === 'cli' ? C.accent : C.textSecondary,
                 }}
               >
@@ -837,7 +837,7 @@ function AiProviderSection({
                   fontSize: '12px',
                   cursor: 'pointer',
                   border: `1px solid ${anthropicMode === 'apikey' ? C.accent : C.border}`,
-                  backgroundColor: anthropicMode === 'apikey' ? 'rgba(88,166,255,0.15)' : C.surface,
+                  backgroundColor: anthropicMode === 'apikey' ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
                   color: anthropicMode === 'apikey' ? C.accent : C.textSecondary,
                 }}
               >
@@ -887,7 +887,7 @@ function AiProviderSection({
                   fontSize: '12px',
                   cursor: 'pointer',
                   border: `1px solid ${openaiMode === 'apikey' ? C.accent : C.border}`,
-                  backgroundColor: openaiMode === 'apikey' ? 'rgba(88,166,255,0.15)' : C.surface,
+                  backgroundColor: openaiMode === 'apikey' ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
                   color: openaiMode === 'apikey' ? C.accent : C.textSecondary,
                 }}
               >
@@ -905,7 +905,7 @@ function AiProviderSection({
                   fontSize: '12px',
                   cursor: 'pointer',
                   border: `1px solid ${openaiMode === 'codex' ? C.accent : C.border}`,
-                  backgroundColor: openaiMode === 'codex' ? 'rgba(88,166,255,0.15)' : C.surface,
+                  backgroundColor: openaiMode === 'codex' ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
                   color: openaiMode === 'codex' ? C.accent : C.textSecondary,
                 }}
               >
@@ -922,7 +922,7 @@ function AiProviderSection({
                     <button key={m} onClick={() => handleOpenaiPreset(m)} style={{
                       padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
                       border: `1px solid ${openaiPreset === m ? C.accent : C.border}`,
-                      backgroundColor: openaiPreset === m ? 'rgba(88,166,255,0.15)' : C.surface,
+                      backgroundColor: openaiPreset === m ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
                       color: openaiPreset === m ? C.accent : C.textSecondary, outline: 'none',
                     }}>
                       {m}
@@ -972,7 +972,7 @@ function AiProviderSection({
                 <button key={p.id} onClick={() => handlePreset(p.id)} style={{
                   padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
                   border: `1px solid ${localPreset === p.id ? C.accent : C.border}`,
-                  backgroundColor: localPreset === p.id ? 'rgba(88,166,255,0.15)' : C.surface,
+                  backgroundColor: localPreset === p.id ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
                   color: localPreset === p.id ? C.accent : C.textSecondary, outline: 'none',
                 }}>
                   {p.label}
