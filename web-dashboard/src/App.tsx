@@ -24,6 +24,7 @@ import {
   fetchRecentActivity,
   createActivityStream,
   fetchConfig,
+  createProject,
 } from './api/client';
 
 import type { Agent, Project, Task, ActivityEvent, TokenReport, Budget, AppConfig } from './types';
@@ -36,6 +37,24 @@ const TASK_POLL_MULTIPLIER = 3;
 const MIN_TASK_POLL_INTERVAL_MS = 15000;
 const MICRO_PROJECT_MODE_KEY = 'compaas_micro_project_mode';
 const ONBOARDING_TOUR_DONE_KEY = 'compaas_onboarding_tour_done';
+const TELEGRAM_KEYS = {
+  token: 'compaas_telegram_token',
+  chatId: 'compaas_telegram_chatid',
+  configured: 'compaas_telegram_configured',
+  mirror: 'compaas_telegram_mirror_enabled',
+} as const;
+
+function readTelegramSnapshot(): { configured: boolean; mirrorEnabled: boolean } {
+  try {
+    const token = localStorage.getItem(TELEGRAM_KEYS.token) ?? '';
+    const chatId = localStorage.getItem(TELEGRAM_KEYS.chatId) ?? '';
+    const configured = localStorage.getItem(TELEGRAM_KEYS.configured) === 'true' && Boolean(token && chatId);
+    const mirrorEnabled = configured && localStorage.getItem(TELEGRAM_KEYS.mirror) === 'true';
+    return { configured, mirrorEnabled };
+  } catch {
+    return { configured: false, mirrorEnabled: false };
+  }
+}
 
 const ONBOARDING_STEPS: Array<{ tab: string; title: string; body: string }> = [
   { tab: 'overview', title: 'Overview', body: 'Track team health, org activity, and project progress in one place.' },
@@ -207,6 +226,8 @@ export default function App() {
       return false;
     }
   });
+  const [microToggleRequestToken, setMicroToggleRequestToken] = useState(0);
+  const [telegramMirrorEnabled, setTelegramMirrorEnabled] = useState(() => readTelegramSnapshot().mirrorEnabled);
 
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
@@ -224,6 +245,37 @@ export default function App() {
   const handleActiveProjectChange = useCallback((projectId: string) => {
     setActiveProjectId(projectId);
   }, []);
+
+  const requestMicroToggle = useCallback(() => {
+    setMicroToggleRequestToken((prev) => prev + 1);
+  }, []);
+
+  const handleTelegramMirrorChange = useCallback((enabled: boolean) => {
+    const snapshot = readTelegramSnapshot();
+    const nextEnabled = enabled && snapshot.configured;
+    setTelegramMirrorEnabled(nextEnabled);
+    try {
+      localStorage.setItem(TELEGRAM_KEYS.mirror, nextEnabled ? 'true' : 'false');
+    } catch {
+      // ignore localStorage failures
+    }
+  }, []);
+
+  const handleToggleTelegramMirror = useCallback(() => {
+    const snapshot = readTelegramSnapshot();
+    if (!snapshot.configured) {
+      setActiveTab('settings');
+      setChatOpen(false);
+      setTelegramMirrorEnabled(false);
+      try {
+        localStorage.setItem(TELEGRAM_KEYS.mirror, 'false');
+      } catch {
+        // ignore localStorage failures
+      }
+      return;
+    }
+    handleTelegramMirrorChange(!telegramMirrorEnabled);
+  }, [handleTelegramMirrorChange, telegramMirrorEnabled]);
 
   // Shortcuts panel
   const { visible: shortcutsVisible, hide: hideShortcuts } = useShortcutsPanel();
@@ -337,6 +389,21 @@ export default function App() {
       }
     }
   }, [activeProjectId]);
+
+  const handleCreateProjectFromHeader = useCallback(async () => {
+    const suggestedName = `Project ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+    const name = window.prompt('Create new project', suggestedName);
+    if (!name || !name.trim()) return;
+    const created = await createProject({
+      name: name.trim(),
+      description: `Created from the global project selector by ${config?.user?.name || 'Board Head'}.`,
+      type: 'app',
+    });
+    const nextProjectId = created?.project?.id;
+    if (!nextProjectId) return;
+    setActiveProjectId(nextProjectId);
+    await loadProjects(true);
+  }, [config?.user?.name, loadProjects]);
 
   const loadMetrics = useCallback(async () => {
     try {
@@ -503,6 +570,27 @@ export default function App() {
       // ignore localStorage failures
     }
   }, [microProjectMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TELEGRAM_KEYS.mirror, telegramMirrorEnabled ? 'true' : 'false');
+    } catch {
+      // ignore localStorage failures
+    }
+  }, [telegramMirrorEnabled]);
+
+  useEffect(() => {
+    const syncTelegram = () => {
+      setTelegramMirrorEnabled(readTelegramSnapshot().mirrorEnabled);
+    };
+    syncTelegram();
+    window.addEventListener('storage', syncTelegram);
+    window.addEventListener('focus', syncTelegram);
+    return () => {
+      window.removeEventListener('storage', syncTelegram);
+      window.removeEventListener('focus', syncTelegram);
+    };
+  }, []);
 
   const normalizedSearch = globalSearchQuery.trim().toLowerCase();
 
@@ -697,6 +785,7 @@ export default function App() {
 
   const ceoName = config?.agents?.['ceo'] || 'CEO';
   const userName = config?.user?.name || 'You';
+  const telegramConfigured = readTelegramSnapshot().configured;
   const currentTourStep = ONBOARDING_STEPS[Math.max(0, Math.min(tourStep, ONBOARDING_STEPS.length - 1))];
 
   const finishTour = () => {
@@ -727,6 +816,14 @@ export default function App() {
         microProjectMode={microProjectMode}
         globalSearchQuery={globalSearchQuery}
         onGlobalSearchQueryChange={setGlobalSearchQuery}
+        projects={projects}
+        activeProjectId={activeProjectId}
+        onActiveProjectChange={handleActiveProjectChange}
+        onCreateProjectRequest={() => { void handleCreateProjectFromHeader(); }}
+        telegramMirrorEnabled={telegramMirrorEnabled}
+        telegramConfigured={telegramConfigured}
+        onToggleTelegramMirror={handleToggleTelegramMirror}
+        onRequestMicroToggle={requestMicroToggle}
         chatPanel={
           <ChatPanel
             floating
@@ -738,20 +835,15 @@ export default function App() {
             userName={userName}
             microProjectMode={microProjectMode}
             onMicroProjectModeChange={setMicroProjectMode}
-            onNavigateToProjects={() => {
-              setActiveTab('projects');
-              setChatOpen(false);
-            }}
-            onNavigateToSettings={() => {
-              setActiveTab('settings');
-              setChatOpen(false);
-            }}
             onNavigateToProject={navigateToProject}
             pendingApprovalProjects={pendingApprovalProjects}
             onProjectApproved={() => loadProjects()}
             projects={projects}
             activeProjectId={activeProjectId}
             onActiveProjectChange={handleActiveProjectChange}
+            telegramMirrorEnabled={telegramMirrorEnabled}
+            onTelegramMirrorChange={handleTelegramMirrorChange}
+            microToggleRequestToken={microToggleRequestToken}
           />
         }
       >

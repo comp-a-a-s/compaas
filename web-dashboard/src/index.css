@@ -377,6 +377,20 @@ textarea:focus-visible {
   animation: split-panel-open 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+.header-controls {
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.header-project-context {
+  flex: 0 0 clamp(220px, 26vw, 320px);
+  min-width: 190px;
+}
+
+.header-global-search {
+  flex: 0 1 clamp(210px, 24vw, 340px);
+}
+
 /* ---- Compact mode ---- */
 body.compact-mode .rounded-xl { border-radius: 8px !important; }
 body.compact-mode .rounded-2xl { border-radius: 10px !important; }
@@ -407,5 +421,16 @@ body.compact-mode .h-10 { height: 32px !important; }
 @media (max-width: 900px) {
   html {
     font-size: 14px;
+  }
+
+  .header-controls {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .header-project-context,
+  .header-global-search {
+    flex: 1 1 100%;
+    max-width: 100%;
   }
 }
