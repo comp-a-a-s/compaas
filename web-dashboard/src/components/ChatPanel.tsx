@@ -781,6 +781,7 @@ export default function ChatPanel({
   const onNewCeoMessageRef = useRef(onNewCeoMessage);
   const streamingAccumRef = useRef('');
   const turnErroredRef = useRef(false);
+  const isWaitingRef = useRef(false);
   const lastOutboundMessageRef = useRef('');
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -789,6 +790,7 @@ export default function ChatPanel({
   useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
   useEffect(() => { onActiveProjectChangeRef.current = onActiveProjectChange; }, [onActiveProjectChange]);
   useEffect(() => { onNewCeoMessageRef.current = onNewCeoMessage; }, [onNewCeoMessage]);
+  useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { if (showSearch) setTimeout(() => searchRef.current?.focus(), 50); }, [showSearch]);
   useEffect(() => {
     const syncTelegram = () => {
@@ -1139,12 +1141,35 @@ export default function ChatPanel({
       ws.onclose = () => {
         stopTypingAnimation();
         setConnectionStatus('disconnected');
+        if (!turnErroredRef.current && isWaitingRef.current) {
+          setMessages((prev) => [...prev, {
+            role: 'ceo',
+            content: '[Error] Connection lost while waiting for CEO response. Reconnecting automatically…',
+            timestamp: new Date().toISOString(),
+            project_id: activeProjectIdRef.current,
+          }]);
+        }
+        setStreamingContent('');
+        setThinkingContent('');
+        setActionLog([]);
+        setIsWaiting(false);
         wsRef.current = null;
         if (shouldReconnectRef.current) {
           reconnectTimerRef.current = setTimeout(connectWebSocketImpl, 3000);
         }
       };
-      ws.onerror = () => setConnectionStatus('error');
+      ws.onerror = () => {
+        setConnectionStatus('error');
+        if (!turnErroredRef.current && isWaitingRef.current) {
+          setMessages((prev) => [...prev, {
+            role: 'ceo',
+            content: '[Error] Chat connection error. Please retry once connection is restored.',
+            timestamp: new Date().toISOString(),
+            project_id: activeProjectIdRef.current,
+          }]);
+          setIsWaiting(false);
+        }
+      };
     } catch { setConnectionStatus('error'); }
   }, [completeAssistantTurn, pushCeoMessage, stopTypingAnimation, typewriteAndCommit]);
 
