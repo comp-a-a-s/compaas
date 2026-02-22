@@ -1459,6 +1459,68 @@ def _apply_agent_name_overrides(text: str, config: dict) -> str:
     return updated
 
 
+def _humanize_llm_runtime_error(
+    raw_error: str,
+    *,
+    provider: str,
+    mode: str,
+    base_url: str = "",
+) -> str:
+    """Return a concise, user-facing runtime error with actionable guidance."""
+    text = str(raw_error or "").strip()
+    if not text:
+        return "The model runtime failed unexpectedly. Please retry."
+
+    lower = text.lower()
+    auth_error = (
+        "missing bearer or basic authentication" in lower
+        or "invalid_api_key" in lower
+        or "incorrect api key" in lower
+        or ("401" in lower and ("unauthorized" in lower or "authentication" in lower))
+    )
+
+    if auth_error:
+        if provider == "openai" and mode == "codex":
+            return (
+                "OpenAI authentication is missing for Codex CLI. "
+                "Run `codex auth login` in your terminal (or set `OPENAI_API_KEY`), "
+                "then retry your message."
+            )
+        if provider == "openai" and mode == "apikey":
+            return (
+                "OpenAI API authentication failed. "
+                "Add a valid OpenAI API key in Settings -> AI -> OpenAI, then retry. "
+                "If you prefer CLI auth, switch to Codex CLI mode and run `codex auth login`."
+            )
+        if provider == "openai_compat":
+            return (
+                "The selected OpenAI-compatible endpoint rejected authentication. "
+                "Check the base URL and API key/token in Settings, then retry."
+            )
+
+    connection_error = (
+        "connection refused" in lower
+        or "failed to connect" in lower
+        or "connection error" in lower
+        or "timed out" in lower
+        or "name or service not known" in lower
+        or "temporary failure in name resolution" in lower
+    )
+    if connection_error:
+        if provider == "openai_compat":
+            return (
+                "Could not reach the local/OpenAI-compatible model server. "
+                "Ensure it is running and the base URL is correct in Settings."
+            )
+        if "api.openai.com" in (base_url or "").lower():
+            return (
+                "Could not reach OpenAI right now. "
+                "Check your network connection and try again."
+            )
+
+    return text[:300]
+
+
 _MICRO_COMPLEX_KEYWORDS = (
     "architecture",
     "benchmark",
@@ -2418,7 +2480,12 @@ async def _handle_ceo_codex(
                 break
             elif event_type == "error":
                 message = event.get("message") or event.get("error") or "Unknown Codex error"
-                err = str(message)[:300]
+                err = _humanize_llm_runtime_error(
+                    str(message),
+                    provider="openai",
+                    mode="codex",
+                    base_url="https://api.openai.com/v1",
+                )
                 await websocket.send_json({"type": "error", "content": err})
                 _emit_chat_activity("ceo", "ERROR", err, project_id=project_id, metadata=runtime_metadata)
                 return None
@@ -2437,14 +2504,20 @@ async def _handle_ceo_codex(
                     stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
                 except asyncio.TimeoutError:
                     pass
+            error_message = _humanize_llm_runtime_error(
+                stderr_text[:500] or f"Codex exited with code {process.returncode}",
+                provider="openai",
+                mode="codex",
+                base_url="https://api.openai.com/v1",
+            )
             await websocket.send_json({
                 "type": "error",
-                "content": stderr_text[:500] or f"Codex exited with code {process.returncode}",
+                "content": error_message,
             })
             _emit_chat_activity(
                 "ceo",
                 "ERROR",
-                stderr_text[:500] or f"Codex exited with code {process.returncode}",
+                error_message,
                 project_id=project_id,
                 metadata=runtime_metadata,
             )
@@ -2452,7 +2525,7 @@ async def _handle_ceo_codex(
                 run_service.transition_run(
                     run_id,
                     state="failed",
-                    label=stderr_text[:500] or f"Codex exited with code {process.returncode}",
+                    label=error_message,
                 )
             return None
 
@@ -2516,7 +2589,12 @@ async def _handle_ceo_codex(
             run_service.transition_run(run_id, state="failed", label=message)
         return None
     except Exception as exc:
-        message = f"Codex chat error: {str(exc)[:200]}"
+        message = _humanize_llm_runtime_error(
+            str(exc)[:300],
+            provider="openai",
+            mode="codex",
+            base_url="https://api.openai.com/v1",
+        )
         await websocket.send_json({"type": "error", "content": message})
         _emit_chat_activity("ceo", "ERROR", message, project_id=project_id, metadata=runtime_metadata)
         if run_id:
@@ -2737,16 +2815,23 @@ async def _handle_ceo_openai(
                 metadata=runtime_metadata,
             )
         else:
-            await websocket.send_json({"type": "error", "content": f"LLM error: {stream_warning}"})
+            provider_name = str(llm_cfg.get("provider", "openai") or "openai")
+            friendly_error = _humanize_llm_runtime_error(
+                stream_warning,
+                provider=provider_name,
+                mode="apikey",
+                base_url=str(base_url or ""),
+            )
+            await websocket.send_json({"type": "error", "content": friendly_error})
             _emit_chat_activity(
                 "ceo",
                 "ERROR",
-                f"LLM error: {stream_warning}",
+                friendly_error,
                 project_id=project_id,
                 metadata=runtime_metadata,
             )
             if run_id:
-                run_service.transition_run(run_id, state="failed", label=f"LLM error: {stream_warning}")
+                run_service.transition_run(run_id, state="failed", label=friendly_error)
             return None
     finally:
         thinking_event.set()
