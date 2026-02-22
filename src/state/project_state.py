@@ -205,6 +205,8 @@ class ProjectStateManager:
                     "type": data.get("type", "general"),
                     "created_at": data.get("created_at", ""),
                     "updated_at": data.get("updated_at", ""),
+                    "phases": data.get("phases", []) or [],
+                    "team": data.get("team", []) or [],
                     "workspace_path": data.get("workspace_path", ""),
                 })
             except (yaml.YAMLError, KeyError, OSError):

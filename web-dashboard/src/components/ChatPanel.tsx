@@ -1032,7 +1032,7 @@ export default function ChatPanel({
               );
               const chunk = wsContentText(data.content, '');
               streamingAccumRef.current += chunk;
-              setStreamingContent(streamingAccumRef.current);
+              // Keep stream chunks buffered and render a clean final typed bubble on "done".
               break;
             }
             case 'project_context': {
@@ -1046,17 +1046,13 @@ export default function ChatPanel({
             }
             case 'done': {
               const streamedContent = streamingAccumRef.current;
-              const finalContent = streamedContent || wsContentText(data.content, '');
+              const finalContent = wsContentText(data.content, '') || streamedContent;
               streamingAccumRef.current = '';
               if (data.run_id) setLatestRunId(data.run_id);
               const projectId = data.project_id || activeProjectIdRef.current;
               if (!turnErroredRef.current && finalContent.trim()) {
-                // If provider doesn't stream chunk-by-chunk, simulate a typing effect.
-                if (!streamedContent.trim()) {
-                  typewriteAndCommit(finalContent, projectId);
-                  break;
-                }
-                pushCeoMessage(finalContent, projectId);
+                typewriteAndCommit(finalContent, projectId);
+                break;
               }
               completeAssistantTurn();
               break;
@@ -1141,7 +1137,7 @@ export default function ChatPanel({
         }
       };
     } catch { setConnectionStatus('error'); }
-  }, [completeAssistantTurn, pushCeoMessage, stopTypingAnimation, typewriteAndCommit]);
+  }, [completeAssistantTurn, stopTypingAnimation, typewriteAndCommit]);
 
   useEffect(() => {
     shouldReconnectRef.current = true;

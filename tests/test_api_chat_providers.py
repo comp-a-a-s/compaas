@@ -490,6 +490,27 @@ def test_apply_agent_name_overrides_replaces_chairman_with_user_name():
     assert "Ari" in result
 
 
+def test_sanitize_ceo_response_removes_repeated_intro_and_progress_lines():
+    raw = (
+        "Idan, Marcus here. Ready to help.\n"
+        "Marcus is now creating the files.\n"
+        "Idan, I'll run one tiny check now and then report back.\n"
+        "Idan, CEO Marcus confirms the build is complete.\n"
+    )
+    cleaned = api._sanitize_ceo_response(raw, ceo_name="Marcus", user_name="Idan")
+    assert "Marcus here" not in cleaned
+    assert "is now creating" not in cleaned
+    assert "tiny check now and then report back" not in cleaned
+    assert "confirms the build is complete" in cleaned
+
+
+def test_sanitize_ceo_response_keeps_non_empty_output():
+    raw = "Idan, Marcus here.\n\nDelivered index.html and README."
+    cleaned = api._sanitize_ceo_response(raw, ceo_name="Marcus", user_name="Idan")
+    assert cleaned
+    assert "Delivered index.html and README." in cleaned
+
+
 def test_resolve_chat_project_creates_for_build_request(tmp_path, monkeypatch):
     data_dir = tmp_path / "company_data"
     data_dir.mkdir(parents=True, exist_ok=True)
