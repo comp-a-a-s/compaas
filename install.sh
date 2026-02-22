@@ -170,7 +170,6 @@ echo ""
 echo -e "  1. Activate venv:      ${YELLOW}source .venv/bin/activate${NC}"
 echo -e "  2. Start dashboard:    ${YELLOW}compaas-web${NC}   (opens at http://localhost:8420)"
 echo -e "  3. Run setup wizard:   Choose provider (Anthropic / OpenAI / local Ollama)"
-echo -e "  4. TUI dashboard:      ${YELLOW}compaas-tui${NC}   (optional, separate terminal)"
 echo ""
 
 if [ -t 0 ]; then
@@ -184,9 +183,8 @@ if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
     echo ""
     echo "Select startup mode:"
     echo "  1) Web dashboard (recommended)"
-    echo "  2) TUI dashboard"
-    echo "  3) API server only (no browser auto-open)"
-    read -r -p "Choice [1-3, default 1]: " START_MODE
+    echo "  2) API server only (no browser auto-open)"
+    read -r -p "Choice [1-2, default 1]: " START_MODE
     START_MODE=${START_MODE:-1}
 
     case "$START_MODE" in
@@ -195,10 +193,6 @@ if [[ "$START_NOW" =~ ^[Yy]$ ]]; then
             ./.venv/bin/compaas-web
             ;;
         2)
-            echo -e "${GREEN}Starting COMPaaS TUI dashboard...${NC}"
-            ./.venv/bin/compaas-tui
-            ;;
-        3)
             echo -e "${GREEN}Starting COMPaaS API server (headless)...${NC}"
             COMPAAS_NO_BROWSER=true ./.venv/bin/compaas-web
             ;;

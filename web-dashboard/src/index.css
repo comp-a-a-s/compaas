@@ -302,12 +302,30 @@ textarea:focus-visible {
   100% { left: 170%; }
 }
 
+@keyframes flow-up {
+  0%   { top: 170%; }
+  100% { top: -70%; }
+}
+
+@keyframes flow-left {
+  0%   { left: 170%; }
+  100% { left: -70%; }
+}
+
 .anim-flow-down {
   animation: flow-down 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 .anim-flow-right {
   animation: flow-right 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.anim-flow-up {
+  animation: flow-up 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.anim-flow-left {
+  animation: flow-left 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 /* ---- Project approval card entrance ---- */

@@ -440,15 +440,21 @@ function StepAiProvider({
       return { base_url: 'https://api.anthropic.com/v1', model: anthropicModelPreset === 'custom' ? llmModel : anthropicModelPreset, api_key: anthropicApiKey };
     }
     if (llmProvider === 'openai') {
+      if (openaiMode === 'codex') return null;
       return { base_url: 'https://api.openai.com/v1', model: openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel, api_key: llmApiKey };
     }
     return { base_url: llmBaseUrl, model: llmModel, api_key: llmApiKey };
   };
 
   const handleTest = async () => {
+    const params = getTestParams();
+    if (!params) {
+      setTestStatus('error');
+      setTestMessage('Connection test is not required in Codex CLI mode.');
+      return;
+    }
     setTestStatus('testing');
     setTestMessage('');
-    const params = getTestParams();
     const result = await testLlmConnection(params);
     setTestStatus(result.status);
     setTestMessage(result.message);
@@ -596,61 +602,93 @@ function StepAiProvider({
         icon={<MaterialIcon path={ICON_PATHS.openai} />} selected={llmProvider === 'openai'}
         title="OpenAI"
         description="GPT-4o, o3-mini, o1 — cloud models. Works via API key or the Codex CLI."
-        onClick={() => setLlmProvider('openai')}
+        onClick={() => {
+          setLlmProvider('openai');
+          setLlmApiKey('');
+        }}
       >
         {/* Sub-mode tabs */}
         <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
-          <SubTab label="API Key" active={openaiMode === 'apikey'} onClick={() => setOpenaiMode('apikey')} />
-          <SubTab label="Codex CLI" active={openaiMode === 'codex'} onClick={() => setOpenaiMode('codex')} />
+          <SubTab
+            label="API Key"
+            active={openaiMode === 'apikey'}
+            onClick={() => {
+              setOpenaiMode('apikey');
+              const localPlaceholders = new Set(['ollama', 'lm-studio', 'none', 'jan', 'vllm']);
+              if (localPlaceholders.has(llmApiKey.trim().toLowerCase())) {
+                setLlmApiKey('');
+              }
+            }}
+          />
+          <SubTab
+            label="Codex CLI"
+            active={openaiMode === 'codex'}
+            onClick={() => {
+              setOpenaiMode('codex');
+              setLlmApiKey('');
+            }}
+          />
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {/* Model picker — shown for both modes */}
-          <div>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Model
-            </label>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' }}>
-              {OPENAI_MODELS.map((m) => (
-                <button key={m} onClick={() => handleOpenaiModel(m)} style={{
-                  padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
-                  border: `1px solid ${openaiModelPreset === m ? C.accent : C.border}`,
-                  backgroundColor: openaiModelPreset === m ? 'rgba(88,166,255,0.15)' : C.surface,
-                  color: openaiModelPreset === m ? C.accent : C.textSecondary,
-                }}>
-                  {m === 'gpt-4o' ? 'gpt-4o ★' : m}
-                </button>
-              ))}
+          {openaiMode === 'apikey' ? (
+            <>
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Model
+                </label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                  {OPENAI_MODELS.map((m) => (
+                    <button key={m} onClick={() => handleOpenaiModel(m)} style={{
+                      padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+                      border: `1px solid ${openaiModelPreset === m ? C.accent : C.border}`,
+                      backgroundColor: openaiModelPreset === m ? 'rgba(88,166,255,0.15)' : C.surface,
+                      color: openaiModelPreset === m ? C.accent : C.textSecondary,
+                    }}>
+                      {m === 'gpt-4o' ? 'gpt-4o ★' : m}
+                    </button>
+                  ))}
+                </div>
+                {openaiModelPreset === 'custom' && (
+                  <input
+                    type="text" value={llmModel} onChange={(e) => setLlmModel(e.target.value)}
+                    placeholder="e.g. gpt-4o-2024-11-20"
+                    style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                )}
+                <p style={{ fontSize: '10px', color: C.textMuted, margin: '4px 0 0' }}>
+                  ★ gpt-4o — best balance of speed &amp; cost. o3-mini / o1 — stronger reasoning.
+                </p>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  OpenAI API Key
+                </label>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  name="openai-api-key-wizard"
+                  value={llmApiKey}
+                  onChange={(e) => setLlmApiKey(e.target.value)}
+                  placeholder="sk-..."
+                  style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                />
+              </div>
+
+              <TestConnectionButton status={testStatus} message={testMessage} onTest={handleTest} />
+            </>
+          ) : (
+            <div style={{ padding: '10px 12px', borderRadius: '8px', border: `1px solid ${C.border}`, backgroundColor: C.surface }}>
+              <p style={{ fontSize: '12px', color: C.textSecondary, lineHeight: 1.6 }}>
+                Codex CLI mode uses your local Codex authentication. No API key entry or model selection is required in COMPaaS.
+              </p>
             </div>
-            {openaiModelPreset === 'custom' && (
-              <input
-                type="text" value={llmModel} onChange={(e) => setLlmModel(e.target.value)}
-                placeholder="e.g. gpt-4o-2024-11-20"
-                style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
-                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-              />
-            )}
-            <p style={{ fontSize: '10px', color: C.textMuted, margin: '4px 0 0' }}>
-              ★ gpt-4o — best balance of speed &amp; cost. o3-mini / o1 — stronger reasoning.
-            </p>
-          </div>
-
-          {/* API key — shown for both modes (Codex CLI also needs OPENAI_API_KEY) */}
-          <div>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              OpenAI API Key
-            </label>
-            <input
-              type="password" value={llmApiKey} onChange={(e) => setLlmApiKey(e.target.value)}
-              placeholder="sk-..."
-              style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-            />
-          </div>
-
-          <TestConnectionButton status={testStatus} message={testMessage} onTest={handleTest} />
+          )}
 
           {/* API Key guide */}
           {openaiMode === 'apikey' && (
@@ -703,9 +741,7 @@ function StepAiProvider({
                   <strong>Verify install:</strong><br />
                   <Code>codex --version</Code>
                 </li>
-                <li>
-                  <strong>Also paste the same key above</strong> — COMPaaS uses it for direct API calls in addition to the CLI.
-                </li>
+                <li>Return to this wizard and choose <strong>Codex CLI</strong>. No additional key/model fields are required here.</li>
               </ol>
               <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(88,166,255,0.08)', borderRadius: '6px', border: `1px solid ${C.border}` }}>
                 <strong style={{ color: C.accent, fontSize: '11px' }}>About Codex CLI:</strong>{' '}
@@ -1421,7 +1457,7 @@ function StepTelegram({
       <div style={{ padding: '14px', backgroundColor: 'rgba(44,165,224,0.08)', border: '1px solid rgba(44,165,224,0.25)', borderRadius: '8px', marginBottom: '20px' }}>
         <p style={{ fontSize: '12px', color: '#2ca5e0' }}>
           <strong>How it works:</strong> Create a Telegram bot via @BotFather, add it to a chat, then paste the credentials here.
-          You can then hand off sessions to Telegram with one click from the sidebar.
+          Then enable the Telegram mirror toggle directly in CEO Chat.
         </p>
       </div>
 
@@ -1502,7 +1538,7 @@ function StepComplete({
   const providerLabel =
     llmProvider === 'anthropic' && anthropicMode === 'cli'    ? `Anthropic — Claude CLI (${anthropicModelPreset})` :
     llmProvider === 'anthropic' && anthropicMode === 'apikey' ? `Anthropic — API Key (${anthropicModelPreset})` :
-    llmProvider === 'openai'    && openaiMode === 'codex'     ? `OpenAI — Codex CLI (${openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel})` :
+    llmProvider === 'openai'    && openaiMode === 'codex'     ? 'OpenAI — Codex CLI' :
     llmProvider === 'openai'                                  ? `OpenAI — API Key (${openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel})` :
                                                                 `Local Model (${llmModel})`;
 
@@ -1734,7 +1770,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [localPreset, setLocalPreset] = useState<LocalPreset>('ollama');
   const [llmBaseUrl, setLlmBaseUrl] = useState('http://localhost:11434/v1');
   const [llmModel, setLlmModel] = useState('llama3.3');
-  const [llmApiKey, setLlmApiKey] = useState('ollama');
+  const [llmApiKey, setLlmApiKey] = useState('');
   const [openaiModelPreset, setOpenaiModelPreset] = useState('gpt-4o');
   const [proxyEnabled, setProxyEnabled] = useState(false);
   const [proxyUrl, setProxyUrl] = useState('http://localhost:4000');
@@ -1803,9 +1839,11 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       resolvedBaseUrl = 'https://api.anthropic.com/v1';
       resolvedApiKey = anthropicMode === 'apikey' ? anthropicApiKey : '';
     } else if (llmProvider === 'openai') {
-      resolvedModel = openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel;
+      resolvedModel = openaiMode === 'codex'
+        ? 'codex'
+        : (openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel);
       resolvedBaseUrl = 'https://api.openai.com/v1';
-      resolvedApiKey = llmApiKey;
+      resolvedApiKey = openaiMode === 'codex' ? '' : llmApiKey;
     }
 
     const llmConfig: LlmConfig = {
