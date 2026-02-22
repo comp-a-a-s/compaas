@@ -106,6 +106,67 @@ class RunService:
             if changed:
                 self._save_registry(registry)
 
+    @staticmethod
+    def _resolve_runtime_seconds(run: dict[str, Any]) -> int:
+        """Return max runtime budget in seconds for a run."""
+        budget = run.get("tool_budget", {})
+        try:
+            return max(0, int((budget or {}).get("max_runtime_seconds", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _resolve_started_at(run: dict[str, Any]) -> datetime | None:
+        """Return best-effort start timestamp for runtime guardrails."""
+        started = _parse_iso(str(run.get("started_at", "") or ""))
+        if started is not None:
+            return started
+        return _parse_iso(str(run.get("created_at", "") or ""))
+
+    def _expire_overdue_runs(self, registry: dict[str, Any], now_dt: datetime | None = None) -> bool:
+        """Mark active runs as failed when runtime budget is exceeded."""
+        changed = False
+        current = now_dt or datetime.now(timezone.utc)
+        for run in registry.get("runs", []):
+            status = str(run.get("status", "") or "")
+            if status not in ACTIVE_STATES:
+                continue
+
+            runtime_limit_s = self._resolve_runtime_seconds(run)
+            if runtime_limit_s <= 0:
+                continue
+
+            started_at = self._resolve_started_at(run)
+            if started_at is None:
+                continue
+
+            elapsed_s = (current - started_at).total_seconds()
+            if elapsed_s <= runtime_limit_s:
+                continue
+
+            ended_at = _utcnow_iso()
+            run["status"] = "failed"
+            run["ended_at"] = ended_at
+            run["updated_at"] = ended_at
+            timeline = run.get("timeline", [])
+            if not isinstance(timeline, list):
+                timeline = []
+            timeline.append(
+                {
+                    "timestamp": ended_at,
+                    "state": "failed",
+                    "label": f"Runtime budget exceeded ({runtime_limit_s}s); run auto-expired.",
+                    "metadata": {
+                        "reason": "runtime_budget_exceeded",
+                        "elapsed_seconds": round(elapsed_s, 2),
+                        "max_runtime_seconds": runtime_limit_s,
+                    },
+                }
+            )
+            run["timeline"] = timeline
+            changed = True
+        return changed
+
     def list_runs(self, *, project_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
         with FileLock(self.registry_path):
             registry = self._load_registry()
@@ -146,6 +207,8 @@ class RunService:
         with FileLock(self.registry_path), FileLock(self.idempotency_path):
             registry = self._load_registry()
             idem = self._load_idempotency()
+            if self._expire_overdue_runs(registry):
+                self._save_registry(registry)
 
             if idempotency_key:
                 mapped = idem["keys"].get(idempotency_key)
@@ -323,14 +386,28 @@ class RunService:
         files_touched = int(run.get("files_touched", 0) or 0)
         max_commands = int(budget.get("max_commands", 0) or 0)
         max_files = int(budget.get("max_files_touched", 0) or 0)
+        max_runtime = int(budget.get("max_runtime_seconds", 0) or 0)
+        started_at = self._resolve_started_at(run)
+        elapsed_seconds = 0
+        if started_at is not None:
+            elapsed_seconds = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds()))
+        command_exceeded = command_count > max_commands
+        file_exceeded = files_touched > max_files
+        runtime_exceeded = max_runtime > 0 and elapsed_seconds > max_runtime
         return {
             "command_count": command_count,
             "files_touched": files_touched,
             "max_commands": max_commands,
             "max_files_touched": max_files,
+            "max_runtime_seconds": max_runtime,
+            "elapsed_seconds": elapsed_seconds,
             "command_budget_remaining": max(0, max_commands - command_count),
             "file_budget_remaining": max(0, max_files - files_touched),
-            "over_budget": command_count > max_commands or files_touched > max_files,
+            "runtime_budget_remaining": max(0, max_runtime - elapsed_seconds) if max_runtime > 0 else 0,
+            "command_exceeded": command_exceeded,
+            "file_exceeded": file_exceeded,
+            "runtime_exceeded": runtime_exceeded,
+            "over_budget": command_exceeded or file_exceeded or runtime_exceeded,
         }
 
     def cancel_run(self, run_id: str, reason: str = "Cancelled by user") -> dict[str, Any] | None:
@@ -374,4 +451,3 @@ class RunService:
             "timeline": run.get("timeline", []),
             "guardrails": self.guardrail_status(run_id) or {},
         }
-

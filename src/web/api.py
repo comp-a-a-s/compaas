@@ -1607,6 +1607,21 @@ def _format_tool_action(tool_name: str, tool_input: dict) -> str:
     return f"Using {tool_name}"
 
 
+def _guardrail_violation_message(guardrails: dict[str, Any] | None) -> str:
+    """Return a user-facing guardrail violation message."""
+    if not guardrails:
+        return "Execution budget exceeded; stopping run."
+    if bool(guardrails.get("runtime_exceeded")):
+        elapsed = int(guardrails.get("elapsed_seconds", 0) or 0)
+        max_runtime = int(guardrails.get("max_runtime_seconds", 0) or 0)
+        if max_runtime > 0:
+            return f"Execution runtime budget exceeded ({elapsed}s/{max_runtime}s); stopping run."
+        return "Execution runtime budget exceeded; stopping run."
+    if bool(guardrails.get("command_exceeded")) or bool(guardrails.get("file_exceeded")):
+        return "Tool budget exceeded; stopping run."
+    return "Execution budget exceeded; stopping run."
+
+
 def _emit_chat_activity(
     agent: str,
     action: str,
@@ -1784,8 +1799,9 @@ async def _handle_ceo_claude(
                     return None
                 guardrails = run_service.guardrail_status(run_id)
                 if guardrails and guardrails.get("over_budget"):
-                    await websocket.send_json({"type": "error", "content": "Tool budget exceeded; stopping run."})
-                    run_service.transition_run(run_id, state="failed", label="Tool budget guardrail exceeded")
+                    violation_message = _guardrail_violation_message(guardrails)
+                    await websocket.send_json({"type": "error", "content": violation_message})
+                    run_service.transition_run(run_id, state="failed", label=violation_message)
                     return None
             try:
                 raw = await asyncio.wait_for(process.stdout.readline(), timeout=30.0)
@@ -2177,8 +2193,9 @@ async def _handle_ceo_codex(
                     return None
                 guardrails = run_service.guardrail_status(run_id)
                 if guardrails and guardrails.get("over_budget"):
-                    await websocket.send_json({"type": "error", "content": "Tool budget exceeded; stopping run."})
-                    run_service.transition_run(run_id, state="failed", label="Tool budget guardrail exceeded")
+                    violation_message = _guardrail_violation_message(guardrails)
+                    await websocket.send_json({"type": "error", "content": violation_message})
+                    run_service.transition_run(run_id, state="failed", label=violation_message)
                     return None
             try:
                 raw = await asyncio.wait_for(process.stdout.readline(), timeout=30.0)
@@ -2624,8 +2641,9 @@ async def _handle_ceo_openai(
                     return None
                 guardrails = run_service.guardrail_status(run_id)
                 if guardrails and guardrails.get("over_budget"):
-                    await websocket.send_json({"type": "error", "content": "Tool budget exceeded; stopping run."})
-                    run_service.transition_run(run_id, state="failed", label="Tool budget guardrail exceeded")
+                    violation_message = _guardrail_violation_message(guardrails)
+                    await websocket.send_json({"type": "error", "content": violation_message})
+                    run_service.transition_run(run_id, state="failed", label=violation_message)
                     return None
             try:
                 timeout_s = first_token_timeout_s if first_token else inter_token_timeout_s
@@ -2843,6 +2861,31 @@ async def _handle_ceo_openai(
 async def chat_websocket(websocket: WebSocket) -> None:
     """WebSocket endpoint for real-time CEO chat."""
     await websocket.accept()
+    inflight_run_id = ""
+    inflight_project_id = ""
+
+    def _close_inflight_run(reason: str, *, metadata: dict[str, Any] | None = None) -> None:
+        nonlocal inflight_run_id, inflight_project_id
+        if not inflight_run_id:
+            return
+        run_state = run_service.get_run(inflight_run_id)
+        status = str((run_state or {}).get("status", "") or "")
+        if status in {"queued", "planning", "executing", "verifying"}:
+            run_service.transition_run(
+                inflight_run_id,
+                state="failed",
+                label=reason,
+                metadata=metadata or {},
+            )
+            _emit_chat_activity(
+                "ceo",
+                "WARNING",
+                reason,
+                project_id=inflight_project_id,
+                metadata=metadata or {},
+            )
+        inflight_run_id = ""
+        inflight_project_id = ""
 
     config = _load_config()
     llm_cfg = config.get("llm", {})
@@ -2938,6 +2981,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 await websocket.send_json({"type": "done", "content": "", "project_id": active_project_id})
                 continue
             run_id = str(run_record.get("id", "") or "")
+            inflight_run_id = run_id
+            inflight_project_id = active_project_id
             run_service.transition_run(
                 run_id,
                 state="planning",
@@ -3021,6 +3066,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     },
                 })
                 await websocket.send_json({"type": "done", "content": "", "project_id": active_project_id, "run_id": run_id})
+                inflight_run_id = ""
+                inflight_project_id = ""
                 continue
             if micro_project_mode:
                 complexity_reason = _micro_project_complexity_reason(user_message)
@@ -3033,6 +3080,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     )
                     await websocket.send_json({"type": "micro_project_warning", "content": complexity_reason})
                     await websocket.send_json({"type": "done", "content": "", "project_id": active_project_id, "run_id": run_id})
+                    inflight_run_id = ""
+                    inflight_project_id = ""
                     continue
                 if complexity_reason and micro_project_override:
                     await websocket.send_json({
@@ -3082,6 +3131,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         "project_id": active_project_id,
                         "run_id": run_id,
                     })
+                    inflight_run_id = ""
+                    inflight_project_id = ""
                     continue
                 full_response = await _handle_ceo_claude(
                     websocket,
@@ -3124,10 +3175,19 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if structured_enabled:
                 done_payload["structured"] = _structured_response_payload(full_response or "")
             await websocket.send_json(done_payload)
+            inflight_run_id = ""
+            inflight_project_id = ""
 
     except WebSocketDisconnect:
-        pass
-    except Exception:
+        _close_inflight_run(
+            "Client disconnected before run completion",
+            metadata={"reason": "websocket_disconnected"},
+        )
+    except Exception as exc:
+        _close_inflight_run(
+            f"Chat websocket error: {str(exc)[:180]}",
+            metadata={"reason": "websocket_exception"},
+        )
         try:
             await websocket.close()
         except Exception:

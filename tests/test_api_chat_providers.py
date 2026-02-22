@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 import pytest
+from fastapi import WebSocketDisconnect
 
 import src.web.api as api
 import src.llm_provider as llm_provider
 from src.state.project_state import ProjectStateManager
+from src.web.services.run_service import RunService
+from src.web.settings import RuntimeSettings
 
 
 class _FakeWebSocket:
@@ -18,6 +22,28 @@ class _FakeWebSocket:
 
     async def send_json(self, payload: dict) -> None:
         self.events.append(payload)
+
+
+class _FakeChatWebSocket:
+    def __init__(self, inbound_messages: list[dict]) -> None:
+        self._inbound = [json.dumps(msg) for msg in inbound_messages]
+        self.events: list[dict] = []
+        self.accepted = False
+        self.closed = False
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    async def receive_text(self) -> str:
+        if self._inbound:
+            return self._inbound.pop(0)
+        raise WebSocketDisconnect()
+
+    async def send_json(self, payload: dict) -> None:
+        self.events.append(payload)
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class _FakeStdout:
@@ -497,3 +523,79 @@ def test_chat_history_scopes_by_project_id(tmp_path, monkeypatch):
     scoped = api._load_chat_messages(project_id=project_id)
     assert len(scoped) == 1
     assert scoped[0]["content"] == "project message"
+
+
+@pytest.mark.asyncio
+async def test_chat_websocket_marks_inflight_run_failed_on_disconnect(monkeypatch, tmp_path):
+    data_dir = tmp_path / "company_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+
+    run_service = RunService(
+        str(data_dir),
+        RuntimeSettings(
+            data_dir=str(data_dir),
+            project_root=str(tmp_path),
+            workspace_root=str(workspace_root),
+            max_project_concurrency=1,
+            duplicate_turn_window_seconds=600,
+        ),
+    )
+
+    project_id = "abc12345"
+    project = {
+        "id": project_id,
+        "name": "Disconnect Test",
+        "workspace_path": str(workspace_root / "disconnect-test"),
+    }
+    os.makedirs(project["workspace_path"], exist_ok=True)
+
+    monkeypatch.setattr(api, "run_service", run_service)
+    monkeypatch.setattr(api, "DATA_DIR", str(data_dir))
+    monkeypatch.setattr(api, "CHAT_LOG_PATH", str(data_dir / "chat_messages.json"))
+    monkeypatch.setattr(api.shutil, "which", lambda _name: "/usr/bin/codex")
+    monkeypatch.setattr(
+        api,
+        "_load_config",
+        lambda: {
+            "llm": {
+                "provider": "openai",
+                "openai_mode": "codex",
+                "model": "gpt-4o-mini",
+            },
+            "user": {"name": "Idan"},
+            "agents": {"ceo": "Marcus"},
+            "integrations": {},
+            "feature_flags": {
+                "planning_approval_gate": True,
+                "structured_ceo_response": True,
+                "execution_intent_classifier": False,
+            },
+        },
+    )
+    monkeypatch.setattr(api, "_resolve_chat_project", lambda *_args, **_kwargs: (project_id, project, False))
+    monkeypatch.setattr(api, "_build_context_prompt", lambda *_args, **_kwargs: "prompt")
+
+    async def _disconnecting_codex_handler(*_args, **_kwargs):
+        raise WebSocketDisconnect()
+
+    monkeypatch.setattr(api, "_handle_ceo_codex", _disconnecting_codex_handler)
+
+    ws = _FakeChatWebSocket(
+        [{
+            "message": "build a simple app",
+            "project_id": project_id,
+            "planning_approved": True,
+        }]
+    )
+    await api.chat_websocket(ws)
+
+    runs = run_service.list_runs(project_id=project_id, limit=10)
+    assert runs
+    run = runs[0]
+    assert run["status"] == "failed"
+    assert any(
+        "Client disconnected before run completion" in str(item.get("label", ""))
+        for item in run.get("timeline", [])
+    )
