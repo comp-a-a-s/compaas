@@ -46,11 +46,22 @@ function StatCard({ label, value, color, loading }: StatCardProps) {
 }
 
 // ---- Model color helper ----
+function effectiveModel(agent: Agent): string {
+  return (agent.runtime_model || agent.model || '').trim() || 'unknown';
+}
+
+function runtimeLabel(agent: Agent): string {
+  return (agent.runtime_label || effectiveModel(agent)).trim();
+}
+
 function modelColor(model: string): string {
   const m = model.toLowerCase();
+  if (m.includes('codex')) return 'var(--tf-success)';
   if (m.includes('opus')) return 'var(--tf-accent)';
   if (m.includes('sonnet')) return 'var(--tf-accent-blue)';
   if (m.includes('haiku')) return 'var(--tf-success)';
+  if (m.includes('gpt') || m.includes('o1') || m.includes('o3')) return 'var(--tf-accent-blue)';
+  if (m.includes('llama') || m.includes('qwen') || m.includes('mistral') || m.includes('gemma')) return 'var(--tf-warning)';
   return 'var(--tf-text-secondary)';
 }
 
@@ -129,7 +140,7 @@ interface OrgNodeProps {
   muted?: boolean;
 }
 function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false, muted = false }: OrgNodeProps) {
-  const color = modelColor(agent.model);
+  const color = modelColor(effectiveModel(agent));
   const initial = agent.name.charAt(0).toUpperCase();
   const isActive = !muted && (
     recentlyActive
@@ -232,7 +243,7 @@ interface AgentDetailModalProps {
   onClose: () => void;
 }
 function AgentDetailModal({ agent, onClose }: AgentDetailModalProps) {
-  const color = modelColor(agent.model);
+  const color = modelColor(effectiveModel(agent));
   const initial = agent.name.charAt(0).toUpperCase();
   const recentActivity = agent.recent_activity ?? [];
 
@@ -283,7 +294,7 @@ function AgentDetailModal({ agent, onClose }: AgentDetailModalProps) {
 
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
         <div style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>
-          Model: <span style={{ color: 'var(--tf-text-secondary)' }}>{agent.model}</span>
+          Runtime: <span style={{ color: 'var(--tf-text-secondary)' }}>{runtimeLabel(agent)}</span>
         </div>
         <div style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>
           Status: <span style={{ color: agent.status === 'active' || agent.status === 'permanent' ? 'var(--tf-success)' : 'var(--tf-text-secondary)' }}>{agent.status}</span>
@@ -425,7 +436,7 @@ function TreeNode({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <Tooltip content={`${node.displayRole ?? agent.role} · ${agent.model}`} position="top">
+      <Tooltip content={`${node.displayRole ?? agent.role} · ${runtimeLabel(agent)}`} position="top">
         <OrgNode
           agent={agent}
           displayRole={node.displayRole}
@@ -592,22 +603,24 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
   const recentActiveIds = useMemo(() => {
     const s = new Set<string>();
     for (const agent of agents) {
+      if (microProjectMode && agent.id !== 'ceo') continue;
       if (isAgentRecentlyActive(agent.id, agent.name, events)) {
         s.add(agent.id);
       }
     }
     return s;
-  }, [agents, events]);
+  }, [agents, events, microProjectMode]);
 
   // Broader active set to drive connector highlights even when events are sparse.
   const activeIds = useMemo(() => {
     const s = new Set(recentActiveIds);
     for (const agent of agents) {
+      if (microProjectMode && agent.id !== 'ceo') continue;
       if (agent.status === 'active') s.add(agent.id);
       if ((agent.recent_activity ?? []).length > 0) s.add(agent.id);
     }
     return s;
-  }, [agents, recentActiveIds]);
+  }, [agents, recentActiveIds, microProjectMode]);
 
   const aliasToId = useMemo(() => {
     const map = new Map<string, string>();
@@ -620,17 +633,23 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
   }, [agents]);
 
   const latestFlow = useMemo((): { edgeKeys: Set<string>; direction: FlowDirection } => {
+    if (microProjectMode) {
+      return { edgeKeys: new Set<string>(), direction: null };
+    }
+    const FLOW_WINDOW_MS = 20_000;
+    const latestEventTimestamp = events.length > 0
+      ? new Date(events[events.length - 1].timestamp || '').getTime()
+      : 0;
+
     const safeAgentId = (value: unknown): string => {
       const normalized = String(value || '').trim().toLowerCase();
       if (!normalized) return '';
       return aliasToId.get(normalized) || normalized;
     };
 
-    const buildFlow = (sourceRaw: unknown, targetRaw: unknown, direction: FlowDirection) => {
-      const source = safeAgentId(sourceRaw);
-      const target = safeAgentId(targetRaw);
-      if (!source || !target) return null;
-      const targetPath = findPathToNode(ORG_TREE, source === 'ceo' ? target : source);
+    const buildFlowToAgent = (agentId: string, direction: FlowDirection) => {
+      if (!agentId || agentId === 'ceo') return null;
+      const targetPath = findPathToNode(ORG_TREE, agentId);
       if (!targetPath || targetPath.length < 2) return null;
       const edgeKeys = new Set<string>();
       for (let i = 0; i < targetPath.length - 1; i += 1) {
@@ -641,30 +660,44 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
 
     for (let idx = events.length - 1; idx >= 0; idx -= 1) {
       const evt = events[idx];
+      const evtTs = evt.timestamp ? new Date(evt.timestamp).getTime() : 0;
+      if (
+        latestEventTimestamp
+        && Number.isFinite(latestEventTimestamp)
+        && evtTs
+        && Number.isFinite(evtTs)
+        && latestEventTimestamp - evtTs > FLOW_WINDOW_MS
+      ) {
+        continue;
+      }
       const meta = (evt.metadata || {}) as Record<string, unknown>;
-      const sourceMeta = meta.source_agent ?? meta.from_agent;
-      const targetMeta = meta.target_agent ?? meta.to_agent;
-      const flowMeta = String(meta.flow || '').toLowerCase();
-      if (sourceMeta && targetMeta) {
-        const inferredDirection: FlowDirection = flowMeta === 'up' ? 'up' : 'down';
-        const fromMeta = buildFlow(sourceMeta, targetMeta, inferredDirection);
-        if (fromMeta) return fromMeta;
+      const sourceMeta = safeAgentId(meta.source_agent ?? meta.from_agent);
+      const targetMeta = safeAgentId(meta.target_agent ?? meta.to_agent);
+      if (sourceMeta && targetMeta && sourceMeta !== targetMeta) {
+        if (sourceMeta === 'ceo' && targetMeta !== 'ceo') {
+          const downFlow = buildFlowToAgent(targetMeta, 'down');
+          if (downFlow) return downFlow;
+        }
+        if (targetMeta === 'ceo' && sourceMeta !== 'ceo') {
+          const upFlow = buildFlowToAgent(sourceMeta, 'up');
+          if (upFlow) return upFlow;
+        }
       }
 
       const detail = (evt.detail || '').toLowerCase();
       const downMatch = detail.match(/delegating to ([a-z0-9\- ]+)/i);
       if (downMatch) {
-        const fromDetail = buildFlow('ceo', downMatch[1].trim(), 'down');
+        const fromDetail = buildFlowToAgent(safeAgentId(downMatch[1].trim()), 'down');
         if (fromDetail) return fromDetail;
       }
       const upMatch = detail.match(/(update|result|response) from ([a-z0-9\- ]+)/i);
       if (upMatch) {
-        const fromDetail = buildFlow(upMatch[2].trim(), 'ceo', 'up');
+        const fromDetail = buildFlowToAgent(safeAgentId(upMatch[2].trim()), 'up');
         if (fromDetail) return fromDetail;
       }
     }
     return { edgeKeys: new Set<string>(), direction: null };
-  }, [aliasToId, events]);
+  }, [aliasToId, events, microProjectMode]);
 
   const mutedAgentIds = useMemo(() => {
     if (!microProjectMode) return new Set<string>();
@@ -690,17 +723,54 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
   }, [events]);
 
   const handoffPairs = useMemo(() => {
+    if (microProjectMode) return [] as Array<[string, number]>;
+
+    const knownAgentIds = new Set(agents.map((agent) => agent.id.toLowerCase()));
+    const displayNameById = new Map<string, string>();
+    for (const agent of agents) {
+      displayNameById.set(agent.id.toLowerCase(), agent.name);
+    }
+    displayNameById.set('ceo', 'CEO');
+
+    const normalizeAgentId = (value: unknown): string => {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (!normalized) return '';
+      return aliasToId.get(normalized) || normalized;
+    };
+
     const edges = new Map<string, number>();
     for (const evt of events) {
-      const detail = (evt.detail || '').toLowerCase();
-      const m = detail.match(/delegating to ([a-z0-9\- ]+)/i);
-      if (!m) continue;
-      const target = m[1].trim();
-      const key = `CEO -> ${target}`;
+      const metadata = (evt.metadata || {}) as Record<string, unknown>;
+      let source = normalizeAgentId(metadata.source_agent ?? metadata.from_agent ?? evt.agent);
+      let target = normalizeAgentId(metadata.target_agent ?? metadata.to_agent);
+
+      if (!source || !target) {
+        const detail = String(evt.detail || '').toLowerCase();
+        const downMatch = detail.match(/delegating to ([a-z0-9\- ]+)/i);
+        if (downMatch) {
+          source = 'ceo';
+          target = normalizeAgentId(downMatch[1].trim());
+        } else {
+          const upMatch = detail.match(/(update|result|response) from ([a-z0-9\- ]+)/i);
+          if (upMatch) {
+            source = normalizeAgentId(upMatch[2].trim());
+            target = 'ceo';
+          }
+        }
+      }
+
+      if (!source || !target || source === target) continue;
+      if (!knownAgentIds.has(source) || !knownAgentIds.has(target)) continue;
+      if (!(source === 'ceo' || target === 'ceo')) continue;
+
+      const sourceName = displayNameById.get(source) || source;
+      const targetName = displayNameById.get(target) || target;
+      const key = `${sourceName} -> ${targetName}`;
       edges.set(key, (edges.get(key) || 0) + 1);
     }
+
     return Array.from(edges.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  }, [events]);
+  }, [agents, aliasToId, events, microProjectMode]);
 
   const timelineEvents = useMemo(() => {
     return [...events]
@@ -840,7 +910,7 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
                 borderBottom: '1px dashed var(--tf-border)',
               }}
             >
-              <Tooltip content={`${ceoAgent.role} · ${ceoAgent.model}`} position="top">
+              <Tooltip content={`${ceoAgent.role} · ${runtimeLabel(ceoAgent)}`} position="top">
                 <div style={{ transform: 'scale(1.04)', transformOrigin: 'center top' }}>
                   <OrgNode
                     agent={ceoAgent}
@@ -910,7 +980,7 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
                             opacity: mutedInMicro ? 0.42 : 1,
                             filter: mutedInMicro ? 'grayscale(32%)' : 'none',
                           }}
-                          title={mutedInMicro ? `${agent.role} · ${agent.model} · Inactive in Micro mode` : `${agent.role} · ${agent.model}`}
+                          title={mutedInMicro ? `${agent.role} · ${runtimeLabel(agent)} · Inactive in Micro mode` : `${agent.role} · ${runtimeLabel(agent)}`}
                         >
                           <span
                             style={{

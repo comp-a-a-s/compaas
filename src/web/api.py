@@ -268,7 +268,9 @@ def get_org_chart() -> dict:
 
     # Use config values so that the org chart reflects user-set names
     cfg = _load_config()
-    chairman_name = cfg.get("user", {}).get("name", "") or "Idan"
+    chairman_name = str(cfg.get("user", {}).get("name", "") or "").strip() or "Idan"
+    if chairman_name:
+        chairman_name = chairman_name[0].upper() + chairman_name[1:]
     ceo_name = cfg.get("agents", {}).get("ceo", "Marcus") or "Marcus"
 
     org: dict = {
@@ -741,19 +743,114 @@ async def test_llm_connection(body: dict) -> dict:
 # Agents
 # ---------------------------------------------------------------------------
 
+
+def _llm_runtime_snapshot() -> dict[str, str]:
+    """Return normalized runtime metadata for the currently selected LLM provider."""
+    cfg = _load_config()
+    llm = cfg.get("llm", {}) if isinstance(cfg, dict) else {}
+    provider = str(llm.get("provider", "anthropic") or "anthropic").strip().lower()
+    anthropic_mode = str(llm.get("anthropic_mode", "cli") or "cli").strip().lower()
+    openai_mode = str(llm.get("openai_mode", "apikey") or "apikey").strip().lower()
+    configured_model = str(llm.get("model", "") or "").strip()
+
+    if provider == "anthropic":
+        mode = anthropic_mode if anthropic_mode in ("cli", "apikey") else "cli"
+        label = "Anthropic Claude CLI" if mode == "cli" else "Anthropic API"
+        runtime_model = configured_model or "claude"
+    elif provider == "openai":
+        if openai_mode == "codex":
+            mode = "codex"
+            label = "OpenAI Codex CLI"
+            runtime_model = "codex"
+        else:
+            mode = "apikey"
+            label = "OpenAI API"
+            runtime_model = configured_model or "gpt-4o"
+    else:
+        provider = "openai_compat"
+        mode = "local"
+        label = "Local OpenAI-compatible"
+        runtime_model = configured_model or "llama3.2"
+
+    return {
+        "provider": provider,
+        "mode": mode,
+        "label": label,
+        "model": runtime_model,
+    }
+
+
+def _agent_runtime_model(base_model: str, runtime: dict[str, str]) -> str:
+    """Return the runtime model string shown in the UI for an agent."""
+    if runtime.get("provider") == "anthropic":
+        return str(base_model or "sonnet")
+    return str(runtime.get("model") or "unknown")
+
+
+def _agent_runtime_label(base_model: str, runtime: dict[str, str]) -> str:
+    """Human-readable runtime label for a specific agent."""
+    runtime_model = _agent_runtime_model(base_model, runtime)
+    return f"{runtime.get('label', 'LLM runtime')} · {runtime_model}"
+
+
+def _is_anthropic_model_label(model_name: str) -> bool:
+    """Return True when a model identifier clearly belongs to Anthropic naming."""
+    normalized = str(model_name or "").strip().lower()
+    if not normalized:
+        return False
+    if "claude" in normalized:
+        return True
+    return normalized.startswith(("opus", "sonnet", "haiku"))
+
+
+def _resolve_routed_model_for_runtime(
+    *,
+    provider: str,
+    openai_mode: str,
+    configured_model: str,
+    routed_model: str,
+) -> str:
+    """Route intent model overrides only when compatible with active runtime."""
+    base_model = str(configured_model or "").strip()
+    candidate = str(routed_model or "").strip()
+    provider_normalized = str(provider or "anthropic").strip().lower()
+    openai_mode_normalized = str(openai_mode or "apikey").strip().lower()
+
+    if provider_normalized == "openai" and openai_mode_normalized == "codex":
+        return "codex"
+    if not candidate:
+        return base_model
+    if provider_normalized == "openai_compat":
+        # Local runtimes are usually bound to one selected model.
+        return base_model
+    if provider_normalized == "openai":
+        # Ignore Anthropic-routed names (sonnet/opus/haiku/claude) on OpenAI API runtime.
+        return base_model if _is_anthropic_model_label(candidate) else candidate
+    if provider_normalized == "anthropic":
+        # Ignore non-Anthropic route names on Claude runtime.
+        return candidate if _is_anthropic_model_label(candidate) else base_model
+    return base_model
+
+
 @app.get("/api/agents", summary="List all agents with their models and roles")
 def list_agents() -> list[dict]:
     """Return every known agent (core team, on-demand, and dynamically hired)."""
     agents: list[dict] = []
+    runtime = _llm_runtime_snapshot()
 
     for agent_id, info in AGENT_REGISTRY.items():
+        base_model = str(info.get("model", "sonnet") or "sonnet")
         entry = {
             "id": agent_id,
             "name": _get_agent_name(agent_id, info["name"]),
             "role": info["role"],
-            "model": info["model"],
+            "model": base_model,
             "status": info["status"],
             "team": info["team"],
+            "runtime_provider": runtime["provider"],
+            "runtime_mode": runtime["mode"],
+            "runtime_model": _agent_runtime_model(base_model, runtime),
+            "runtime_label": _agent_runtime_label(base_model, runtime),
         }
         agents.append(entry)
 
@@ -763,15 +860,20 @@ def list_agents() -> list[dict]:
         with open(hiring_log_path) as f:
             log = yaml.safe_load(f) or {"hired": []}
         for h in log.get("hired", []):
+            base_model = str(h.get("model", "sonnet") or "sonnet")
             entry = {
                 "id": h["name"],
                 "name": h["name"],
                 "role": h["role"],
-                "model": h.get("model", "sonnet"),
+                "model": base_model,
                 "status": h.get("status", "active"),
                 "team": "hired",
                 "expertise": h.get("expertise", ""),
                 "hired_at": h.get("hired_at", ""),
+                "runtime_provider": runtime["provider"],
+                "runtime_mode": runtime["mode"],
+                "runtime_model": _agent_runtime_model(base_model, runtime),
+                "runtime_label": _agent_runtime_label(base_model, runtime),
             }
             agents.append(entry)
 
@@ -781,6 +883,7 @@ def list_agents() -> list[dict]:
 @app.get("/api/agents/{agent_id}", summary="Get detailed info for a single agent")
 def get_agent_detail(agent_id: str) -> dict:
     """Return detailed agent info including assigned tasks and recent activity."""
+    runtime = _llm_runtime_snapshot()
     # Look up in registry
     info = AGENT_REGISTRY.get(agent_id)
     if not info:
@@ -839,6 +942,10 @@ def get_agent_detail(agent_id: str) -> dict:
         "name": _get_agent_name(agent_id, info.get("name", agent_id)),
         "role": info.get("role", ""),
         "model": info.get("model", "sonnet"),
+        "runtime_provider": runtime["provider"],
+        "runtime_mode": runtime["mode"],
+        "runtime_model": _agent_runtime_model(str(info.get("model", "sonnet") or "sonnet"), runtime),
+        "runtime_label": _agent_runtime_label(str(info.get("model", "sonnet") or "sonnet"), runtime),
         "status": info.get("status", ""),
         "team": info.get("team", ""),
         "description": agent_def.get("description", ""),
@@ -1605,6 +1712,12 @@ async def _handle_ceo_claude(
     """
     env = os.environ.copy()
     anthropic_mode = str(llm_cfg.get("anthropic_mode", "cli") or "cli").lower()
+    runtime_metadata = {
+        "provider": "anthropic",
+        "mode": anthropic_mode if anthropic_mode in ("cli", "apikey") else "cli",
+        "runtime": "claude_cli",
+        "model": str(llm_cfg.get("model", "claude") or "claude"),
+    }
     anthropic_api_key = str(llm_cfg.get("api_key", "") or "").strip()
     if llm_cfg.get("proxy_enabled") and llm_cfg.get("proxy_url"):
         env["ANTHROPIC_BASE_URL"] = llm_cfg["proxy_url"]
@@ -1636,13 +1749,14 @@ async def _handle_ceo_claude(
             "STARTED",
             "Launching Claude CEO runtime (permission mode: bypassPermissions)",
             project_id=project_id,
+            metadata=runtime_metadata,
         )
         if run_id:
             run_service.transition_run(
                 run_id,
                 state="executing",
                 label="Launching Claude CEO runtime",
-                metadata={"runtime": "claude_cli"},
+                metadata=runtime_metadata,
             )
 
         process = await asyncio.create_subprocess_exec(
@@ -1683,6 +1797,7 @@ async def _handle_ceo_claude(
                     "UPDATED",
                     f"Claude runtime still processing ({idle_ticks * 30}s)",
                     project_id=project_id,
+                    metadata=runtime_metadata,
                 )
                 if process.returncode is not None:
                     break
@@ -1719,7 +1834,7 @@ async def _handle_ceo_claude(
                         tool_name = str(block.get("name", "tool") or "tool")
                         tool_input = block.get("input", {}) if isinstance(block.get("input", {}), dict) else {}
                         action_label = _format_tool_action(tool_name, tool_input)
-                        activity_metadata: dict[str, Any] = {"tool": tool_name}
+                        activity_metadata: dict[str, Any] = {"tool": tool_name, **runtime_metadata}
                         if tool_name == "Bash":
                             activity_metadata["command"] = str(tool_input.get("command", "") or "")[:400]
                         if tool_name in ("Write", "Edit", "NotebookEdit", "Read"):
@@ -1750,6 +1865,7 @@ async def _handle_ceo_claude(
                                     "flow": "down",
                                     "task": delegated_task[:280],
                                     "tool": tool_name,
+                                    **runtime_metadata,
                                 }
                                 _emit_chat_activity(
                                     "ceo",
@@ -1791,7 +1907,10 @@ async def _handle_ceo_claude(
                                     "source_agent": delegated_agent,
                                     "target_agent": "ceo",
                                     "flow": "up",
+                                    **runtime_metadata,
                                 }
+                            else:
+                                result_metadata = dict(runtime_metadata)
                             await websocket.send_json({"type": "action_result", "content": preview})
                             await websocket.send_json({
                                 "type": "action_detail",
@@ -1833,7 +1952,7 @@ async def _handle_ceo_claude(
             elif event_type == "error":
                 err = event.get("message", "Unknown error")
                 await websocket.send_json({"type": "error", "content": err})
-                _emit_chat_activity("ceo", "ERROR", str(err), project_id=project_id)
+                _emit_chat_activity("ceo", "ERROR", str(err), project_id=project_id, metadata=runtime_metadata)
                 if run_id:
                     run_service.transition_run(run_id, state="failed", label=str(err))
                 return None
@@ -1856,7 +1975,7 @@ async def _handle_ceo_claude(
                     pass
             error_msg = stderr_text[:500] or f"CEO agent exited with code {process.returncode}"
             await websocket.send_json({"type": "error", "content": error_msg})
-            _emit_chat_activity("ceo", "ERROR", error_msg, project_id=project_id)
+            _emit_chat_activity("ceo", "ERROR", error_msg, project_id=project_id, metadata=runtime_metadata)
             if run_id:
                 run_service.transition_run(run_id, state="failed", label=error_msg)
             return None
@@ -1871,6 +1990,7 @@ async def _handle_ceo_claude(
                 "WARNING",
                 "Micro mode triggered tool activity; consider full crew mode.",
                 project_id=project_id,
+                metadata=runtime_metadata,
             )
 
         _emit_chat_activity(
@@ -1878,27 +1998,39 @@ async def _handle_ceo_claude(
             "COMPLETED",
             "CEO response generated",
             project_id=project_id,
-            metadata={"micro_project_mode": micro_project_mode, "tool_use_detected": saw_tool_use},
+            metadata={"micro_project_mode": micro_project_mode, "tool_use_detected": saw_tool_use, **runtime_metadata},
         )
         if run_id:
             run_service.transition_run(
                 run_id,
                 state="done",
                 label="CEO response generated",
-                metadata={"micro_project_mode": micro_project_mode, "tool_use_detected": saw_tool_use},
+                metadata={"micro_project_mode": micro_project_mode, "tool_use_detected": saw_tool_use, **runtime_metadata},
             )
 
         return full_response
 
     except OSError as exc:
         await websocket.send_json({"type": "error", "content": f"Failed to start CEO agent: {exc}"})
-        _emit_chat_activity("ceo", "ERROR", f"Failed to start CEO agent: {exc}", project_id=project_id)
+        _emit_chat_activity(
+            "ceo",
+            "ERROR",
+            f"Failed to start CEO agent: {exc}",
+            project_id=project_id,
+            metadata=runtime_metadata,
+        )
         if run_id:
             run_service.transition_run(run_id, state="failed", label=f"Failed to start CEO agent: {exc}")
         return None
     except Exception as exc:
         await websocket.send_json({"type": "error", "content": f"Chat error: {str(exc)[:200]}"})
-        _emit_chat_activity("ceo", "ERROR", f"Chat error: {str(exc)[:200]}", project_id=project_id)
+        _emit_chat_activity(
+            "ceo",
+            "ERROR",
+            f"Chat error: {str(exc)[:200]}",
+            project_id=project_id,
+            metadata=runtime_metadata,
+        )
         if run_id:
             run_service.transition_run(run_id, state="failed", label=f"Chat error: {str(exc)[:200]}")
         return None
@@ -1937,6 +2069,45 @@ async def _handle_ceo_codex(
 
     process = None
     run_cwd = os.path.abspath(workdir or PROJECT_ROOT)
+    runtime_metadata = {
+        "provider": "openai",
+        "mode": "codex",
+        "runtime": "codex_cli",
+        "model": "codex",
+    }
+
+    def _extract_text_fragments(value: Any, *, depth: int = 0) -> list[str]:
+        if depth > 4:
+            return []
+        if value is None:
+            return []
+        if isinstance(value, str):
+            text = value.strip()
+            return [text] if text else []
+        if isinstance(value, (int, float, bool)):
+            return [str(value)]
+        if isinstance(value, list):
+            out: list[str] = []
+            for item in value:
+                out.extend(_extract_text_fragments(item, depth=depth + 1))
+            return out
+        if isinstance(value, dict):
+            out: list[str] = []
+            for key in (
+                "text",
+                "delta",
+                "message",
+                "content",
+                "output_text",
+                "final",
+                "response",
+                "description",
+                "title",
+            ):
+                if key in value:
+                    out.extend(_extract_text_fragments(value.get(key), depth=depth + 1))
+            return out
+        return []
 
     await websocket.send_json({
         "type": "action",
@@ -1947,14 +2118,14 @@ async def _handle_ceo_codex(
         "STARTED",
         f"Codex executor started ({activity_context})",
         project_id=project_id,
-        metadata={"cwd": run_cwd},
+        metadata={"cwd": run_cwd, **runtime_metadata},
     )
     if run_id:
         run_service.transition_run(
             run_id,
             state="executing",
             label=f"Codex executor started ({activity_context})",
-            metadata={"cwd": run_cwd},
+            metadata={"cwd": run_cwd, **runtime_metadata},
         )
     try:
         process = await asyncio.create_subprocess_exec(
@@ -2002,6 +2173,7 @@ async def _handle_ceo_codex(
                     "UPDATED",
                     f"Codex executor still running ({idle_ticks * 30}s)",
                     project_id=project_id,
+                    metadata=runtime_metadata,
                 )
                 if process.returncode is not None:
                     break
@@ -2020,6 +2192,56 @@ async def _handle_ceo_codex(
                 continue
 
             event_type = event.get("type", "")
+            if event_type in (
+                "response.output_text.delta",
+                "output_text.delta",
+                "assistant_message.delta",
+                "message.delta",
+            ):
+                fragments = _extract_text_fragments(event)
+                joined = "".join(fragment for fragment in fragments if fragment).strip()
+                if joined:
+                    if not seen_first_output:
+                        seen_first_output = True
+                        await websocket.send_json({"type": "action_result", "content": "Execution stream connected"})
+                        await websocket.send_json({"type": "action", "content": "Generating response…"})
+                        _emit_chat_activity(
+                            "ceo",
+                            "UPDATED",
+                            "Codex execution stream connected",
+                            project_id=project_id,
+                            metadata=runtime_metadata,
+                        )
+                    response_parts.append(joined)
+                    await websocket.send_json({"type": "chunk", "content": joined})
+                continue
+
+            if event_type in (
+                "response.output_text.done",
+                "assistant_message",
+                "message",
+                "response.completed",
+            ):
+                fragments = _extract_text_fragments(event)
+                joined = "\n".join(fragment for fragment in fragments if fragment).strip()
+                if joined:
+                    if not seen_first_output:
+                        seen_first_output = True
+                        await websocket.send_json({"type": "action_result", "content": "Execution stream connected"})
+                        await websocket.send_json({"type": "action", "content": "Generating response…"})
+                        _emit_chat_activity(
+                            "ceo",
+                            "UPDATED",
+                            "Codex execution stream connected",
+                            project_id=project_id,
+                            metadata=runtime_metadata,
+                        )
+                    response_parts.append(joined)
+                    await websocket.send_json({"type": "chunk", "content": joined})
+                if event_type == "response.completed":
+                    break
+                continue
+
             if event_type in ("item.started", "item.completed"):
                 item = event.get("item") or {}
                 item_type = item.get("type", "")
@@ -2045,7 +2267,7 @@ async def _handle_ceo_codex(
                             "STARTED",
                             label,
                             project_id=project_id,
-                            metadata={"command": command_hint},
+                            metadata={"command": command_hint, **runtime_metadata},
                         )
                     else:
                         exit_code = item.get("exit_code")
@@ -2073,7 +2295,7 @@ async def _handle_ceo_codex(
                             "COMPLETED",
                             result,
                             project_id=project_id,
-                            metadata={"command": command_hint, "exit_code": exit_code},
+                            metadata={"command": command_hint, "exit_code": exit_code, **runtime_metadata},
                         )
                         if run_id:
                             run_service.record_command(
@@ -2091,11 +2313,23 @@ async def _handle_ceo_codex(
                     if event_type == "item.started":
                         label = f"Updating file: {changed[:180]}" if changed else "Updating files"
                         await websocket.send_json({"type": "action", "content": label})
-                        _emit_chat_activity("ceo", "STARTED", label, project_id=project_id, metadata={"file_path": changed})
+                        _emit_chat_activity(
+                            "ceo",
+                            "STARTED",
+                            label,
+                            project_id=project_id,
+                            metadata={"file_path": changed, **runtime_metadata},
+                        )
                     else:
                         result = f"Updated file: {changed[:180]}" if changed else "File update completed"
                         await websocket.send_json({"type": "action_result", "content": result})
-                        _emit_chat_activity("ceo", "COMPLETED", result, project_id=project_id, metadata={"file_path": changed})
+                        _emit_chat_activity(
+                            "ceo",
+                            "COMPLETED",
+                            result,
+                            project_id=project_id,
+                            metadata={"file_path": changed, **runtime_metadata},
+                        )
                         if run_id and changed:
                             run_service.record_file_touch(run_id, changed)
                         if project_id and changed:
@@ -2111,8 +2345,8 @@ async def _handle_ceo_codex(
                 if event_type == "item.started":
                     continue
 
-                if item_type == "agent_message":
-                    text = (item.get("text") or "").strip()
+                if item_type in ("agent_message", "assistant_message", "message", "output_text"):
+                    text = "\n".join(_extract_text_fragments(item)).strip()
                     if text:
                         if not seen_first_output:
                             seen_first_output = True
@@ -2123,6 +2357,7 @@ async def _handle_ceo_codex(
                                 "UPDATED",
                                 "Codex execution stream connected",
                                 project_id=project_id,
+                                metadata=runtime_metadata,
                             )
                         response_parts.append(text)
                         await websocket.send_json({"type": "chunk", "content": text})
@@ -2135,14 +2370,20 @@ async def _handle_ceo_codex(
                     if label:
                         preview = label[:240]
                         await websocket.send_json({"type": "action", "content": preview})
-                        _emit_chat_activity("ceo", "STARTED", preview, project_id=project_id)
+                        _emit_chat_activity(
+                            "ceo",
+                            "STARTED",
+                            preview,
+                            project_id=project_id,
+                            metadata=runtime_metadata,
+                        )
             elif event_type == "turn.completed":
                 break
             elif event_type == "error":
                 message = event.get("message") or event.get("error") or "Unknown Codex error"
                 err = str(message)[:300]
                 await websocket.send_json({"type": "error", "content": err})
-                _emit_chat_activity("ceo", "ERROR", err, project_id=project_id)
+                _emit_chat_activity("ceo", "ERROR", err, project_id=project_id, metadata=runtime_metadata)
                 return None
 
         try:
@@ -2168,6 +2409,7 @@ async def _handle_ceo_codex(
                 "ERROR",
                 stderr_text[:500] or f"Codex exited with code {process.returncode}",
                 project_id=project_id,
+                metadata=runtime_metadata,
             )
             if run_id:
                 run_service.transition_run(
@@ -2178,6 +2420,26 @@ async def _handle_ceo_codex(
             return None
 
         final_response = full_response or None
+        if not final_response:
+            fallback_note = "Execution completed, but no assistant summary text was returned by Codex."
+            changed_files: list[str] = []
+            if project_id and run_id:
+                try:
+                    metadata = project_service.get_metadata(project_id)
+                    artifacts = metadata.get("artifacts", [])
+                    if isinstance(artifacts, list):
+                        changed_files = [
+                            str(a.get("file_path", "") or "")
+                            for a in artifacts
+                            if isinstance(a, dict) and str(a.get("run_id", "") or "") == run_id and a.get("file_path")
+                        ]
+                except Exception:
+                    changed_files = []
+            if changed_files:
+                preview = "\n".join(f"- {path}" for path in changed_files[-12:])
+                final_response = f"{fallback_note}\n\nChanged files:\n{preview}"
+            else:
+                final_response = f"{fallback_note}\n\nWorkspace: {run_cwd}"
         if final_response:
             if project_id:
                 try:
@@ -2199,27 +2461,27 @@ async def _handle_ceo_codex(
                 "COMPLETED",
                 f"Codex execution completed ({activity_context})",
                 project_id=project_id,
-                metadata={"cwd": run_cwd},
+                metadata={"cwd": run_cwd, **runtime_metadata},
             )
             if run_id:
                 run_service.transition_run(
                     run_id,
                     state="done",
                     label=f"Codex execution completed ({activity_context})",
-                    metadata={"cwd": run_cwd},
+                    metadata={"cwd": run_cwd, **runtime_metadata},
                 )
         return final_response
     except OSError as exc:
         message = f"Failed to start Codex CLI: {exc}"
         await websocket.send_json({"type": "error", "content": message})
-        _emit_chat_activity("ceo", "ERROR", message, project_id=project_id)
+        _emit_chat_activity("ceo", "ERROR", message, project_id=project_id, metadata=runtime_metadata)
         if run_id:
             run_service.transition_run(run_id, state="failed", label=message)
         return None
     except Exception as exc:
         message = f"Codex chat error: {str(exc)[:200]}"
         await websocket.send_json({"type": "error", "content": message})
-        _emit_chat_activity("ceo", "ERROR", message, project_id=project_id)
+        _emit_chat_activity("ceo", "ERROR", message, project_id=project_id, metadata=runtime_metadata)
         if run_id:
             run_service.transition_run(run_id, state="failed", label=message)
         return None
@@ -2255,6 +2517,13 @@ async def _handle_ceo_openai(
     model = llm_cfg.get("model", "gpt-4o")
     api_key = llm_cfg.get("api_key", "")
     system_prompt = llm_cfg.get("system_prompt") or None
+    runtime_metadata = {
+        "provider": str(llm_cfg.get("provider", "openai") or "openai"),
+        "mode": "apikey",
+        "runtime": "openai_compat_api",
+        "model": str(model or ""),
+        "base_url": str(base_url or ""),
+    }
 
     response_parts: list[str] = []
     first_token = True
@@ -2281,14 +2550,14 @@ async def _handle_ceo_openai(
         "STARTED",
         f"Connecting to {model} via OpenAI-compatible API",
         project_id=project_id,
-        metadata={"model": model, "base_url": str(base_url)},
+        metadata=runtime_metadata,
     )
     if run_id:
         run_service.transition_run(
             run_id,
             state="executing",
             label=f"Connecting to {model} via OpenAI-compatible API",
-            metadata={"model": model, "base_url": str(base_url)},
+            metadata=runtime_metadata,
         )
 
     # Background task: send periodic "thinking" pings while we wait for tokens
@@ -2312,6 +2581,7 @@ async def _handle_ceo_openai(
                     "UPDATED",
                     f"Streaming model still thinking ({count * 5}s)",
                     project_id=project_id,
+                    metadata=runtime_metadata,
                 )
             except Exception:
                 break
@@ -2361,6 +2631,7 @@ async def _handle_ceo_openai(
                         "WARNING",
                         f"Model stream timeout; continuing via execution bridge ({stream_warning})",
                         project_id=project_id,
+                        metadata=runtime_metadata,
                     )
                     break
                 await websocket.send_json({
@@ -2372,6 +2643,7 @@ async def _handle_ceo_openai(
                     "ERROR",
                     f"LLM timeout: {stream_warning}",
                     project_id=project_id,
+                    metadata=runtime_metadata,
                 )
                 if run_id:
                     run_service.transition_run(run_id, state="failed", label=f"LLM timeout: {stream_warning}")
@@ -2382,7 +2654,13 @@ async def _handle_ceo_openai(
                 thinking_event.set()  # stop pings
                 await websocket.send_json({"type": "action_result", "content": "Connected"})
                 await websocket.send_json({"type": "action", "content": "Generating response…"})
-                _emit_chat_activity("ceo", "UPDATED", "Model stream connected", project_id=project_id)
+                _emit_chat_activity(
+                    "ceo",
+                    "UPDATED",
+                    "Model stream connected",
+                    project_id=project_id,
+                    metadata=runtime_metadata,
+                )
             response_parts.append(chunk)
             await websocket.send_json({"type": "chunk", "content": chunk})
     except RuntimeError as exc:
@@ -2398,10 +2676,11 @@ async def _handle_ceo_openai(
                 "WARNING",
                 f"Model runtime unavailable; continuing via execution bridge ({stream_warning})",
                 project_id=project_id,
+                metadata=runtime_metadata,
             )
         else:
             await websocket.send_json({"type": "error", "content": str(exc)})
-            _emit_chat_activity("ceo", "ERROR", str(exc), project_id=project_id)
+            _emit_chat_activity("ceo", "ERROR", str(exc), project_id=project_id, metadata=runtime_metadata)
             if run_id:
                 run_service.transition_run(run_id, state="failed", label=str(exc))
             return None
@@ -2417,10 +2696,17 @@ async def _handle_ceo_openai(
                 "WARNING",
                 f"Model stream failed; continuing via execution bridge ({stream_warning})",
                 project_id=project_id,
+                metadata=runtime_metadata,
             )
         else:
             await websocket.send_json({"type": "error", "content": f"LLM error: {stream_warning}"})
-            _emit_chat_activity("ceo", "ERROR", f"LLM error: {stream_warning}", project_id=project_id)
+            _emit_chat_activity(
+                "ceo",
+                "ERROR",
+                f"LLM error: {stream_warning}",
+                project_id=project_id,
+                metadata=runtime_metadata,
+            )
             if run_id:
                 run_service.transition_run(run_id, state="failed", label=f"LLM error: {stream_warning}")
             return None
@@ -2463,7 +2749,7 @@ async def _handle_ceo_openai(
             "STARTED",
             "Execution bridge activated for implementation request",
             project_id=project_id,
-            metadata={"workspace_path": workspace_path},
+            metadata={"workspace_path": workspace_path, **runtime_metadata},
         )
 
         bridge_prompt = _build_execution_bridge_prompt(
@@ -2498,7 +2784,7 @@ async def _handle_ceo_openai(
         "OpenAI-compatible response completed",
         project_id=project_id,
         metadata={
-            "model": model,
+            **runtime_metadata,
             "execution_bridge": should_bridge_execution,
             "stream_warning": stream_warning or "",
         },
@@ -2509,7 +2795,7 @@ async def _handle_ceo_openai(
             state="done",
             label="OpenAI-compatible response completed",
             metadata={
-                "model": model,
+                **runtime_metadata,
                 "execution_bridge": should_bridge_execution,
                 "stream_warning": stream_warning or "",
             },
@@ -2676,7 +2962,15 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 route_key = "coding" if intent_name == "execution" else intent_name
                 routed_model = str(routing_models.get(route_key, "") or routing_models.get("default", "")).strip()
                 if routed_model:
-                    effective_llm_cfg["model"] = routed_model
+                    effective_llm_cfg["model"] = _resolve_routed_model_for_runtime(
+                        provider=provider,
+                        openai_mode=openai_mode,
+                        configured_model=str(llm_cfg.get("model", "") or ""),
+                        routed_model=routed_model,
+                    )
+            if provider == "openai" and openai_mode == "codex":
+                # Codex runtime is fixed regardless of intent routing settings.
+                effective_llm_cfg["model"] = "codex"
             planning_gate_enabled = bool(feature_flags.get("planning_approval_gate", True))
             planning_approved = bool(data.get("planning_approved", False))
             if planning_gate_enabled and intent.get("needs_planning") and not planning_approved:

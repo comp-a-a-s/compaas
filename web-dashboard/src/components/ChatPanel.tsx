@@ -5,6 +5,7 @@ import {
   clearChatHistory,
   createChatWebSocket,
   approveProjectPlan,
+  createProject,
   sendTelegramMessage,
   fetchMemory,
   addMemory,
@@ -26,18 +27,6 @@ function formatTime(ts: string): string {
 
 function msgKey(msg: ChatMessage): string {
   return `${msg.timestamp}|${msg.role}`;
-}
-
-function downloadFile(filename: string, content: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 // ---- Action text parser ----
@@ -80,6 +69,16 @@ function parseActionText(text: string): ActionInfo {
     const clipped = cmd.length > 72 ? `${cmd.slice(0, 69)}…` : cmd;
     return { label: `Running: ${clipped}`, icon: '⚡', color: 'var(--tf-accent)' };
   }
+  const usingMatch = normalized.match(/^using\s+(.+)$/i);
+  if (usingMatch?.[1]) {
+    const tool = usingMatch[1].trim();
+    const clipped = tool.length > 72 ? `${tool.slice(0, 69)}…` : tool;
+    return {
+      label: `Using ${clipped}`,
+      icon: tool.toLowerCase().includes('bash') ? '⚡' : '◦',
+      color: tool.toLowerCase().includes('bash') ? 'var(--tf-warning)' : 'var(--tf-text-secondary)',
+    };
+  }
   if (lower.includes('delegat') || lower.includes('spawn') || lower.includes('subagent')) {
     const m = text.match(/\b(ceo|cto|cfo|ciso|backend|frontend|devops|qa|designer|researcher|security|writer)\b/i);
     return { label: `Delegating to ${m ? m[1] : 'team'}…`, icon: '→', color: 'var(--tf-accent)' };
@@ -107,6 +106,15 @@ function parseActionText(text: string): ActionInfo {
     if (commandHint) {
       const clipped = commandHint.length > 72 ? `${commandHint.slice(0, 69)}…` : commandHint;
       return { label: `Running: ${clipped}`, icon: '⚡', color: 'var(--tf-accent)' };
+    }
+    const normalizedLower = normalized.toLowerCase();
+    if (
+      normalizedLower.includes('details unavailable')
+      || normalizedLower.startsWith('running command')
+      || normalizedLower.startsWith('using bash')
+    ) {
+      const clipped = normalized.length > 72 ? `${normalized.slice(0, 69)}…` : normalized;
+      return { label: clipped, icon: '⚡', color: 'var(--tf-warning)' };
     }
     return { label: 'Running command…', icon: '⚡', color: 'var(--tf-accent)' };
   }
@@ -359,7 +367,7 @@ function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You'
 
 // ---- Empty state ----
 
-function EmptyState({ ceoName = 'CEO' }: { ceoName?: string }) {
+function EmptyState({ ceoName = 'CEO', requireProject = false }: { ceoName?: string; requireProject?: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-4 py-20">
       <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
@@ -370,7 +378,9 @@ function EmptyState({ ceoName = 'CEO' }: { ceoName?: string }) {
       <div className="text-center">
         <p className="text-sm font-medium" style={{ color: 'var(--tf-text)' }}>Chat with {ceoName}</p>
         <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-          Send a message to start. {ceoName} can manage projects, tasks, and operations.
+          {requireProject
+            ? 'Select or create a project above, then send your first message.'
+            : `Send a message to start. ${ceoName} can manage projects, tasks, and operations.`}
         </p>
       </div>
     </div>
@@ -486,7 +496,7 @@ function ProjectApprovalCard({ project, ceoName, onApproved, onRevise, onNavigat
     <div className="mx-1 mb-3 rounded-xl overflow-hidden animate-pop-in" style={{ border: '1px solid var(--tf-accent)', backgroundColor: 'var(--tf-surface)' }}>
       <div className="flex items-center gap-2 px-4 py-2.5" style={{ backgroundColor: 'var(--tf-surface-raised)', borderBottom: '1px solid var(--tf-border)' }}>
         <span className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse-dot" style={{ backgroundColor: 'var(--tf-accent)' }} />
-        <span className="text-xs font-semibold" style={{ color: 'var(--tf-accent)' }}>Plan Ready for Chairman Review</span>
+        <span className="text-xs font-semibold" style={{ color: 'var(--tf-accent)' }}>Plan Ready for Approval</span>
       </div>
       <div className="px-4 py-3 space-y-2">
         <p className="text-xs" style={{ color: 'var(--tf-text-secondary)' }}>{ceoName} has finished planning:</p>
@@ -721,8 +731,9 @@ export default function ChatPanel({
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
 
-  // Secondary actions menu
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  // Project creation
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [projectNotice, setProjectNotice] = useState('');
 
   // Telegram mirror mode
   const [telegramMirrorEnabled, setTelegramMirrorEnabled] = useState(() => {
@@ -809,18 +820,6 @@ export default function ChatPanel({
       return next;
     });
   }, []);
-
-  const handleExport = (format: 'markdown' | 'json') => {
-    setShowMoreMenu(false);
-    if (format === 'json') {
-      downloadFile('compaas-chat.json', JSON.stringify(messages, null, 2), 'application/json');
-    } else {
-      const md = messages.map((m) =>
-        `**${m.role === 'user' ? userName : ceoName}** _(${m.timestamp})_\n\n${m.content}`
-      ).join('\n\n---\n\n');
-      downloadFile('compaas-chat.md', md, 'text/markdown');
-    }
-  };
 
   // Derived: filtered messages (search) + pinned
   const filteredMessages = useMemo(() => {
@@ -1176,6 +1175,33 @@ export default function ChatPanel({
     setShowMicroApprovalCard(true);
   }, []);
 
+  const handleCreateProject = useCallback(async () => {
+    if (creatingProject) return;
+    const suggestedName = input.trim()
+      ? `Project: ${input.trim().slice(0, 36)}`
+      : `Project ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+    const name = window.prompt('Create new project', suggestedName);
+    if (!name || !name.trim()) return;
+    setCreatingProject(true);
+    setProjectNotice('');
+    const created = await createProject({
+      name: name.trim(),
+      description: `Created from CEO chat by ${userName}.`,
+      type: 'app',
+    });
+    setCreatingProject(false);
+    const nextProjectId = created?.project?.id;
+    if (!nextProjectId) {
+      setProjectNotice('Failed to create project. Please try again.');
+      return;
+    }
+    onActiveProjectChange?.(nextProjectId);
+    setProjectNotice(`Project "${created?.project?.name || name.trim()}" selected.`);
+    fetchChatHistory(150, nextProjectId).then((history) => {
+      if (Array.isArray(history)) setMessages(history);
+    }).catch(() => {});
+  }, [creatingProject, input, onActiveProjectChange, userName]);
+
   // Send message
   const sendMessage = useCallback((opts?: {
     textOverride?: string;
@@ -1185,6 +1211,15 @@ export default function ChatPanel({
   }) => {
     const text = (opts?.textOverride ?? input).trim();
     if (!text || isWaiting) return;
+    if (!activeProjectId) {
+      setMessages((prev) => [...prev, {
+        role: 'ceo',
+        content: 'Select a project (or create a new one) before starting CEO execution.',
+        timestamp: new Date().toISOString(),
+        project_id: '',
+      }]);
+      return;
+    }
     const ws = wsRef.current;
     stopTypingAnimation();
 
@@ -1250,7 +1285,7 @@ export default function ChatPanel({
 
   // Close menus on outside click
   useEffect(() => {
-    const close = () => { setShowMoreMenu(false); setShowMemory(false); };
+    const close = () => { setShowMemory(false); };
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, []);
@@ -1269,37 +1304,54 @@ export default function ChatPanel({
   );
 
   // ---- Shared header controls ----
-  const headerControls = (
-    <div className="chat-toolbar flex items-center gap-1" style={{ flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '2px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Project</label>
-        <select
-          value={activeProjectId}
-          onChange={(e) => onActiveProjectChange?.(e.target.value)}
-          disabled={isWaiting}
-          title="Select chat project context"
-          style={{
-            fontSize: '12px',
-            borderRadius: '6px',
-            border: '1px solid var(--tf-border)',
-            backgroundColor: 'var(--tf-surface)',
-            color: 'var(--tf-text)',
-            padding: '4px 8px',
-            minWidth: '130px',
-            opacity: isWaiting ? 0.7 : 1,
-            cursor: isWaiting ? 'not-allowed' : 'pointer',
-          }}
-        >
-          <option value="">General</option>
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Micro Project toggle */}
+  const projectContextControls = (
+    <div className="flex items-center gap-2 flex-wrap">
+      <span style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Project</span>
+      <select
+        value={activeProjectId}
+        onChange={(e) => {
+          setProjectNotice('');
+          onActiveProjectChange?.(e.target.value);
+        }}
+        disabled={isWaiting || creatingProject}
+        title="Select project context for CEO execution"
+        style={{
+          fontSize: '12px',
+          borderRadius: '6px',
+          border: '1px solid var(--tf-border)',
+          backgroundColor: 'var(--tf-surface)',
+          color: 'var(--tf-text)',
+          padding: '4px 8px',
+          minWidth: '170px',
+          opacity: isWaiting ? 0.72 : 1,
+          cursor: isWaiting ? 'not-allowed' : 'pointer',
+        }}
+      >
+        <option value="" disabled>{projects.length > 0 ? 'Select project…' : 'No projects yet'}</option>
+        {projects.map((project) => (
+          <option key={project.id} value={project.id}>
+            {project.name}
+          </option>
+        ))}
+      </select>
+      <button
+        onClick={() => { void handleCreateProject(); }}
+        disabled={creatingProject || isWaiting}
+        title="Create and immediately select a new project"
+        style={{
+          padding: '5px 9px',
+          borderRadius: '6px',
+          fontSize: '12px',
+          cursor: creatingProject || isWaiting ? 'not-allowed' : 'pointer',
+          border: '1px solid var(--tf-border)',
+          backgroundColor: 'transparent',
+          color: 'var(--tf-text-secondary)',
+          opacity: creatingProject || isWaiting ? 0.65 : 1,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {creatingProject ? 'Creating…' : 'New Project'}
+      </button>
       <button
         onClick={() => {
           if (microProjectMode) {
@@ -1308,25 +1360,29 @@ export default function ChatPanel({
             tryEnableMicroMode();
           }
         }}
-        title="Micro Project mode (fast solo CEO for simple tasks)"
+        title="Micro Project mode: CEO-only fast path for very small tasks"
         style={{
           padding: '5px 9px',
           borderRadius: '6px',
           fontSize: '12px',
           cursor: 'pointer',
-          whiteSpace: 'nowrap',
           border: `1px solid ${microProjectMode ? 'var(--tf-warning)' : 'var(--tf-border)'}`,
           backgroundColor: microProjectMode ? 'rgba(240,170,74,0.14)' : 'transparent',
           color: microProjectMode ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
           fontWeight: microProjectMode ? 600 : 500,
+          whiteSpace: 'nowrap',
         }}
       >
-        Micro
+        Micro {microProjectMode ? 'On' : 'Off'}
       </button>
+    </div>
+  );
 
+  const secondaryControls = (
+    <div className="chat-toolbar flex items-center gap-1" style={{ flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '2px' }}>
       <button
         onClick={() => setShowActionDetails((v) => !v)}
-        title="Toggle live execution details"
+        title="Show detailed command/file execution log"
         style={{
           padding: '5px 9px',
           borderRadius: '6px',
@@ -1367,96 +1423,82 @@ export default function ChatPanel({
         Telegram {telegramMirrorEnabled ? 'On' : 'Off'}
       </button>
 
-      {/* Search */}
-      <button onClick={() => { setShowSearch((v) => { if (v) setSearchQuery(''); return !v; }); }} title="Search messages"
-        style={{ padding: '5px 9px', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', border: `1px solid ${showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`, backgroundColor: showSearch ? 'rgba(88,166,255,0.1)' : 'transparent', color: showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)' }}>
+      <button
+        onClick={() => {
+          setShowSearch((v) => {
+            if (v) setSearchQuery('');
+            return !v;
+          });
+        }}
+        title="Search messages in this project conversation"
+        style={{
+          padding: '5px 9px',
+          borderRadius: '6px',
+          fontSize: '13px',
+          cursor: 'pointer',
+          border: `1px solid ${showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+          backgroundColor: showSearch ? 'rgba(88,166,255,0.1)' : 'transparent',
+          color: showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+        }}
+      >
         ⌕
       </button>
 
-      {/* Pins */}
       {pinnedIds.size > 0 && (
-        <button onClick={() => setShowPinned((v) => !v)} title={`${pinnedIds.size} pinned`}
-          style={{ padding: '5px 9px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', border: `1px solid ${showPinned ? 'var(--tf-warning)' : 'var(--tf-border)'}`, backgroundColor: showPinned ? 'rgba(255,180,0,0.1)' : 'transparent', color: showPinned ? 'var(--tf-warning)' : 'var(--tf-text-muted)', whiteSpace: 'nowrap' }}>
-          Pin {pinnedIds.size}
-        </button>
-      )}
-
-      {/* More menu for secondary controls */}
-      <div style={{ position: 'relative' }}>
         <button
-          onClick={(e) => { e.stopPropagation(); setShowMoreMenu((v) => !v); }}
-          title="Chat tools"
+          onClick={() => setShowPinned((v) => !v)}
+          title={`${pinnedIds.size} pinned messages`}
           style={{
             padding: '5px 9px',
             borderRadius: '6px',
             fontSize: '12px',
             cursor: 'pointer',
-            border: `1px solid ${showMoreMenu ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
-            backgroundColor: showMoreMenu ? 'var(--tf-accent-dim)' : 'transparent',
-            color: showMoreMenu ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
-            fontWeight: 600,
+            border: `1px solid ${showPinned ? 'var(--tf-warning)' : 'var(--tf-border)'}`,
+            backgroundColor: showPinned ? 'rgba(255,180,0,0.1)' : 'transparent',
+            color: showPinned ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
+            whiteSpace: 'nowrap',
           }}
         >
-          Tools
+          Pin {pinnedIds.size}
         </button>
-        {showMoreMenu && (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              top: 'calc(100% + 4px)',
-              right: 0,
-              zIndex: 50,
-              backgroundColor: 'var(--tf-surface)',
-              border: '1px solid var(--tf-border)',
-              borderRadius: '8px',
-              padding: '6px',
-              minWidth: '220px',
-              boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-            }}
-          >
-            {messages.length > 0 && (
-              <>
-                <button
-                  onClick={() => handleExport('markdown')}
-                  title="Download chat as Markdown"
-                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
-                >
-                  Export as Markdown
-                </button>
-                <button
-                  onClick={() => handleExport('json')}
-                  title="Download chat as JSON"
-                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
-                >
-                  Export as JSON
-                </button>
-              </>
-            )}
-            <button
-              onClick={() => {
-                setShowMemory((v) => !v);
-                setShowMoreMenu(false);
-              }}
-              title="Open CEO memory notes"
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
-            >
-              Memory Notes{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
-            </button>
-            {messages.length > 0 && (
-              <button
-                onClick={() => {
-                  setShowMoreMenu(false);
-                  handleClear();
-                }}
-                title="Clear the current chat history"
-                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-error)' }}
-              >
-                Clear chat
-              </button>
-            )}
-          </div>
-        )}
+      )}
+
+      {messages.length > 0 && (
+        <button
+          onClick={() => { void handleClear(); }}
+          title="Clear message history for the selected project"
+          style={{
+            padding: '5px 9px',
+            borderRadius: '6px',
+            fontSize: '12px',
+            cursor: 'pointer',
+            border: '1px solid var(--tf-border)',
+            backgroundColor: 'transparent',
+            color: 'var(--tf-text-muted)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Clear
+        </button>
+      )}
+
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={(e) => { e.stopPropagation(); setShowMemory((v) => !v); }}
+          title="Open CEO memory notes and retention policy"
+          style={{
+            padding: '5px 9px',
+            borderRadius: '6px',
+            fontSize: '12px',
+            cursor: 'pointer',
+            border: `1px solid ${showMemory ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+            backgroundColor: showMemory ? 'var(--tf-accent-dim)' : 'transparent',
+            color: showMemory ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Memory{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
+        </button>
         {showMemory && (
           <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50, backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', borderRadius: '8px', padding: '12px', minWidth: '260px', maxWidth: '320px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
@@ -1513,11 +1555,11 @@ export default function ChatPanel({
               <input
                 value={newMemoryText}
                 onChange={(e) => setNewMemoryText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleAddMemory(); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') void handleAddMemory(); }}
                 placeholder="Add a memory…"
                 style={{ flex: 1, fontSize: '11px', padding: '4px 8px', borderRadius: '5px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-text)', outline: 'none' }}
               />
-              <button onClick={handleAddMemory} disabled={memorySaving || !newMemoryText.trim()} style={{ padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: 'none', backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}>
+              <button onClick={() => { void handleAddMemory(); }} disabled={memorySaving || !newMemoryText.trim()} style={{ padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: 'none', backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}>
                 {memorySaving ? '…' : '+'}
               </button>
             </div>
@@ -1537,35 +1579,37 @@ export default function ChatPanel({
 
       {/* Non-floating header */}
       {!floating && (
-        <div className="flex items-center justify-between pb-3 flex-shrink-0 flex-wrap gap-2">
-          <div className="flex items-center gap-3">
+        <div className="flex items-start justify-between pb-3 flex-shrink-0 flex-wrap gap-3">
+          <div className="flex items-start gap-3">
             <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold" style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }}>
               {ceoName.charAt(0).toUpperCase()}
             </div>
-            <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <h3 className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>{ceoName} — CEO Chat</h3>
               <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>AI Virtual Company Orchestrator</p>
+              {projectContextControls}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             <StatusBadge status={connectionStatus} />
-            {headerControls}
+            {secondaryControls}
           </div>
         </div>
       )}
 
       {/* Floating header */}
       {floating && (
-        <div className="flex items-center justify-between px-3 py-2 flex-shrink-0" style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
-          <div className="flex items-center gap-2">
+        <div className="flex items-start justify-between px-3 py-2 flex-shrink-0 gap-2" style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
+          <div className="flex items-start gap-2 flex-wrap">
             <StatusBadge status={connectionStatus} />
             {onNavigateToProjects && (
               <button onClick={onNavigateToProjects} title="Open the Projects tab" style={{ padding: '2px 8px', borderRadius: '4px', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-accent-blue)', fontSize: '11px', cursor: 'pointer' }}>
                 Projects ↗
               </button>
             )}
+            {projectContextControls}
           </div>
-          {headerControls}
+          {secondaryControls}
         </div>
       )}
 
@@ -1587,7 +1631,7 @@ export default function ChatPanel({
         style={floating ? { backgroundColor: 'var(--tf-bg)' } : { backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
       >
         {!showConversationPanel ? (
-          <EmptyState ceoName={ceoName} />
+          <EmptyState ceoName={ceoName} requireProject={!activeProjectId} />
         ) : (
           <>
             {searchQuery && (
@@ -1604,7 +1648,7 @@ export default function ChatPanel({
               }}
             >
               <p className="text-xs font-semibold" style={{ color: 'var(--tf-text-secondary)' }}>
-                Active context: {activeProject ? activeProject.name : 'General (no project selected)'}
+                Active context: {activeProject ? activeProject.name : 'No project selected'}
               </p>
               {activeProject?.workspace_path && (
                 <p
@@ -1617,6 +1661,16 @@ export default function ChatPanel({
                   }}
                 >
                   Workspace: {activeProject.workspace_path}
+                </p>
+              )}
+              {!activeProject && (
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-warning)' }}>
+                  Select or create a project above before sending a CEO message.
+                </p>
+              )}
+              {projectNotice && (
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-accent-blue)' }}>
+                  {projectNotice}
                 </p>
               )}
             </div>

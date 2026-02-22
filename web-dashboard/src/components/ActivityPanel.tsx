@@ -101,12 +101,19 @@ function extraSummaryRows(event: ActivityEvent): string[] {
   const command = typeof metadata.command === 'string' ? metadata.command.trim() : '';
   const filePath = typeof metadata.file_path === 'string' ? metadata.file_path.trim() : '';
   const workspacePath = typeof metadata.workspace_path === 'string' ? metadata.workspace_path.trim() : '';
+  const provider = typeof metadata.provider === 'string' ? metadata.provider.trim() : '';
+  const mode = typeof metadata.mode === 'string' ? metadata.mode.trim() : '';
+  const model = typeof metadata.model === 'string' ? metadata.model.trim() : '';
   const exitCode = typeof metadata.exit_code === 'number' ? metadata.exit_code : null;
+  if (provider || mode || model) {
+    const runtimeBits = [provider, mode].filter(Boolean).join('/');
+    rows.push(`Runtime: ${runtimeBits || 'unknown'}${model ? ` · ${model}` : ''}`);
+  }
   if (command) rows.push(`Command: ${command}`);
   if (filePath) rows.push(`File: ${filePath}`);
   if (workspacePath) rows.push(`Workspace: ${workspacePath}`);
   if (exitCode !== null) rows.push(`Exit: ${exitCode}`);
-  return rows.slice(0, 3);
+  return rows.slice(0, 4);
 }
 
 // ---- Empty state ----

@@ -9,19 +9,33 @@ interface AgentPanelProps {
 }
 
 // ---- Helpers ----
+function effectiveModel(agent: Agent): string {
+  return (agent.runtime_model || agent.model || '').trim() || 'unknown';
+}
+
+function effectiveRuntimeLabel(agent: Agent): string {
+  return (agent.runtime_label || effectiveModel(agent)).trim();
+}
+
 function modelBadge(model: string): { bg: string; text: string; label: string } {
   const m = model.toLowerCase();
+  if (m.includes('codex')) return { bg: '#1a2e25', text: 'var(--tf-success)', label: 'Codex' };
   if (m.includes('opus')) return { bg: '#1c2233', text: 'var(--tf-accent)', label: 'Opus' };
   if (m.includes('sonnet')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)', label: 'Sonnet' };
   if (m.includes('haiku')) return { bg: '#1a2e25', text: 'var(--tf-success)', label: 'Haiku' };
+  if (m.includes('gpt') || m.includes('o1') || m.includes('o3')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)', label: model };
+  if (m.includes('llama') || m.includes('qwen') || m.includes('mistral') || m.includes('gemma')) return { bg: '#2d2213', text: 'var(--tf-warning)', label: model };
   return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)', label: model };
 }
 
 function avatarColor(model: string): string {
   const m = model.toLowerCase();
+  if (m.includes('codex')) return 'var(--tf-success)';
   if (m.includes('opus')) return 'var(--tf-accent)';
   if (m.includes('sonnet')) return 'var(--tf-accent-blue)';
   if (m.includes('haiku')) return 'var(--tf-success)';
+  if (m.includes('gpt') || m.includes('o1') || m.includes('o3')) return 'var(--tf-accent-blue)';
+  if (m.includes('llama') || m.includes('qwen') || m.includes('mistral') || m.includes('gemma')) return 'var(--tf-warning)';
   return 'var(--tf-text-secondary)';
 }
 
@@ -75,8 +89,10 @@ interface AgentCardProps {
   disabled?: boolean;
 }
 function AgentCard({ agent, selected, onSelect, disabled = false }: AgentCardProps) {
-  const badge = modelBadge(agent.model);
-  const color = avatarColor(agent.model);
+  const model = effectiveModel(agent);
+  const runtimeLabel = effectiveRuntimeLabel(agent);
+  const badge = modelBadge(model);
+  const color = avatarColor(model);
   const status = statusStyle(agent.status);
   const initial = agent.name.charAt(0).toUpperCase();
 
@@ -140,6 +156,7 @@ function AgentCard({ agent, selected, onSelect, disabled = false }: AgentCardPro
         <span
           className="text-xs px-2 py-0.5 rounded-full font-medium"
           style={{ backgroundColor: badge.bg, color: badge.text }}
+          title={runtimeLabel}
         >
           {badge.label}
         </span>
@@ -170,8 +187,10 @@ interface DetailPanelProps {
   onClose: () => void;
 }
 function DetailPanel({ agent, onClose }: DetailPanelProps) {
-  const badge = modelBadge(agent.model);
-  const color = avatarColor(agent.model);
+  const model = effectiveModel(agent);
+  const runtimeLabel = effectiveRuntimeLabel(agent);
+  const badge = modelBadge(model);
+  const color = avatarColor(model);
   const status = statusStyle(agent.status);
   const initial = agent.name.charAt(0).toUpperCase();
 
@@ -211,6 +230,7 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
               <span
                 className="text-xs px-2 py-0.5 rounded-full font-medium"
                 style={{ backgroundColor: badge.bg, color: badge.text }}
+                title={runtimeLabel}
               >
                 {badge.label}
               </span>
@@ -259,7 +279,7 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
             Model
           </h4>
           <p className="text-xs" style={{ color: 'var(--tf-text)' }}>
-            {agent.model}
+            {runtimeLabel}
           </p>
         </section>
 
