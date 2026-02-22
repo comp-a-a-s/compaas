@@ -11,8 +11,116 @@ NC='\033[0m' # No Color
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGO_PATH="$SCRIPT_DIR/web-dashboard/public/compass-rose.svg"
+TOTAL_STEPS=8
+CURRENT_STEP=0
+CURRENT_STEP_TITLE=""
+INSTALL_UI_MODE="plain"
+
+if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
+    INSTALL_UI_MODE="tui"
+fi
+
+term_cols() {
+    local cols=100
+    if command -v tput &>/dev/null; then
+        cols=$(tput cols 2>/dev/null || echo 100)
+    fi
+    if [ -z "${cols:-}" ] || [ "$cols" -lt 60 ]; then
+        cols=60
+    fi
+    echo "$cols"
+}
+
+repeat_char() {
+    local char="$1"
+    local count="$2"
+    if [ "$count" -le 0 ]; then
+        return 0
+    fi
+    printf "%${count}s" "" | tr ' ' "$char"
+}
+
+fit_text() {
+    local text="$1"
+    local width="$2"
+    local len="${#text}"
+    if [ "$len" -le "$width" ]; then
+        printf "%s" "$text"
+    elif [ "$width" -gt 3 ]; then
+        printf "%s..." "${text:0:$((width - 3))}"
+    else
+        printf "%s" "${text:0:$width}"
+    fi
+}
+
+log_info() {
+    echo -e "${BLUE}  [INFO] $*${NC}"
+}
+
+log_ok() {
+    echo -e "${GREEN}  [OK]   $*${NC}"
+}
+
+log_warn() {
+    echo -e "${YELLOW}  [WARN] $*${NC}"
+}
+
+log_error() {
+    echo -e "${RED}  [ERR]  $*${NC}"
+}
+
+render_step_panel() {
+    local title="$1"
+    if [ "$INSTALL_UI_MODE" != "tui" ]; then
+        echo -e "${YELLOW}[${CURRENT_STEP}/${TOTAL_STEPS}] ${title}...${NC}"
+        return
+    fi
+
+    local cols
+    cols="$(term_cols)"
+    if [ "$cols" -gt 110 ]; then
+        cols=110
+    fi
+
+    local inner_width=$((cols - 2))
+    local body_width=$((cols - 4))
+    local bar_width=$((body_width - 24))
+    if [ "$bar_width" -lt 10 ]; then
+        bar_width=10
+    fi
+
+    local pct=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+    local fill=$((CURRENT_STEP * bar_width / TOTAL_STEPS))
+    local empty=$((bar_width - fill))
+    local step_text="Step ${CURRENT_STEP}/${TOTAL_STEPS}: ${title}"
+    local progress_text="Progress: [$(repeat_char "#" "$fill")$(repeat_char "-" "$empty")] ${pct}%"
+
+    echo ""
+    echo -e "${BLUE}+$(repeat_char "-" "$inner_width")+${NC}"
+    printf "${BLUE}|${NC} %-*s ${BLUE}|${NC}\n" "$body_width" "$(fit_text "$step_text" "$body_width")"
+    printf "${BLUE}|${NC} %-*s ${BLUE}|${NC}\n" "$body_width" "$(fit_text "$progress_text" "$body_width")"
+    echo -e "${BLUE}+$(repeat_char "-" "$inner_width")+${NC}"
+}
+
+start_step() {
+    CURRENT_STEP="$1"
+    CURRENT_STEP_TITLE="$2"
+    render_step_panel "$CURRENT_STEP_TITLE"
+}
+
+finish_step() {
+    if [ "$INSTALL_UI_MODE" = "tui" ]; then
+        log_ok "Completed: ${CURRENT_STEP_TITLE}"
+    fi
+}
 
 print_banner() {
+    if [ "$INSTALL_UI_MODE" = "tui" ]; then
+        clear 2>/dev/null || true
+        echo -e "${GREEN}Running installer...${NC}"
+        echo ""
+    fi
+
     if command -v chafa &>/dev/null && [ -f "$LOGO_PATH" ]; then
         # Render the real logo when an image-to-terminal renderer is available.
         chafa --size 30x15 "$LOGO_PATH" 2>/dev/null || true
@@ -46,24 +154,33 @@ WORDMARK
 
 print_banner
 
+on_install_error() {
+    local exit_code=$?
+    echo ""
+    log_error "Installation failed at step ${CURRENT_STEP}/${TOTAL_STEPS}: ${CURRENT_STEP_TITLE:-unknown}"
+    log_warn "Review the output above, fix the issue, and rerun install.sh."
+    exit "$exit_code"
+}
+trap on_install_error ERR
+
 offer_cli_install() {
     local cli_label="$1"
     local cli_bin="$2"
     local npm_package="$3"
 
     if command -v "$cli_bin" &>/dev/null; then
-        echo -e "${GREEN}  ✓ ${cli_label} found${NC}"
+        log_ok "${cli_label} found"
         return 0
     fi
 
-    echo -e "${YELLOW}  ⚠ ${cli_label} not found${NC}"
-    echo -e "${YELLOW}    Required for ${cli_label} provider mode${NC}"
-    echo -e "${YELLOW}    Install command: npm install -g ${npm_package}${NC}"
+    log_warn "${cli_label} not found"
+    log_info "Required for ${cli_label} provider mode"
+    log_info "Install command: npm install -g ${npm_package}"
 
     if ! command -v npm &>/dev/null; then
-        echo -e "${YELLOW}    npm is unavailable. Node.js (with npm) is required first.${NC}"
+        log_warn "npm is unavailable. Node.js (with npm) is required first."
         if ! ensure_nodejs_ready "install ${cli_label}"; then
-            echo -e "${YELLOW}    ↷ Skipping ${cli_label} installation (npm unavailable).${NC}"
+            log_warn "Skipping ${cli_label} installation (npm unavailable)."
             return 0
         fi
     fi
@@ -74,16 +191,16 @@ offer_cli_install() {
         INSTALL_NOW="n"
     fi
     if [[ "${INSTALL_NOW:-}" =~ ^[Nn]$ ]]; then
-        echo -e "${YELLOW}  ↷ Skipping ${cli_label} installation${NC}"
+        log_warn "Skipping ${cli_label} installation"
     else
         if npm install -g "$npm_package"; then
             if command -v "$cli_bin" &>/dev/null; then
-                echo -e "${GREEN}  ✓ ${cli_label} installed${NC}"
+                log_ok "${cli_label} installed"
             else
-                echo -e "${YELLOW}  ⚠ ${cli_label} install completed but command is not available yet. Re-open terminal and retry.${NC}"
+                log_warn "${cli_label} installed but command is not available yet. Re-open terminal and retry."
             fi
         else
-            echo -e "${YELLOW}  ⚠ Failed to install ${cli_label}; continuing setup${NC}"
+            log_warn "Failed to install ${cli_label}; continuing setup"
         fi
     fi
 }
@@ -97,7 +214,7 @@ run_with_privilege() {
         sudo "$@"
         return $?
     fi
-    echo -e "${RED}ERROR: sudo is required to auto-install this dependency.${NC}"
+    log_error "sudo is required to auto-install this dependency."
     return 1
 }
 
@@ -182,13 +299,13 @@ install_python3_auto() {
 
     if [ "$os_name" = "Darwin" ]; then
         if ! command -v brew &>/dev/null; then
-            echo -e "${YELLOW}  ⚠ Homebrew not found. Installing Homebrew first...${NC}"
+            log_warn "Homebrew not found. Installing Homebrew first..."
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
             refresh_homebrew_shellenv || true
         fi
 
         if ! command -v brew &>/dev/null; then
-            echo -e "${RED}ERROR: Homebrew installation failed; cannot auto-install Python.${NC}"
+            log_error "Homebrew installation failed; cannot auto-install Python."
             return 1
         fi
 
@@ -222,7 +339,7 @@ install_python3_auto() {
         return $?
     fi
 
-    echo -e "${RED}ERROR: Unsupported OS/package manager for automatic Python installation.${NC}"
+    log_error "Unsupported OS/package manager for automatic Python installation."
     return 1
 }
 
@@ -232,13 +349,13 @@ install_nodejs_auto() {
 
     if [ "$os_name" = "Darwin" ]; then
         if ! command -v brew &>/dev/null; then
-            echo -e "${YELLOW}  ⚠ Homebrew not found. Installing Homebrew first...${NC}"
+            log_warn "Homebrew not found. Installing Homebrew first..."
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
             refresh_homebrew_shellenv || true
         fi
 
         if ! command -v brew &>/dev/null; then
-            echo -e "${RED}ERROR: Homebrew installation failed; cannot auto-install Node.js.${NC}"
+            log_error "Homebrew installation failed; cannot auto-install Node.js."
             return 1
         fi
 
@@ -272,7 +389,7 @@ install_nodejs_auto() {
         return $?
     fi
 
-    echo -e "${RED}ERROR: Unsupported OS/package manager for automatic Node.js installation.${NC}"
+    log_error "Unsupported OS/package manager for automatic Node.js installation."
     return 1
 }
 
@@ -298,35 +415,35 @@ ensure_nodejs_ready() {
         local node_display npm_display
         node_display=$(node -v 2>/dev/null || echo "v$NODE_VERSION")
         npm_display=$(npm -v 2>/dev/null || echo "unknown")
-        echo -e "${GREEN}  ✓ Node.js ${node_display}${NC}"
-        echo -e "${GREEN}  ✓ npm ${npm_display}${NC}"
+        log_ok "Node.js ${node_display}"
+        log_ok "npm ${npm_display}"
         return 0
     fi
     status=$?
 
     if [ "$status" -eq 2 ]; then
-        echo -e "${YELLOW}  ⚠ Node.js/npm are not installed.${NC}"
+        log_warn "Node.js/npm are not installed."
     elif [ "$status" -eq 3 ]; then
-        echo -e "${YELLOW}  ⚠ Node.js 18+ is required (found v${NODE_VERSION}).${NC}"
+        log_warn "Node.js 18+ is required (found v${NODE_VERSION})."
     else
-        echo -e "${YELLOW}  ⚠ npm is not installed.${NC}"
+        log_warn "npm is not installed."
     fi
 
     if [ ! -t 0 ]; then
-        echo -e "${YELLOW}  ⚠ Non-interactive mode: cannot auto-install Node.js/npm for ${reason}.${NC}"
+        log_warn "Non-interactive mode: cannot auto-install Node.js/npm for ${reason}."
         return 1
     fi
 
     local install_node_now
     read -r -p "  Press Enter to install the latest Node.js (includes npm) and continue to ${reason}, or type 'n' to skip: " install_node_now
     if [[ "${install_node_now:-}" =~ ^[Nn]$ ]]; then
-        echo -e "${YELLOW}  ↷ Skipping Node.js/npm installation${NC}"
+        log_warn "Skipping Node.js/npm installation"
         return 1
     fi
 
-    echo -e "${YELLOW}  Installing Node.js...${NC}"
+    log_info "Installing Node.js..."
     if ! install_nodejs_auto; then
-        echo -e "${YELLOW}  ⚠ Automatic Node.js installation failed.${NC}"
+        log_warn "Automatic Node.js installation failed."
         return 1
     fi
 
@@ -334,15 +451,15 @@ ensure_nodejs_ready() {
     hash -r
 
     if ! check_node_version || ! command -v npm &>/dev/null; then
-        echo -e "${YELLOW}  ⚠ Node.js/npm still unavailable after install. Restart terminal and rerun install.sh.${NC}"
+        log_warn "Node.js/npm still unavailable after install. Restart terminal and rerun install.sh."
         return 1
     fi
 
     local node_display npm_display
     node_display=$(node -v 2>/dev/null || echo "v$NODE_VERSION")
     npm_display=$(npm -v 2>/dev/null || echo "unknown")
-    echo -e "${GREEN}  ✓ Node.js ${node_display}${NC}"
-    echo -e "${GREEN}  ✓ npm ${npm_display}${NC}"
+    log_ok "Node.js ${node_display}"
+    log_ok "npm ${npm_display}"
     return 0
 }
 
@@ -352,12 +469,12 @@ install_ollama_auto() {
 
     if [ "$os_name" = "Darwin" ]; then
         if ! command -v brew &>/dev/null; then
-            echo -e "${YELLOW}  ⚠ Homebrew not found. Installing Homebrew first...${NC}"
+            log_warn "Homebrew not found. Installing Homebrew first..."
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
             refresh_homebrew_shellenv || true
         fi
         if ! command -v brew &>/dev/null; then
-            echo -e "${RED}ERROR: Homebrew installation failed; cannot auto-install Ollama.${NC}"
+            log_error "Homebrew installation failed; cannot auto-install Ollama."
             return 1
         fi
         brew install --cask ollama
@@ -369,41 +486,41 @@ install_ollama_auto() {
         return $?
     fi
 
-    echo -e "${RED}ERROR: curl is required to auto-install Ollama.${NC}"
+    log_error "curl is required to auto-install Ollama."
     return 1
 }
 
 offer_ollama_install() {
     if command -v ollama &>/dev/null; then
-        echo -e "${GREEN}  ✓ Ollama found${NC}"
+        log_ok "Ollama found"
         return 0
     fi
 
-    echo -e "${YELLOW}  ⚠ Ollama not found (optional for local model mode)${NC}"
-    echo -e "${YELLOW}    Install source: https://ollama.com/download${NC}"
+    log_warn "Ollama not found (optional for local model mode)"
+    log_info "Install source: https://ollama.com/download"
 
     if [ ! -t 0 ]; then
-        echo -e "${YELLOW}  ⚠ Non-interactive mode: skipping Ollama auto-install.${NC}"
+        log_warn "Non-interactive mode: skipping Ollama auto-install."
         return 0
     fi
 
     local install_ollama_now
     read -r -p "  Press Enter to install Ollama now, or type 'n' to skip: " install_ollama_now
     if [[ "${install_ollama_now:-}" =~ ^[Nn]$ ]]; then
-        echo -e "${YELLOW}  ↷ Skipping Ollama installation${NC}"
+        log_warn "Skipping Ollama installation"
         return 0
     fi
 
-    echo -e "${YELLOW}  Installing Ollama...${NC}"
+    log_info "Installing Ollama..."
     if install_ollama_auto; then
         hash -r
         if command -v ollama &>/dev/null; then
-            echo -e "${GREEN}  ✓ Ollama installed${NC}"
+            log_ok "Ollama installed"
         else
-            echo -e "${YELLOW}  ⚠ Ollama installed but not on PATH yet. Re-open terminal if needed.${NC}"
+            log_warn "Ollama installed but not on PATH yet. Re-open terminal if needed."
         fi
     else
-        echo -e "${YELLOW}  ⚠ Failed to install Ollama; continuing setup${NC}"
+        log_warn "Failed to install Ollama; continuing setup"
     fi
 }
 
@@ -415,32 +532,32 @@ ensure_python_ready() {
     local status
     refresh_homebrew_shellenv || true
     if check_python_version; then
-        echo -e "${GREEN}  ✓ Python $PY_VERSION (${PYTHON_BIN})${NC}"
+        log_ok "Python ${PY_VERSION} (${PYTHON_BIN})"
         return 0
     fi
     status=$?
 
     if [ "$status" -eq 2 ]; then
-        echo -e "${YELLOW}  ⚠ Python 3 is not installed.${NC}"
+        log_warn "Python 3 is not installed."
     else
-        echo -e "${YELLOW}  ⚠ Python 3.10+ is required (found $PY_VERSION at ${PYTHON_BIN:-unknown path}).${NC}"
+        log_warn "Python 3.10+ is required (found ${PY_VERSION} at ${PYTHON_BIN:-unknown path})."
     fi
 
     if [ ! -t 0 ]; then
-        echo -e "${RED}ERROR: Non-interactive mode cannot auto-install Python. Install Python 3.10+ and rerun.${NC}"
+        log_error "Non-interactive mode cannot auto-install Python. Install Python 3.10+ and rerun."
         return 1
     fi
 
     local install_python_now
     read -r -p "  Press Enter to install the latest Python 3 and continue, or type 'n' to cancel: " install_python_now
     if [[ "${install_python_now:-}" =~ ^[Nn]$ ]]; then
-        echo -e "${RED}ERROR: Python installation canceled. Install Python 3.10+ and rerun.${NC}"
+        log_error "Python installation canceled. Install Python 3.10+ and rerun."
         return 1
     fi
 
-    echo -e "${YELLOW}  Installing Python...${NC}"
+    log_info "Installing Python..."
     if ! install_python3_auto; then
-        echo -e "${RED}ERROR: Automatic Python installation failed. Install Python manually and rerun.${NC}"
+        log_error "Automatic Python installation failed. Install Python manually and rerun."
         return 1
     fi
 
@@ -448,67 +565,73 @@ ensure_python_ready() {
     hash -r
 
     if ! check_python_version; then
-        echo -e "${RED}ERROR: Python 3.10+ is still unavailable on PATH after installation.${NC}"
-        echo -e "${YELLOW}Please restart your terminal (if needed), then rerun install.sh.${NC}"
+        log_error "Python 3.10+ is still unavailable after installation."
+        log_warn "Please restart your terminal (if needed), then rerun install.sh."
         return 1
     fi
 
-    echo -e "${GREEN}  ✓ Python $PY_VERSION (${PYTHON_BIN})${NC}"
+    log_ok "Python ${PY_VERSION} (${PYTHON_BIN})"
     return 0
 }
 
 # 1. Check Python 3.10+
-echo -e "${YELLOW}[1/8] Checking Python...${NC}"
+start_step 1 "Checking Python"
 if ! ensure_python_ready; then
     exit 1
 fi
+finish_step
 
 # 2. Check Node.js (optional, for web dashboard)
-echo -e "${YELLOW}[2/8] Checking Node.js (optional, for web dashboard)...${NC}"
+start_step 2 "Checking Node.js (optional, for web dashboard)"
 if ensure_nodejs_ready "web dashboard and CLI tools"; then
     HAS_NODE=true
 else
-    echo -e "${YELLOW}  ⚠ Node.js not found — web dashboard will not be built${NC}"
-    echo -e "${YELLOW}    Install Node.js 18+ to enable the web dashboard${NC}"
+    log_warn "Node.js not found - web dashboard will not be built"
+    log_info "Install Node.js 18+ to enable the web dashboard"
     HAS_NODE=false
 fi
+finish_step
 
 # 3. Check optional AI CLIs
-echo -e "${YELLOW}[3/8] Checking AI runtime CLIs (optional)...${NC}"
+start_step 3 "Checking AI runtime CLIs (optional)"
 offer_cli_install "Claude Code CLI" "claude" "@anthropic-ai/claude-code"
 offer_cli_install "Codex CLI" "codex" "@openai/codex"
 offer_ollama_install
+finish_step
 
 # 4. Create Python virtual environment
-echo -e "${YELLOW}[4/8] Setting up Python virtual environment...${NC}"
+start_step 4 "Setting up Python virtual environment"
 cd "$SCRIPT_DIR"
 if [ ! -d ".venv" ]; then
     "$PYTHON_BIN" -m venv .venv
-    echo -e "${GREEN}  ✓ Virtual environment created${NC}"
+    log_ok "Virtual environment created"
 else
-    echo -e "${GREEN}  ✓ Virtual environment already exists${NC}"
+    log_ok "Virtual environment already exists"
 fi
 source .venv/bin/activate
+finish_step
 
 # 5. Install Python dependencies
-echo -e "${YELLOW}[5/8] Installing Python dependencies...${NC}"
+start_step 5 "Installing Python dependencies"
 pip3 install -e ".[dev,local-models]" --quiet
-echo -e "${GREEN}  ✓ Python dependencies installed${NC}"
+log_ok "Python dependencies installed"
+finish_step
 
 # 6. Build web dashboard (if Node.js available)
-echo -e "${YELLOW}[6/8] Building web dashboard...${NC}"
+start_step 6 "Building web dashboard"
 if [ "$HAS_NODE" = true ] && [ -d "web-dashboard" ]; then
     cd web-dashboard
     npm install --quiet 2>/dev/null
     npm run build --quiet 2>/dev/null
     cd "$SCRIPT_DIR"
-    echo -e "${GREEN}  ✓ Web dashboard built${NC}"
+    log_ok "Web dashboard built"
 else
-    echo -e "${YELLOW}  ⚠ Skipped (Node.js not available or web-dashboard/ not found)${NC}"
+    log_warn "Skipped (Node.js not available or web-dashboard/ not found)"
 fi
+finish_step
 
 # 7. Initialize directories and environment
-echo -e "${YELLOW}[7/8] Initializing environment...${NC}"
+start_step 7 "Initializing environment"
 mkdir -p company_data/projects
 mkdir -p ~/projects
 
@@ -532,27 +655,29 @@ OPENAI_API_KEY=
 # Optional: Override project output directory (default: ~/projects)
 # PROJECTS_OUTPUT_DIR=~/projects
 ENVEOF
-    echo -e "${YELLOW}  ⚠ Created .env file — set provider keys if you use cloud models${NC}"
+    log_warn "Created .env file - set provider keys if you use cloud models"
 else
-    echo -e "${GREEN}  ✓ .env already exists${NC}"
+    log_ok ".env already exists"
 fi
 
 # Make hooks executable
 chmod +x scripts/hooks/*.sh 2>/dev/null || true
-echo -e "${GREEN}  ✓ Hooks made executable${NC}"
+log_ok "Hooks made executable"
+finish_step
 
 # 8. Run tests
-echo -e "${YELLOW}[8/8] Running tests...${NC}"
+start_step 8 "Running tests"
 TEST_SANDBOX_DIR="$(mktemp -d "${TMPDIR:-/tmp}/compaas-install-tests-XXXXXX")"
 TEST_DATA_DIR="$TEST_SANDBOX_DIR/company_data"
 TEST_WORKSPACE_DIR="$TEST_SANDBOX_DIR/projects"
 mkdir -p "$TEST_DATA_DIR" "$TEST_WORKSPACE_DIR"
 if COMPAAS_DATA_DIR="$TEST_DATA_DIR" COMPAAS_WORKSPACE_ROOT="$TEST_WORKSPACE_DIR" "$PYTHON_BIN" -m pytest tests/ -q 2>/dev/null; then
-    echo -e "${GREEN}  ✓ All tests passed${NC}"
+    log_ok "All tests passed"
 else
-    echo -e "${RED}  ✗ Some tests failed — check output above${NC}"
+    log_error "Some tests failed - check output above"
 fi
 rm -rf "$TEST_SANDBOX_DIR"
+finish_step
 
 # Done!
 echo ""
