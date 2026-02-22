@@ -396,7 +396,7 @@ export default function App() {
     if (!name || !name.trim()) return;
     const created = await createProject({
       name: name.trim(),
-      description: `Created from the global project selector by ${config?.user?.name || 'Board Head'}.`,
+      description: `Created from the global project selector by ${config?.user?.name || 'Chairman'}.`,
       type: 'app',
     });
     const nextProjectId = created?.project?.id;

@@ -31,8 +31,8 @@ from src.state.project_state import ProjectStateManager
 from src.state.task_board import TaskBoard
 from src.mcp_server.company_tools import CORE_TEAM, ON_DEMAND_TEAM
 from src.agents import AGENT_REGISTRY, get_agent_display_name
-from src.validators import validate_safe_id
-from src.utils import emit_activity, resolve_data_dir, resolve_project_root
+from src.validators import safe_path_join, validate_safe_id
+from src.utils import FileLock, atomic_yaml_write, emit_activity, resolve_data_dir, resolve_project_root
 from src.web.settings import get_runtime_settings
 from src.web.services.run_service import RunService
 from src.web.services.project_service import ProjectService
@@ -1427,6 +1427,8 @@ def _build_context_prompt(
     parts.append("")
     parts.append(
         f"Respond to {user_name}'s latest message. "
+        "Do not re-introduce yourself every turn (avoid phrases like '<CEO> here'). "
+        "Keep one clear final response per turn, and avoid narrating every intermediate step in prose. "
         "For build requests, execute concrete implementation actions and report files/commands explicitly."
     )
     return "\n".join(parts)
@@ -1708,6 +1710,424 @@ def _should_trigger_execution_bridge(user_message: str, project_id: str) -> bool
     return _message_requests_execution(user_message)
 
 
+_PROJECT_PHASE_TEMPLATE = [
+    "Scope Alignment",
+    "Implementation",
+    "QA & Validation",
+    "Release & Handoff",
+]
+
+_SUPPORT_AGENT_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("research", "investigate", "analyze", "compare", "strategy"), "chief-researcher"),
+    (("frontend", "ui", "ux", "web", "page", "canvas", "css", "react"), "lead-frontend"),
+    (("backend", "api", "server", "database", "endpoint", "auth"), "lead-backend"),
+    (("design", "layout", "theme", "branding", "copy"), "lead-designer"),
+    (("test", "qa", "bug", "regression", "edge case"), "qa-lead"),
+    (("deploy", "release", "vercel", "docker", "infra", "ci", "cd"), "devops"),
+    (("security", "token", "oauth", "permission"), "security-engineer"),
+    (("data", "analytics", "metric", "dashboard"), "data-engineer"),
+    (("readme", "guide", "documentation", "docs", "handoff"), "tech-writer"),
+)
+
+_SUPPORT_AGENT_TASKS: dict[str, str] = {
+    "chief-researcher": "Validate scope assumptions and identify implementation constraints.",
+    "cto": "Confirm architecture and quality gates for the implementation.",
+    "vp-engineering": "Break implementation into concrete engineering workstreams.",
+    "lead-frontend": "Implement user-facing UI flow and interaction logic.",
+    "lead-backend": "Implement server/data logic and integration endpoints.",
+    "lead-designer": "Refine UX copy, layout clarity, and interaction polish.",
+    "qa-lead": "Define validation checks and run functional regression pass.",
+    "devops": "Prepare local run instructions and deployment path.",
+    "security-engineer": "Review security-sensitive surfaces and constraints.",
+    "data-engineer": "Implement telemetry, analytics, or data wiring.",
+    "tech-writer": "Document setup, activation, and project handoff.",
+}
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        key = (value or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return ordered
+
+
+def _configured_agent_name(agent_id: str, config: dict) -> str:
+    configured = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    value = str(configured.get(agent_id, "") or "").strip()
+    if value:
+        return value
+    return get_agent_display_name(agent_id)
+
+
+def _infer_support_agents(user_message: str) -> list[str]:
+    """Infer which specialist agents should be involved for a request."""
+    text = (user_message or "").lower()
+    inferred: list[str] = ["cto", "vp-engineering"]
+    for keywords, agent_id in _SUPPORT_AGENT_HINTS:
+        if any(keyword in text for keyword in keywords):
+            inferred.append(agent_id)
+    if _message_requests_execution(text):
+        if not any(agent in inferred for agent in ("lead-frontend", "lead-backend")):
+            inferred.append("lead-frontend")
+        if "qa-lead" not in inferred:
+            inferred.append("qa-lead")
+        if "tech-writer" not in inferred:
+            inferred.append("tech-writer")
+    if any(word in text for word in ("plan", "scope", "requirements")):
+        inferred.append("chief-researcher")
+    return [
+        agent_id
+        for agent_id in _ordered_unique(inferred)
+        if agent_id in AGENT_REGISTRY and agent_id != "ceo"
+    ][:6]
+
+
+def _agent_task_summary(agent_id: str, user_message: str) -> str:
+    base = _SUPPORT_AGENT_TASKS.get(agent_id, "Contribute specialist implementation output.")
+    request = re.sub(r"\s+", " ", (user_message or "").strip())
+    if request:
+        return f"{base} Request focus: {request[:120]}"
+    return base
+
+
+def _seed_project_execution_scaffold(
+    project_id: str,
+    user_message: str,
+    *,
+    support_agents: list[str],
+    user_name: str,
+    ceo_name: str,
+    config: dict,
+) -> None:
+    """Seed baseline team/tasks/discussions so project tabs are never empty."""
+    normalized_project_id = _normalize_project_id(project_id)
+    if not normalized_project_id:
+        return
+
+    project = state_manager.get_project(normalized_project_id)
+    if not project:
+        return
+
+    support = [agent_id for agent_id in support_agents if agent_id in AGENT_REGISTRY and agent_id != "ceo"]
+    updates: dict[str, Any] = {}
+
+    phases = list(project.get("phases") or [])
+    if not phases:
+        updates["phases"] = list(_PROJECT_PHASE_TEMPLATE)
+
+    existing_team = [str(member).strip() for member in list(project.get("team") or []) if str(member).strip()]
+    desired_team = _ordered_unique(
+        existing_team
+        + [_configured_agent_name("ceo", config)]
+        + [_configured_agent_name(agent_id, config) for agent_id in support]
+    )
+    if desired_team and desired_team != existing_team:
+        updates["team"] = desired_team
+
+    status = str(project.get("status", "") or "").strip().lower()
+    if status in {"", "planning"}:
+        updates["status"] = "active"
+
+    if updates:
+        state_manager.update_project(normalized_project_id, updates)
+    seeded_tasks = False
+
+    existing_tasks = task_board.get_board(normalized_project_id)
+    if len(existing_tasks) == 0:
+        seeded_tasks = True
+        task_templates: list[tuple[str, str, str, str]] = [
+            (
+                "Kickoff scope and acceptance criteria",
+                f"Capture goals and acceptance criteria for: {re.sub(r'\\s+', ' ', (user_message or '').strip())[:140]}",
+                _configured_agent_name("ceo", config),
+                "p1",
+            ),
+        ]
+        for idx, agent_id in enumerate(support[:4]):
+            task_templates.append(
+                (
+                    f"{_configured_agent_name(agent_id, config)} execution stream",
+                    _agent_task_summary(agent_id, user_message),
+                    _configured_agent_name(agent_id, config),
+                    "p1" if idx < 2 else "p2",
+                )
+            )
+        qa_owner = _configured_agent_name("qa-lead", config) if "qa-lead" in support else _configured_agent_name("ceo", config)
+        task_templates.append(
+            (
+                "Validation and release checklist",
+                "Run functional validation, verify outputs, and prepare release notes.",
+                qa_owner,
+                "p1",
+            )
+        )
+        for title, description, owner, priority in task_templates:
+            task_board.create_task(
+                normalized_project_id,
+                title=title,
+                description=description,
+                assigned_to=owner,
+                priority=priority,
+            )
+
+    decisions_path = safe_path_join(DATA_DIR, "projects", normalized_project_id, "decisions.yaml")
+    with FileLock(decisions_path):
+        data: dict[str, Any] = {"decisions": []}
+        if os.path.exists(decisions_path):
+            try:
+                with open(decisions_path) as f:
+                    loaded = yaml.safe_load(f) or {}
+                if isinstance(loaded, dict):
+                    data = loaded
+            except (OSError, yaml.YAMLError):
+                data = {"decisions": []}
+        decisions = data.get("decisions", [])
+        if not isinstance(decisions, list):
+            decisions = []
+        if len(decisions) == 0:
+            now = datetime.now(timezone.utc).isoformat()
+            decisions.extend(
+                [
+                    {
+                        "title": "Kickoff Alignment",
+                        "decision": "Proceed with implementation in the active project workspace.",
+                        "rationale": f"{user_name} requested direct execution and {ceo_name} confirmed kickoff scope.",
+                        "decided_by": _configured_agent_name("ceo", config),
+                        "alternatives": "Pause for additional planning.",
+                        "timestamp": now,
+                    },
+                    {
+                        "title": "Delivery Standard",
+                        "decision": "Keep deliverables updated in company_data specs/artifacts and workspace files.",
+                        "rationale": "Maintains traceable output for plan, activation, and handoff tabs.",
+                        "decided_by": _configured_agent_name("ceo", config),
+                        "alternatives": "Ad-hoc notes only.",
+                        "timestamp": now,
+                    },
+                ]
+            )
+            data["decisions"] = decisions
+            atomic_yaml_write(decisions_path, data)
+
+    _emit_chat_activity(
+        "ceo",
+        "UPDATED",
+        "Project context scaffold refreshed (team, phases, tasks, discussions).",
+        project_id=normalized_project_id,
+        metadata={
+            "workspace_path": str(project.get("workspace_path", "") or ""),
+            "team_count": len(desired_team),
+            "tasks_seeded": seeded_tasks,
+            "support_agents": support,
+        },
+    )
+
+
+def _build_synthetic_delegation_plan(
+    user_message: str,
+    support_agents: list[str],
+    *,
+    config: dict,
+) -> list[dict[str, str]]:
+    """Build lightweight delegation summaries used for non-Claude runtimes."""
+    plan: list[dict[str, str]] = []
+    for agent_id in support_agents[:4]:
+        plan.append(
+            {
+                "agent_id": agent_id,
+                "agent_name": _configured_agent_name(agent_id, config),
+                "task": _agent_task_summary(agent_id, user_message),
+            }
+        )
+    return plan
+
+
+async def _emit_synthetic_delegation_start(
+    websocket: WebSocket,
+    *,
+    delegation_plan: list[dict[str, str]],
+    project_id: str,
+    runtime_metadata: dict[str, Any],
+    run_id: str,
+) -> None:
+    for step in delegation_plan:
+        agent_id = step.get("agent_id", "")
+        agent_name = step.get("agent_name", agent_id)
+        task = step.get("task", "").strip() or "Delegated task started."
+        label = f"Delegating to {agent_name}: {task[:140]}"
+        await websocket.send_json({"type": "action", "content": label})
+        await websocket.send_json({
+            "type": "action_detail",
+            "content": {
+                "label": label,
+                "state": "started",
+                "run_id": run_id,
+                "tool": "synthetic_delegation",
+                "source_agent": "ceo",
+                "target_agent": agent_id,
+                "flow": "down",
+                "task": task[:280],
+                **runtime_metadata,
+            },
+        })
+        _emit_chat_activity(
+            "ceo",
+            "DELEGATED",
+            label,
+            project_id=project_id,
+            metadata={
+                "source_agent": "ceo",
+                "target_agent": agent_id,
+                "flow": "down",
+                "task": task[:280],
+                **runtime_metadata,
+            },
+        )
+        _emit_chat_activity(
+            agent_id,
+            "STARTED",
+            task[:280],
+            project_id=project_id,
+            metadata={
+                "source_agent": "ceo",
+                "target_agent": agent_id,
+                "flow": "down",
+                "task": task[:280],
+                **runtime_metadata,
+            },
+        )
+
+
+async def _emit_synthetic_delegation_completion(
+    websocket: WebSocket,
+    *,
+    delegation_plan: list[dict[str, str]],
+    project_id: str,
+    runtime_metadata: dict[str, Any],
+    run_id: str,
+) -> None:
+    for step in delegation_plan:
+        agent_id = step.get("agent_id", "")
+        agent_name = step.get("agent_name", agent_id)
+        task = step.get("task", "").strip() or "Delegated task completed."
+        result = f"{agent_name} completed: {task[:140]}"
+        await websocket.send_json({"type": "action_result", "content": result})
+        await websocket.send_json({
+            "type": "action_detail",
+            "content": {
+                "label": result,
+                "state": "completed",
+                "run_id": run_id,
+                "tool": "synthetic_delegation",
+                "source_agent": agent_id,
+                "target_agent": "ceo",
+                "flow": "up",
+                "task": task[:280],
+                **runtime_metadata,
+            },
+        })
+        _emit_chat_activity(
+            agent_id,
+            "COMPLETED",
+            task[:280],
+            project_id=project_id,
+            metadata={
+                "source_agent": agent_id,
+                "target_agent": "ceo",
+                "flow": "up",
+                "task": task[:280],
+                **runtime_metadata,
+            },
+        )
+        _emit_chat_activity(
+            "ceo",
+            "UPDATED",
+            f"Received update from {agent_name}: {task[:200]}",
+            project_id=project_id,
+            metadata={
+                "source_agent": agent_id,
+                "target_agent": "ceo",
+                "flow": "up",
+                "task": task[:280],
+                **runtime_metadata,
+            },
+        )
+
+
+def _sanitize_ceo_response(text: str, *, ceo_name: str, user_name: str) -> str:
+    """Normalize verbose progress chatter into a clean final CEO response."""
+    raw = (text or "").replace("\r", "").strip()
+    if not raw:
+        return raw
+
+    ceo_lower = ceo_name.strip().lower()
+    user_lower = user_name.strip().lower()
+    seen_lines: set[str] = set()
+    cleaned_lines: list[str] = []
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if user_name and ceo_name:
+            stripped = re.sub(
+                rf"^{re.escape(user_name)}\s*,\s*(?:ceo\s+)?{re.escape(ceo_name)}\s+",
+                "",
+                stripped,
+                flags=re.IGNORECASE,
+            )
+        if ceo_name:
+            stripped = re.sub(
+                rf"^(?:ceo\s+)?{re.escape(ceo_name)}\s*[:,]\s*",
+                "",
+                stripped,
+                flags=re.IGNORECASE,
+            )
+        if not stripped:
+            if cleaned_lines and cleaned_lines[-1] != "":
+                cleaned_lines.append("")
+            continue
+        lowered = stripped.lower()
+        lowered_compact = re.sub(r"\s+", " ", lowered)
+        lowered_norm = lowered_compact.replace("’", "'")
+
+        if lowered_norm in seen_lines:
+            continue
+        seen_lines.add(lowered_norm)
+
+        if ceo_lower and (
+            lowered_norm.startswith(f"{ceo_lower} here")
+            or lowered_norm.startswith(f"{user_lower}, {ceo_lower} here")
+            or lowered_norm.startswith(f"{ceo_lower} is now ")
+            or lowered_norm.startswith(f"{ceo_lower} will ")
+            or lowered_norm.startswith(f"{ceo_lower} has enough context")
+            or lowered_norm.startswith(f"{ceo_lower} found ")
+            or lowered_norm.startswith(f"next {ceo_lower} will")
+            or lowered_norm.startswith(f"{user_lower}, {ceo_lower} has")
+            or lowered_norm.startswith(f"{user_lower}, {ceo_lower} will")
+        ):
+            continue
+        if lowered_norm.startswith("quick update"):
+            continue
+        if (
+            ("report back" in lowered_norm or "then report" in lowered_norm)
+            and ("i'll run" in lowered_norm or "i will run" in lowered_norm or "will run" in lowered_norm)
+        ):
+            continue
+        if lowered_norm.startswith(f"{user_lower}, i'll ") or lowered_norm.startswith(f"{user_lower}, i will "):
+            continue
+        cleaned_lines.append(stripped)
+
+    while cleaned_lines and cleaned_lines[-1] == "":
+        cleaned_lines.pop()
+
+    cleaned = "\n".join(cleaned_lines).strip()
+    return cleaned or raw
+
+
 def _build_execution_bridge_prompt(
     user_message: str,
     model_response: str,
@@ -1715,6 +2135,7 @@ def _build_execution_bridge_prompt(
     project_name: str,
     project_id: str,
     workspace_path: str,
+    user_name: str = "User",
 ) -> str:
     """Build a constrained implementation prompt for Codex execution bridge."""
     return (
@@ -1726,10 +2147,11 @@ def _build_execution_bridge_prompt(
         "- If new package files are needed, keep them minimal and runnable.\n"
         "- Do not ask for interactive approvals.\n"
         "- Print the exact files changed and commands run.\n\n"
-        f"Chairman request:\n{user_message}\n\n"
+        f"{user_name} request:\n{user_message}\n\n"
         "Execution brief from reasoning model:\n"
         f"{model_response}\n\n"
-        "Now implement the requested solution directly in the workspace and summarize results."
+        "Now implement the requested solution directly in the workspace.\n"
+        "Return one final concise CEO update only. Do not emit repeated progress narration."
     )
 
 
@@ -2149,6 +2571,10 @@ async def _handle_ceo_codex(
     workdir: str = "",
     activity_context: str = "chat",
     run_id: str = "",
+    user_message: str = "",
+    support_agents: list[str] | None = None,
+    micro_project_mode: bool = False,
+    config: dict | None = None,
 ) -> str | None:
     """Handle a CEO chat turn using local Codex CLI JSON streaming output."""
     codex_path = shutil.which("codex")
@@ -2173,6 +2599,16 @@ async def _handle_ceo_codex(
         "runtime": "codex_cli",
         "model": "codex",
     }
+    effective_config = config if isinstance(config, dict) else _load_config()
+    delegation_plan = (
+        _build_synthetic_delegation_plan(
+            user_message,
+            support_agents or [],
+            config=effective_config,
+        )
+        if not micro_project_mode
+        else []
+    )
 
     def _extract_text_fragments(value: Any, *, depth: int = 0) -> list[str]:
         if depth > 4:
@@ -2240,6 +2676,14 @@ async def _handle_ceo_codex(
             env=env,
             cwd=run_cwd,
         )
+        if delegation_plan:
+            await _emit_synthetic_delegation_start(
+                websocket,
+                delegation_plan=delegation_plan,
+                project_id=project_id,
+                runtime_metadata=runtime_metadata,
+                run_id=run_id,
+            )
 
         response_parts: list[str] = []
         assert process.stdout is not None
@@ -2551,6 +2995,14 @@ async def _handle_ceo_codex(
             else:
                 final_response = f"{fallback_note}\n\nWorkspace: {run_cwd}"
         if final_response:
+            if delegation_plan:
+                await _emit_synthetic_delegation_completion(
+                    websocket,
+                    delegation_plan=delegation_plan,
+                    project_id=project_id,
+                    runtime_metadata=runtime_metadata,
+                    run_id=run_id,
+                )
             if project_id:
                 try:
                     metadata = project_service.get_metadata(project_id)
@@ -2618,6 +3070,10 @@ async def _handle_ceo_openai(
     project: dict | None = None,
     project_id: str = "",
     run_id: str = "",
+    support_agents: list[str] | None = None,
+    micro_project_mode: bool = False,
+    user_name: str = "User",
+    config: dict | None = None,
 ) -> str | None:
     """Handle a CEO chat turn using an OpenAI-compatible streaming API.
 
@@ -2881,6 +3337,7 @@ async def _handle_ceo_openai(
             project_name=project_name,
             project_id=project_id,
             workspace_path=workspace_path,
+            user_name=user_name,
         )
         bridge_response = await _handle_ceo_codex(
             websocket=websocket,
@@ -2891,6 +3348,10 @@ async def _handle_ceo_openai(
             workdir=workspace_path,
             activity_context="execution_bridge",
             run_id=run_id,
+            user_message=user_message,
+            support_agents=support_agents,
+            micro_project_mode=micro_project_mode,
+            config=config,
         )
         if bridge_response:
             if final_response:
@@ -3048,6 +3509,17 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 user_name,
             )
             intent = _classify_execution_intent(user_message)
+            support_agents = [] if micro_project_mode else _infer_support_agents(user_message)
+            if active_project_id and _message_requests_execution(user_message):
+                _seed_project_execution_scaffold(
+                    active_project_id,
+                    user_message,
+                    support_agents=support_agents,
+                    user_name=user_name,
+                    ceo_name=ceo_name,
+                    config=config,
+                )
+                active_project = state_manager.get_project(active_project_id) or active_project
             sandbox_profile = str(data.get("sandbox_profile", "standard") or "standard").strip().lower()
             idempotency_key = str(data.get("idempotency_key", "") or "").strip()
             run_mode = "micro_project" if micro_project_mode else "full_crew"
@@ -3186,6 +3658,10 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     workdir=project_workdir,
                     activity_context="direct_codex",
                     run_id=run_id,
+                    user_message=user_message,
+                    support_agents=support_agents,
+                    micro_project_mode=micro_project_mode,
+                    config=config,
                 )
             elif provider in ("openai", "openai_compat"):
                 full_response = await _handle_ceo_openai(
@@ -3197,6 +3673,10 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     project=active_project,
                     project_id=active_project_id,
                     run_id=run_id,
+                    support_agents=support_agents,
+                    micro_project_mode=micro_project_mode,
+                    user_name=user_name,
+                    config=config,
                 )
             else:
                 claude_path = shutil.which("claude")
@@ -3231,6 +3711,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 )
 
             full_response = _apply_agent_name_overrides(full_response or "", config) or None
+            full_response = _sanitize_ceo_response(
+                full_response or "",
+                ceo_name=ceo_name,
+                user_name=user_name,
+            ) or None
 
             if full_response:
                 async with _chat_lock:
