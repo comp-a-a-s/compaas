@@ -1743,6 +1743,9 @@ async def _handle_ceo_claude(
     pending_delegate_agents: list[str] = []
     try:
         cmd = [claude_path, "--agent", "ceo", "-p", prompt]
+        # Web dashboard runs are non-interactive, so permission prompts cannot
+        # be answered. Force bypass mode to avoid silent no-op file writes.
+        cmd.extend(["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"])
         cmd.extend(["--output-format", "stream-json", "--verbose"])
         _emit_chat_activity(
             "ceo",

@@ -118,6 +118,9 @@ async def test_handle_ceo_claude_streams_chunks_actions_and_results(monkeypatch)
     assert captured_env.get("ANTHROPIC_API_KEY") == "anthropic-test-key"
     assert "--agent" in captured_cmd
     assert "ceo" in captured_cmd
+    assert "--permission-mode" in captured_cmd
+    assert "bypassPermissions" in captured_cmd
+    assert "--dangerously-skip-permissions" in captured_cmd
     event_types = [event["type"] for event in ws.events]
     assert "chunk" in event_types
     assert "action" in event_types
