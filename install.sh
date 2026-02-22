@@ -113,6 +113,69 @@ refresh_homebrew_shellenv() {
     return 1
 }
 
+pick_best_python3() {
+    local candidates=()
+    local path_candidate
+
+    if command -v python3 &>/dev/null; then
+        candidates+=("$(command -v python3)")
+    fi
+    if [ -x /opt/homebrew/bin/python3 ]; then
+        candidates+=("/opt/homebrew/bin/python3")
+    fi
+    if [ -x /usr/local/bin/python3 ]; then
+        candidates+=("/usr/local/bin/python3")
+    fi
+
+    while IFS= read -r path_candidate; do
+        candidates+=("$path_candidate")
+    done < <(ls -1 /Library/Frameworks/Python.framework/Versions/*/bin/python3 2>/dev/null || true)
+
+    local candidate
+    local version_full
+    local version_major
+    local version_minor
+    local version_patch
+    local version_score
+    local best_bin=""
+    local best_score=-1
+    local best_major=0
+    local best_minor=0
+
+    for candidate in "${candidates[@]}"; do
+        if [ ! -x "$candidate" ]; then
+            continue
+        fi
+
+        version_full="$("$candidate" -c 'import sys; v=sys.version_info; print(f"{v.major}.{v.minor}.{v.micro}")' 2>/dev/null || true)"
+        if [[ ! "$version_full" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            continue
+        fi
+
+        IFS='.' read -r version_major version_minor version_patch <<< "$version_full"
+        version_score=$((version_major * 1000000 + version_minor * 1000 + version_patch))
+        if [ "$version_score" -gt "$best_score" ]; then
+            best_score="$version_score"
+            best_bin="$candidate"
+            best_major="$version_major"
+            best_minor="$version_minor"
+            PY_VERSION="${version_major}.${version_minor}"
+        fi
+    done
+
+    if [ -z "$best_bin" ]; then
+        return 2
+    fi
+
+    PYTHON_BIN="$best_bin"
+    export PYTHON_BIN
+
+    if [ "$best_major" -lt 3 ] || ([ "$best_major" -eq 3 ] && [ "$best_minor" -lt 10 ]); then
+        return 3
+    fi
+    return 0
+}
+
 install_python3_auto() {
     local os_name
     os_name="$(uname -s)"
@@ -345,25 +408,14 @@ offer_ollama_install() {
 }
 
 check_python_version() {
-    if ! command -v python3 &>/dev/null; then
-        return 2
-    fi
-
-    PY_VERSION=$(python3 -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')")
-    local py_major py_minor
-    py_major=$(echo "$PY_VERSION" | cut -d. -f1)
-    py_minor=$(echo "$PY_VERSION" | cut -d. -f2)
-
-    if [ "$py_major" -lt 3 ] || ([ "$py_major" -eq 3 ] && [ "$py_minor" -lt 10 ]); then
-        return 3
-    fi
-    return 0
+    pick_best_python3
 }
 
 ensure_python_ready() {
     local status
+    refresh_homebrew_shellenv || true
     if check_python_version; then
-        echo -e "${GREEN}  ✓ Python $PY_VERSION${NC}"
+        echo -e "${GREEN}  ✓ Python $PY_VERSION (${PYTHON_BIN})${NC}"
         return 0
     fi
     status=$?
@@ -371,7 +423,7 @@ ensure_python_ready() {
     if [ "$status" -eq 2 ]; then
         echo -e "${YELLOW}  ⚠ Python 3 is not installed.${NC}"
     else
-        echo -e "${YELLOW}  ⚠ Python 3.10+ is required (found $PY_VERSION).${NC}"
+        echo -e "${YELLOW}  ⚠ Python 3.10+ is required (found $PY_VERSION at ${PYTHON_BIN:-unknown path}).${NC}"
     fi
 
     if [ ! -t 0 ]; then
@@ -401,7 +453,7 @@ ensure_python_ready() {
         return 1
     fi
 
-    echo -e "${GREEN}  ✓ Python $PY_VERSION${NC}"
+    echo -e "${GREEN}  ✓ Python $PY_VERSION (${PYTHON_BIN})${NC}"
     return 0
 }
 
@@ -431,7 +483,7 @@ offer_ollama_install
 echo -e "${YELLOW}[4/8] Setting up Python virtual environment...${NC}"
 cd "$SCRIPT_DIR"
 if [ ! -d ".venv" ]; then
-    python3 -m venv .venv
+    "$PYTHON_BIN" -m venv .venv
     echo -e "${GREEN}  ✓ Virtual environment created${NC}"
 else
     echo -e "${GREEN}  ✓ Virtual environment already exists${NC}"
@@ -495,7 +547,7 @@ TEST_SANDBOX_DIR="$(mktemp -d "${TMPDIR:-/tmp}/compaas-install-tests-XXXXXX")"
 TEST_DATA_DIR="$TEST_SANDBOX_DIR/company_data"
 TEST_WORKSPACE_DIR="$TEST_SANDBOX_DIR/projects"
 mkdir -p "$TEST_DATA_DIR" "$TEST_WORKSPACE_DIR"
-if COMPAAS_DATA_DIR="$TEST_DATA_DIR" COMPAAS_WORKSPACE_ROOT="$TEST_WORKSPACE_DIR" python3 -m pytest tests/ -q 2>/dev/null; then
+if COMPAAS_DATA_DIR="$TEST_DATA_DIR" COMPAAS_WORKSPACE_ROOT="$TEST_WORKSPACE_DIR" "$PYTHON_BIN" -m pytest tests/ -q 2>/dev/null; then
     echo -e "${GREEN}  ✓ All tests passed${NC}"
 else
     echo -e "${RED}  ✗ Some tests failed — check output above${NC}"
