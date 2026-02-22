@@ -270,6 +270,14 @@ export async function saveIntegrations(data: {
   return safeMutate(`${BASE}/integrations`, 'PATCH', data);
 }
 
+export async function sendTelegramMessage(data: {
+  token: string;
+  chat_id: string;
+  text: string;
+}): Promise<boolean> {
+  return safeMutate(`${BASE}/integrations/telegram/send`, 'POST', data);
+}
+
 // ---- V1 capabilities ----
 
 const V1 = '/api/v1';

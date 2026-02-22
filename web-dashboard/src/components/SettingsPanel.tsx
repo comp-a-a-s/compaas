@@ -687,7 +687,10 @@ function AiProviderSection({
     setSaveError(null);
     setSaved(false);
     setSaving(true);
-    const resolvedModel = provider === 'openai' && openaiPreset !== 'custom' ? openaiPreset : model;
+    const resolvedModel = provider === 'openai'
+      ? (openaiMode === 'codex' ? 'codex' : (openaiPreset !== 'custom' ? openaiPreset : model))
+      : model;
+    const resolvedApiKey = provider === 'openai' && openaiMode === 'codex' ? '' : apiKey;
     const patch: Partial<AppConfig> = {
       llm: {
         provider,
@@ -695,7 +698,7 @@ function AiProviderSection({
         openai_mode: openaiMode,
         base_url: provider === 'openai' ? 'https://api.openai.com/v1' : baseUrl,
         model: resolvedModel,
-        api_key: apiKey,
+        api_key: resolvedApiKey,
         system_prompt: systemPrompt,
         proxy_enabled: provider !== 'anthropic' && proxyEnabled,
         proxy_url: proxyUrl,
@@ -732,7 +735,7 @@ function AiProviderSection({
       {(['anthropic', 'openai', 'openai_compat'] as LlmConfig['provider'][]).map((p) => {
         const meta: Record<string, { icon: string; title: string; desc: string }> = {
           anthropic:    { icon: 'AN', title: 'Anthropic Cloud', desc: 'Claude via Claude Code CLI. Requires ANTHROPIC_API_KEY.' },
-          openai:       { icon: 'OA', title: 'OpenAI',          desc: 'GPT-4o, GPT-4-turbo, etc. Requires an OpenAI API key.' },
+          openai:       { icon: 'OA', title: 'OpenAI',          desc: 'Use API key mode or local Codex CLI mode.' },
           openai_compat:{ icon: 'LM', title: 'Local Model',     desc: 'Ollama, LM Studio, llama.cpp, or any OpenAI-compatible server.' },
         };
         const m = meta[p];
@@ -742,7 +745,13 @@ function AiProviderSection({
             key={p}
             role="radio"
             aria-checked={selected}
-            onClick={() => setProvider(p)}
+            onClick={() => {
+              setProvider(p);
+              if (p === 'openai') {
+                setApiKey('');
+              }
+              clearTestStatus();
+            }}
             style={{
               width: '100%', textAlign: 'left', padding: '12px 14px',
               borderRadius: '8px', cursor: 'pointer',
@@ -840,7 +849,14 @@ function AiProviderSection({
             <label style={labelStyle}>Runtime</label>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button
-                onClick={() => setOpenaiMode('apikey')}
+                onClick={() => {
+                  setOpenaiMode('apikey');
+                  const localPlaceholders = new Set(['ollama', 'lm-studio', 'none', 'jan', 'vllm']);
+                  if (localPlaceholders.has(apiKey.trim().toLowerCase())) {
+                    setApiKey('');
+                  }
+                  clearTestStatus();
+                }}
                 style={{
                   padding: '4px 10px',
                   borderRadius: '5px',
@@ -854,7 +870,11 @@ function AiProviderSection({
                 API
               </button>
               <button
-                onClick={() => setOpenaiMode('codex')}
+                onClick={() => {
+                  setOpenaiMode('codex');
+                  setApiKey('');
+                  clearTestStatus();
+                }}
                 style={{
                   padding: '4px 10px',
                   borderRadius: '5px',
@@ -869,41 +889,52 @@ function AiProviderSection({
               </button>
             </div>
           </div>
-          <div style={{ marginBottom: '10px' }}>
-            <label style={labelStyle}>Model</label>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: openaiPreset === 'custom' ? '6px' : 0 }}>
-              {OPENAI_MODEL_PRESETS.map((m) => (
-                <button key={m} onClick={() => handleOpenaiPreset(m)} style={{
-                  padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
-                  border: `1px solid ${openaiPreset === m ? C.accent : C.border}`,
-                  backgroundColor: openaiPreset === m ? 'rgba(88,166,255,0.15)' : C.surface,
-                  color: openaiPreset === m ? C.accent : C.textSecondary, outline: 'none',
-                }}>
-                  {m}
-                </button>
-              ))}
-            </div>
-            {openaiPreset === 'custom' && (
-              <input type="text" value={model} onChange={(e) => setModel(e.target.value)}
-                placeholder="gpt-4o-2024-08-06" style={inputStyle({ maxWidth: '320px' })}
-                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-              />
-            )}
-          </div>
-          <div>
-            <label style={labelStyle}>{openaiMode === 'codex' ? 'OpenAI API Key (optional)' : 'API Key'}</label>
-            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..." style={inputStyle({ maxWidth: '420px' })}
-              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-            />
-            {openaiMode === 'codex' && (
-              <p style={{ marginTop: '6px', fontSize: '11px', color: C.textMuted }}>
-                Codex CLI uses local login by default; API key is optional fallback.
+          {openaiMode === 'apikey' ? (
+            <>
+              <div style={{ marginBottom: '10px' }}>
+                <label style={labelStyle}>Model</label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: openaiPreset === 'custom' ? '6px' : 0 }}>
+                  {OPENAI_MODEL_PRESETS.map((m) => (
+                    <button key={m} onClick={() => handleOpenaiPreset(m)} style={{
+                      padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+                      border: `1px solid ${openaiPreset === m ? C.accent : C.border}`,
+                      backgroundColor: openaiPreset === m ? 'rgba(88,166,255,0.15)' : C.surface,
+                      color: openaiPreset === m ? C.accent : C.textSecondary, outline: 'none',
+                    }}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                {openaiPreset === 'custom' && (
+                  <input type="text" value={model} onChange={(e) => setModel(e.target.value)}
+                    placeholder="gpt-4o-2024-08-06" style={inputStyle({ maxWidth: '320px' })}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                )}
+              </div>
+              <div>
+                <label style={labelStyle}>OpenAI API Key</label>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  name="openai-api-key-settings"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="sk-..."
+                  style={inputStyle({ maxWidth: '420px' })}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                />
+              </div>
+            </>
+          ) : (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: '8px', backgroundColor: C.surface, padding: '10px 12px' }}>
+              <p style={{ margin: 0, fontSize: '12px', color: C.textSecondary, lineHeight: 1.6 }}>
+                Codex CLI mode uses your local Codex authentication. COMPaaS does not require an API key or model selection in this mode.
               </p>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 

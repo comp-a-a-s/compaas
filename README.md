@@ -140,7 +140,7 @@ Features:
 - Execution bridge for OpenAI/Ollama — implementation requests are executed in a local workspace via Codex runtime so tasks produce real files
 - Structured project outputs — every project includes stakeholder summary, full plan, activation guide, and handoff templates
 - Setup wizard — guided first-run configuration for team names, theme, and preferences
-- Telegram integration — hand off sessions to your phone
+- Telegram mirror mode — toggle in CEO Chat to mirror user/CEO messages to your Telegram bot chat
 - Keyboard shortcuts — press `?` to see all shortcuts
 - Four themes — Midnight, Twilight, Dawn, and Sahara
 - Default theme — Midnight
@@ -265,13 +265,38 @@ Your role description here...
 
 ### Telegram Integration
 
-COMPaaS supports handing off sessions to Telegram so you can continue directing your AI company from your phone.
+COMPaaS supports Telegram chat mirroring: when enabled in CEO Chat, new user/CEO messages are mirrored to your bot conversation.
 
-1. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram
-2. Copy the bot token
-3. Get your chat ID (send a message to your bot, then call `https://api.telegram.org/bot<TOKEN>/getUpdates`)
-4. Enter the credentials in Settings or during the Setup Wizard
-5. Click "Continue on Telegram" in the sidebar to hand off the current session
+1. Create a bot in Telegram with [@BotFather](https://t.me/BotFather):
+   - Run `/newbot`
+   - Choose bot name and username
+   - Copy the generated token (`123456789:ABC...`)
+2. Start a conversation with your bot:
+   - Open your bot in Telegram
+   - Press **Start** or send any message (required before Telegram can return updates)
+3. Get your chat ID:
+   - Open `https://api.telegram.org/bot<TOKEN>/getUpdates` in browser
+   - Find `message.chat.id` in the latest update
+   - Personal chats usually look like `123456789`
+   - Group/supergroup chats are usually negative IDs like `-1001234567890`
+4. (Optional) Use a group chat:
+   - Add the bot to the group
+   - Give it permission to send messages
+   - In [@BotFather](https://t.me/BotFather), run `/setprivacy` and disable privacy mode if you need broader group message visibility
+5. Save credentials in COMPaaS:
+   - Open **Settings → Integrations → Telegram Integration**
+   - Paste **Bot Token** and **Chat ID**
+   - Click **Save Credentials**
+6. Enable mirroring from CEO Chat:
+   - Open **CEO Chat**
+   - Click the **Telegram On/Off** toggle in the chat toolbar
+   - When enabled, a “Telegram mirror is ON” banner appears in chat
+
+Troubleshooting:
+- `chat not found` means chat ID is wrong or the bot was never started in that chat.
+- `bot was blocked by the user` means you need to unblock/start the bot again.
+- Empty `getUpdates` response usually means no recent message was sent to the bot yet.
+- If mirroring fails, re-save token/chat ID in Settings and toggle Telegram off/on in CEO Chat.
 
 ### Themes
 

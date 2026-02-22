@@ -15,6 +15,8 @@ import hashlib
 import hmac
 import ipaddress
 import time
+import urllib.error
+import urllib.request
 import yaml
 from typing import Any, AsyncGenerator
 from datetime import datetime, timezone
@@ -1625,6 +1627,7 @@ async def _handle_ceo_claude(
 
     process = None
     saw_tool_use = False
+    pending_delegate_agents: list[str] = []
     try:
         cmd = [claude_path, "--agent", "ceo", "-p", prompt]
         cmd.extend(["--output-format", "stream-json", "--verbose"])
@@ -1713,20 +1716,62 @@ async def _handle_ceo_claude(
                             await websocket.send_json({"type": "chunk", "content": text})
                     elif btype == "tool_use":
                         saw_tool_use = True
-                        action_label = _format_tool_action(
-                            block.get("name", "tool"), block.get("input", {})
-                        )
+                        tool_name = str(block.get("name", "tool") or "tool")
+                        tool_input = block.get("input", {}) if isinstance(block.get("input", {}), dict) else {}
+                        action_label = _format_tool_action(tool_name, tool_input)
+                        activity_metadata: dict[str, Any] = {"tool": tool_name}
+                        if tool_name == "Bash":
+                            activity_metadata["command"] = str(tool_input.get("command", "") or "")[:400]
+                        if tool_name in ("Write", "Edit", "NotebookEdit", "Read"):
+                            activity_metadata["file_path"] = str(
+                                tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+                            )[:400]
                         await websocket.send_json({"type": "action", "content": action_label})
                         await websocket.send_json({
                             "type": "action_detail",
                             "content": {
                                 "label": action_label,
-                                "tool": block.get("name", "tool"),
+                                "tool": tool_name,
                                 "state": "started",
                                 "run_id": run_id,
+                                **activity_metadata,
                             },
                         })
-                        _emit_chat_activity("ceo", "STARTED", action_label, project_id=project_id)
+                        if tool_name == "Task":
+                            delegated_agent = str(tool_input.get("subagent_type", "") or "").strip().lower()
+                            delegated_task = str(
+                                tool_input.get("description") or tool_input.get("prompt") or ""
+                            ).strip()
+                            if delegated_agent:
+                                pending_delegate_agents.append(delegated_agent)
+                                delegation_metadata = {
+                                    "source_agent": "ceo",
+                                    "target_agent": delegated_agent,
+                                    "flow": "down",
+                                    "task": delegated_task[:280],
+                                    "tool": tool_name,
+                                }
+                                _emit_chat_activity(
+                                    "ceo",
+                                    "DELEGATED",
+                                    f"Delegating to {delegated_agent}",
+                                    project_id=project_id,
+                                    metadata=delegation_metadata,
+                                )
+                                _emit_chat_activity(
+                                    delegated_agent,
+                                    "STARTED",
+                                    delegated_task[:280] or "Delegated task started",
+                                    project_id=project_id,
+                                    metadata=delegation_metadata,
+                                )
+                        _emit_chat_activity(
+                            "ceo",
+                            "STARTED",
+                            action_label,
+                            project_id=project_id,
+                            metadata=activity_metadata,
+                        )
 
             elif event_type == "user":
                 for block in event.get("message", {}).get("content", []):
@@ -1739,6 +1784,14 @@ async def _handle_ceo_claude(
                             )
                         if content and content.strip():
                             preview = content.strip()[:200].replace("\n", " ")
+                            delegated_agent = pending_delegate_agents.pop(0) if pending_delegate_agents else ""
+                            result_metadata: dict[str, Any] = {}
+                            if delegated_agent:
+                                result_metadata = {
+                                    "source_agent": delegated_agent,
+                                    "target_agent": "ceo",
+                                    "flow": "up",
+                                }
                             await websocket.send_json({"type": "action_result", "content": preview})
                             await websocket.send_json({
                                 "type": "action_detail",
@@ -1746,9 +1799,31 @@ async def _handle_ceo_claude(
                                     "label": preview,
                                     "state": "completed",
                                     "run_id": run_id,
+                                    **result_metadata,
                                 },
                             })
-                            _emit_chat_activity("ceo", "COMPLETED", preview, project_id=project_id)
+                            if delegated_agent:
+                                _emit_chat_activity(
+                                    delegated_agent,
+                                    "COMPLETED",
+                                    preview,
+                                    project_id=project_id,
+                                    metadata=result_metadata,
+                                )
+                                _emit_chat_activity(
+                                    "ceo",
+                                    "UPDATED",
+                                    f"Received update from {delegated_agent}: {preview}",
+                                    project_id=project_id,
+                                    metadata=result_metadata,
+                                )
+                            _emit_chat_activity(
+                                "ceo",
+                                "COMPLETED",
+                                preview,
+                                project_id=project_id,
+                                metadata=result_metadata,
+                            )
 
             elif event_type == "result":
                 # Final result — use this as the canonical response
@@ -2804,6 +2879,42 @@ async def summarize_chat() -> dict:
 # ---------------------------------------------------------------------------
 # Integration: GitHub inbound webhook
 # ---------------------------------------------------------------------------
+
+
+@app.post("/api/integrations/telegram/send", summary="Send a mirrored chat message to Telegram")
+def telegram_send_message(body: dict[str, Any]) -> dict[str, Any]:
+    """Send a plain-text message to a Telegram bot chat."""
+    token = str(body.get("token", "") or "").strip()
+    chat_id = str(body.get("chat_id", "") or "").strip()
+    text = str(body.get("text", "") or "").strip()
+    if not token or not chat_id or not text:
+        raise HTTPException(status_code=400, detail="token, chat_id, and text are required.")
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text[:4096],
+        "disable_web_page_preview": True,
+    }
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body_text = resp.read().decode("utf-8", errors="replace")
+            parsed = json.loads(body_text) if body_text else {}
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(status_code=502, detail=f"Telegram HTTP error: {body_text[:220]}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Telegram send failed: {str(exc)[:220]}") from exc
+
+    if not bool(parsed.get("ok")):
+        detail = parsed.get("description") or parsed
+        raise HTTPException(status_code=502, detail=f"Telegram rejected request: {str(detail)[:220]}")
+    return {"status": "ok"}
 
 
 def _append_activity_event(event: dict) -> None:

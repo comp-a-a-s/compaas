@@ -7,6 +7,7 @@ interface OverviewProps {
   projects: Project[];
   tasks: Task[];
   events: ActivityEvent[];
+  microProjectMode?: boolean;
   loadingAgents: boolean;
   loadingProjects: boolean;
   loadingTasks: boolean;
@@ -74,11 +75,22 @@ function isAgentRecentlyActive(agentId: string, agentName: string, events: Activ
 interface ConnectorProps {
   vertical?: boolean;
   active?: boolean;
+  flowDirection?: 'down' | 'up' | null;
   size: number; // px: height for vertical, width for horizontal
 }
 
-function Connector({ vertical = true, active = false, size }: ConnectorProps) {
+function Connector({ vertical = true, active = false, flowDirection = 'down', size }: ConnectorProps) {
   const baseColor = active ? 'rgba(63,185,80,0.35)' : 'var(--tf-border)';
+  const flowClass = vertical
+    ? flowDirection === 'up' ? 'anim-flow-up' : 'anim-flow-down'
+    : flowDirection === 'up' ? 'anim-flow-left' : 'anim-flow-right';
+  const gradient = vertical
+    ? flowDirection === 'up'
+      ? 'linear-gradient(to top, transparent, var(--tf-success), transparent)'
+      : 'linear-gradient(to bottom, transparent, var(--tf-success), transparent)'
+    : flowDirection === 'up'
+      ? 'linear-gradient(to left, transparent, var(--tf-success), transparent)'
+      : 'linear-gradient(to right, transparent, var(--tf-success), transparent)';
   return (
     <div
       style={{
@@ -94,15 +106,13 @@ function Connector({ vertical = true, active = false, size }: ConnectorProps) {
     >
       {active && (
         <div
-          className={vertical ? 'anim-flow-down' : 'anim-flow-right'}
+          className={flowClass}
           style={{
             position: 'absolute',
             ...(vertical
               ? { left: 0, right: 0, height: '50%' }
               : { top: 0, bottom: 0, width: '50%' }),
-            background: vertical
-              ? 'linear-gradient(to bottom, transparent, var(--tf-success), transparent)'
-              : 'linear-gradient(to right, transparent, var(--tf-success), transparent)',
+            background: gradient,
           }}
         />
       )}
@@ -116,12 +126,16 @@ interface OrgNodeProps {
   displayRole?: string;
   onAgentClick?: (agent: Agent) => void;
   recentlyActive?: boolean;
+  muted?: boolean;
 }
-function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false }: OrgNodeProps) {
+function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false, muted = false }: OrgNodeProps) {
   const color = modelColor(agent.model);
   const initial = agent.name.charAt(0).toUpperCase();
-  const isActive = recentlyActive || agent.status === 'active' ||
-    (agent.recent_activity && agent.recent_activity.length > 0);
+  const isActive = !muted && (
+    recentlyActive
+    || agent.status === 'active'
+    || (agent.recent_activity && agent.recent_activity.length > 0)
+  );
 
   // Latest activity detail for tooltip
   const latestActivity = agent.recent_activity?.[0];
@@ -130,13 +144,15 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false }: O
     <div
       className="flex flex-col items-center gap-1 px-3 py-2 rounded-xl"
       style={{
-        backgroundColor: isActive ? 'rgba(63,185,80,0.06)' : 'var(--tf-surface-raised)',
+        backgroundColor: muted ? 'color-mix(in srgb, var(--tf-surface-raised) 84%, var(--tf-bg))' : isActive ? 'rgba(63,185,80,0.06)' : 'var(--tf-surface-raised)',
         border: `1px solid ${isActive ? 'var(--tf-success)' : 'var(--tf-border)'}`,
         minWidth: '88px',
         maxWidth: '128px',
         cursor: onAgentClick ? 'pointer' : 'default',
         transition: 'border-color 0.3s, background-color 0.3s, box-shadow 0.3s',
         boxShadow: isActive ? '0 0 10px rgba(63,185,80,0.2)' : 'none',
+        opacity: muted ? 0.46 : 1,
+        filter: muted ? 'grayscale(38%)' : 'none',
       }}
       onClick={() => onAgentClick?.(agent)}
       onMouseEnter={(e) => {
@@ -356,15 +372,43 @@ function subtreeHasActive(node: OrgTreeNode, activeIds: Set<string>): boolean {
   return (node.children ?? []).some((c) => subtreeHasActive(c, activeIds));
 }
 
+type FlowDirection = 'down' | 'up' | null;
+
+function orgEdgeKey(parentId: string, childId: string): string {
+  return `${parentId}>${childId}`;
+}
+
+function findPathToNode(node: OrgTreeNode, targetId: string, path: string[] = []): string[] | null {
+  const nextPath = [...path, node.id];
+  if (node.id === targetId) return nextPath;
+  for (const child of node.children ?? []) {
+    const childPath = findPathToNode(child, targetId, nextPath);
+    if (childPath) return childPath;
+  }
+  return null;
+}
+
 interface TreeNodeProps {
   node: OrgTreeNode;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
   recentActiveIds: Set<string>;
   activeIds: Set<string>;
+  mutedAgentIds: Set<string>;
+  flowEdgeKeys: Set<string>;
+  flowDirection: FlowDirection;
 }
 
-function TreeNode({ node, agentMap, onAgentClick, recentActiveIds, activeIds }: TreeNodeProps) {
+function TreeNode({
+  node,
+  agentMap,
+  onAgentClick,
+  recentActiveIds,
+  activeIds,
+  mutedAgentIds,
+  flowEdgeKeys,
+  flowDirection,
+}: TreeNodeProps) {
   const agent = agentMap.get(node.id);
   const children = node.children ?? [];
 
@@ -372,8 +416,12 @@ function TreeNode({ node, agentMap, onAgentClick, recentActiveIds, activeIds }: 
 
   const hasChildren = children.length > 0;
   const recentlyActive = recentActiveIds.has(node.id);
-  // The vertical stem from this node to its children is active if ANY descendant is active
-  const childSubtreeActive = children.some((c) => subtreeHasActive(c, activeIds));
+  const muted = mutedAgentIds.has(node.id);
+  const childSubtreeActive = children.some((c) => subtreeHasActive(c, activeIds))
+    || children.some((c) => flowEdgeKeys.has(orgEdgeKey(node.id, c.id)));
+  const stemDirection: FlowDirection = children.some((c) => flowEdgeKeys.has(orgEdgeKey(node.id, c.id)))
+    ? flowDirection
+    : 'down';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -383,19 +431,23 @@ function TreeNode({ node, agentMap, onAgentClick, recentActiveIds, activeIds }: 
           displayRole={node.displayRole}
           onAgentClick={onAgentClick}
           recentlyActive={recentlyActive}
+          muted={muted}
         />
       </Tooltip>
 
       {hasChildren && (
         <>
           {/* Vertical stem: animated if any child's subtree is active */}
-          <Connector vertical size={24} active={childSubtreeActive} />
+          <Connector vertical size={24} active={childSubtreeActive} flowDirection={stemDirection} />
           <ChildrenGroup
             node={node}
             agentMap={agentMap}
             onAgentClick={onAgentClick}
             recentActiveIds={recentActiveIds}
             activeIds={activeIds}
+            mutedAgentIds={mutedAgentIds}
+            flowEdgeKeys={flowEdgeKeys}
+            flowDirection={flowDirection}
           />
         </>
       )}
@@ -409,25 +461,42 @@ interface ChildrenGroupProps {
   onAgentClick: (agent: Agent) => void;
   recentActiveIds: Set<string>;
   activeIds: Set<string>;
+  mutedAgentIds: Set<string>;
+  flowEdgeKeys: Set<string>;
+  flowDirection: FlowDirection;
 }
 
-function ChildrenGroup({ node, agentMap, onAgentClick, recentActiveIds, activeIds }: ChildrenGroupProps) {
+function ChildrenGroup({
+  node,
+  agentMap,
+  onAgentClick,
+  recentActiveIds,
+  activeIds,
+  mutedAgentIds,
+  flowEdgeKeys,
+  flowDirection,
+}: ChildrenGroupProps) {
   const children = node.children ?? [];
   const visibleChildren = children.filter((c) => agentMap.has(c.id));
 
   if (visibleChildren.length === 0) return null;
 
   if (visibleChildren.length === 1) {
-    const childActive = subtreeHasActive(visibleChildren[0], activeIds);
+    const edgeKey = orgEdgeKey(node.id, visibleChildren[0].id);
+    const edgeInFlow = flowEdgeKeys.has(edgeKey);
+    const childActive = edgeInFlow || subtreeHasActive(visibleChildren[0], activeIds);
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <Connector vertical size={20} active={childActive} />
+        <Connector vertical size={20} active={childActive} flowDirection={edgeInFlow ? flowDirection : 'down'} />
         <TreeNode
           node={visibleChildren[0]}
           agentMap={agentMap}
           onAgentClick={onAgentClick}
           recentActiveIds={recentActiveIds}
           activeIds={activeIds}
+          mutedAgentIds={mutedAgentIds}
+          flowEdgeKeys={flowEdgeKeys}
+          flowDirection={flowDirection}
         />
       </div>
     );
@@ -438,7 +507,10 @@ function ChildrenGroup({ node, agentMap, onAgentClick, recentActiveIds, activeId
       {visibleChildren.map((child, idx) => {
         const isFirst = idx === 0;
         const isLast = idx === visibleChildren.length - 1;
-        const childActive = subtreeHasActive(child, activeIds);
+        const edgeKey = orgEdgeKey(node.id, child.id);
+        const edgeInFlow = flowEdgeKeys.has(edgeKey);
+        const childActive = edgeInFlow || subtreeHasActive(child, activeIds);
+        const edgeDirection: FlowDirection = edgeInFlow ? flowDirection : 'down';
 
         return (
           <div
@@ -458,26 +530,31 @@ function ChildrenGroup({ node, agentMap, onAgentClick, recentActiveIds, activeId
             }}>
               {childActive && (
                 <div
-                  className="anim-flow-right"
+                  className={edgeDirection === 'up' ? 'anim-flow-left' : 'anim-flow-right'}
                   style={{
                     position: 'absolute',
                     top: 0,
                     bottom: 0,
                     width: '50%',
-                    background: 'linear-gradient(to right, transparent, var(--tf-success), transparent)',
+                    background: edgeDirection === 'up'
+                      ? 'linear-gradient(to left, transparent, var(--tf-success), transparent)'
+                      : 'linear-gradient(to right, transparent, var(--tf-success), transparent)',
                   }}
                 />
               )}
             </div>
 
             {/* Vertical stub to child */}
-            <Connector vertical size={20} active={childActive} />
+            <Connector vertical size={20} active={childActive} flowDirection={edgeDirection} />
             <TreeNode
               node={child}
               agentMap={agentMap}
               onAgentClick={onAgentClick}
               recentActiveIds={recentActiveIds}
               activeIds={activeIds}
+              mutedAgentIds={mutedAgentIds}
+              flowEdgeKeys={flowEdgeKeys}
+              flowDirection={flowDirection}
             />
           </div>
         );
@@ -490,20 +567,18 @@ interface OrgChartProps {
   agents: Agent[];
   loading: boolean;
   events: ActivityEvent[];
+  microProjectMode?: boolean;
 }
 
-function OrgChart({ agents, loading, events }: OrgChartProps) {
+function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChartProps) {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
+  const hierarchyViewportRef = useRef<HTMLDivElement | null>(null);
+  const hierarchyContentRef = useRef<HTMLDivElement | null>(null);
   const [compactLayout, setCompactLayout] = useState(false);
   const [layoutMode, setLayoutMode] = useState<'hierarchy' | 'cluster' | 'timeline'>('hierarchy');
-  const [microMode] = useState(() => {
-    try {
-      return localStorage.getItem('compaas_micro_project_mode') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [hierarchyScale, setHierarchyScale] = useState(1);
+  const [hierarchyHeight, setHierarchyHeight] = useState<number | null>(null);
 
   const agentMap = useMemo(() => {
     const map = new Map<string, Agent>();
@@ -528,11 +603,77 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
   const activeIds = useMemo(() => {
     const s = new Set(recentActiveIds);
     for (const agent of agents) {
-      if (agent.status === 'active' || agent.status === 'permanent') s.add(agent.id);
+      if (agent.status === 'active') s.add(agent.id);
       if ((agent.recent_activity ?? []).length > 0) s.add(agent.id);
     }
     return s;
   }, [agents, recentActiveIds]);
+
+  const aliasToId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agent of agents) {
+      map.set(agent.id.toLowerCase(), agent.id);
+      map.set(agent.name.toLowerCase(), agent.id);
+      map.set(agent.role.toLowerCase(), agent.id);
+    }
+    return map;
+  }, [agents]);
+
+  const latestFlow = useMemo((): { edgeKeys: Set<string>; direction: FlowDirection } => {
+    const safeAgentId = (value: unknown): string => {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (!normalized) return '';
+      return aliasToId.get(normalized) || normalized;
+    };
+
+    const buildFlow = (sourceRaw: unknown, targetRaw: unknown, direction: FlowDirection) => {
+      const source = safeAgentId(sourceRaw);
+      const target = safeAgentId(targetRaw);
+      if (!source || !target) return null;
+      const targetPath = findPathToNode(ORG_TREE, source === 'ceo' ? target : source);
+      if (!targetPath || targetPath.length < 2) return null;
+      const edgeKeys = new Set<string>();
+      for (let i = 0; i < targetPath.length - 1; i += 1) {
+        edgeKeys.add(orgEdgeKey(targetPath[i], targetPath[i + 1]));
+      }
+      return { edgeKeys, direction };
+    };
+
+    for (let idx = events.length - 1; idx >= 0; idx -= 1) {
+      const evt = events[idx];
+      const meta = (evt.metadata || {}) as Record<string, unknown>;
+      const sourceMeta = meta.source_agent ?? meta.from_agent;
+      const targetMeta = meta.target_agent ?? meta.to_agent;
+      const flowMeta = String(meta.flow || '').toLowerCase();
+      if (sourceMeta && targetMeta) {
+        const inferredDirection: FlowDirection = flowMeta === 'up' ? 'up' : 'down';
+        const fromMeta = buildFlow(sourceMeta, targetMeta, inferredDirection);
+        if (fromMeta) return fromMeta;
+      }
+
+      const detail = (evt.detail || '').toLowerCase();
+      const downMatch = detail.match(/delegating to ([a-z0-9\- ]+)/i);
+      if (downMatch) {
+        const fromDetail = buildFlow('ceo', downMatch[1].trim(), 'down');
+        if (fromDetail) return fromDetail;
+      }
+      const upMatch = detail.match(/(update|result|response) from ([a-z0-9\- ]+)/i);
+      if (upMatch) {
+        const fromDetail = buildFlow(upMatch[2].trim(), 'ceo', 'up');
+        if (fromDetail) return fromDetail;
+      }
+    }
+    return { edgeKeys: new Set<string>(), direction: null };
+  }, [aliasToId, events]);
+
+  const mutedAgentIds = useMemo(() => {
+    if (!microProjectMode) return new Set<string>();
+    const s = new Set<string>();
+    for (const agent of agents) {
+      if (agent.id !== 'ceo') s.add(agent.id);
+    }
+    return s;
+  }, [agents, microProjectMode]);
 
   const handleAgentClick = (agent: Agent) => {
     setSelectedAgent(prev => prev?.id === agent.id ? null : agent);
@@ -579,6 +720,36 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (layoutMode !== 'hierarchy' || compactLayout) return;
+    const viewport = hierarchyViewportRef.current;
+    const content = hierarchyContentRef.current;
+    if (!viewport || !content || typeof ResizeObserver === 'undefined') return;
+
+    const measure = () => {
+      const available = Math.max(0, viewport.clientWidth - 6);
+      const naturalWidth = content.scrollWidth;
+      const naturalHeight = content.scrollHeight;
+      if (!available || !naturalWidth || !naturalHeight) return;
+      const widthRatio = available / naturalWidth;
+      const nextScale = naturalWidth > available
+        ? Math.max(0.12, Math.min(1, widthRatio))
+        : 1;
+      setHierarchyScale(nextScale);
+      setHierarchyHeight(Math.ceil(naturalHeight * nextScale));
+    };
+
+    measure();
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(viewport);
+    observer.observe(content);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [layoutMode, compactLayout, agents.length, events.length]);
 
   if (loading) {
     return (
@@ -720,14 +891,14 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
                     {sectionAgents.map((agent) => {
                       const active = activeIds.has(agent.id);
                       const workload = workloadMap.get(agent.name.toLowerCase()) || workloadMap.get(agent.id.toLowerCase()) || 0;
-                      const mutedInMicro = microMode && agent.id !== 'ceo' && !active;
+                      const mutedInMicro = microProjectMode && agent.id !== 'ceo';
                       return (
                         <button
                           key={agent.id}
                           onClick={() => handleAgentClick(agent)}
                           style={{
-                            border: `1px solid ${active ? 'var(--tf-success)' : 'var(--tf-border)'}`,
-                            backgroundColor: active ? 'rgba(63,185,80,0.08)' : 'var(--tf-surface)',
+                            border: `1px solid ${active && !mutedInMicro ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+                            backgroundColor: active && !mutedInMicro ? 'rgba(63,185,80,0.08)' : 'var(--tf-surface)',
                             color: 'var(--tf-text)',
                             borderRadius: '999px',
                             padding: '4px 9px',
@@ -736,7 +907,8 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
                             display: 'flex',
                             alignItems: 'center',
                             gap: '6px',
-                            opacity: mutedInMicro ? 0.45 : 1,
+                            opacity: mutedInMicro ? 0.42 : 1,
+                            filter: mutedInMicro ? 'grayscale(32%)' : 'none',
                           }}
                           title={mutedInMicro ? `${agent.role} · ${agent.model} · Inactive in Micro mode` : `${agent.role} · ${agent.model}`}
                         >
@@ -745,7 +917,7 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
                               width: '6px',
                               height: '6px',
                               borderRadius: '50%',
-                              backgroundColor: active ? 'var(--tf-success)' : 'var(--tf-text-muted)',
+                              backgroundColor: active && !mutedInMicro ? 'var(--tf-success)' : 'var(--tf-text-muted)',
                               flexShrink: 0,
                             }}
                           />
@@ -762,29 +934,43 @@ function OrgChart({ agents, loading, events }: OrgChartProps) {
         </div>
       ) : (
         <div
+          ref={hierarchyViewportRef}
           style={{
-            overflowX: 'auto',
-            overflowY: 'hidden',
+            overflow: 'hidden',
             padding: '8px 8px 16px',
             maxWidth: '100%',
+            minHeight: hierarchyHeight ? `${hierarchyHeight}px` : undefined,
           }}
         >
           <div
             style={{
               display: 'flex',
               justifyContent: 'center',
-              width: 'max-content',
               minWidth: '100%',
               margin: '0 auto',
             }}
           >
-            <TreeNode
-              node={ORG_TREE}
-              agentMap={agentMap}
-              onAgentClick={handleAgentClick}
-              recentActiveIds={recentActiveIds}
-              activeIds={activeIds}
-            />
+            <div
+              ref={hierarchyContentRef}
+              style={{
+                width: 'max-content',
+                minWidth: 'max-content',
+                transform: `scale(${hierarchyScale})`,
+                transformOrigin: 'top center',
+                transition: 'transform 220ms ease',
+              }}
+            >
+              <TreeNode
+                node={ORG_TREE}
+                agentMap={agentMap}
+                onAgentClick={handleAgentClick}
+                recentActiveIds={recentActiveIds}
+                activeIds={activeIds}
+                mutedAgentIds={mutedAgentIds}
+                flowEdgeKeys={latestFlow.edgeKeys}
+                flowDirection={latestFlow.direction}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -1010,6 +1196,7 @@ export default function Overview({
   projects,
   tasks,
   events,
+  microProjectMode = false,
   loadingAgents,
   loadingProjects,
   loadingTasks,
@@ -1100,7 +1287,12 @@ export default function Overview({
           <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
             Organization Hierarchy
           </h3>
-          <OrgChart agents={agents} loading={loadingAgents} events={events} />
+          <OrgChart
+            agents={agents}
+            loading={loadingAgents}
+            events={events}
+            microProjectMode={microProjectMode}
+          />
         </div>
       )}
 

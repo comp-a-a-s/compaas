@@ -28,7 +28,6 @@ const NAV_ITEMS = [
 
 const SIDEBAR_COLLAPSED_KEY = 'compaas_sidebar_collapsed';
 const CHAT_SPLIT_WIDTH_KEY = 'compaas_chat_split_width';
-const TELEGRAM_CONFIGURED_KEY = 'compaas_telegram_configured';
 
 const PAGE_LABELS: Record<string, string> = {
   overview: 'Overview',
@@ -390,41 +389,6 @@ export default function Layout({
                   {formatPollInterval(pollIntervalMs)}
                 </span>
               </div>
-
-              <button
-                onClick={() => {
-                  const configured = getStoredBoolean(TELEGRAM_CONFIGURED_KEY);
-                  if (configured) {
-                    alert('Session handoff to Telegram initiated. Continue the conversation in your Telegram bot.');
-                  } else {
-                    onTabChange('settings');
-                    if (isMobileViewport) setMobileSidebarOpen(false);
-                  }
-                }}
-                title="Continue on Telegram"
-                style={{
-                  marginTop: '8px',
-                  width: '100%',
-                  padding: '6px 8px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--tf-border)',
-                  backgroundColor: 'transparent',
-                  color: 'var(--tf-text-secondary)',
-                  fontSize: '11px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.2s',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--tf-accent-blue)'; e.currentTarget.style.color = 'var(--tf-accent-blue)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--tf-border)'; e.currentTarget.style.color = 'var(--tf-text-secondary)'; }}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
-                </svg>
-                Continue on Telegram
-              </button>
             </>
           )}
         </div>

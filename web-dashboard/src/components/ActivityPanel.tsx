@@ -72,6 +72,43 @@ function eventDetailText(event: ActivityEvent): string {
   return '(no detail)';
 }
 
+function taskLabel(event: ActivityEvent): string {
+  const metadata = event.metadata || {};
+  const explicit = typeof metadata.task === 'string' ? metadata.task.trim() : '';
+  if (explicit) return explicit;
+  const detail = (event.detail || '').trim();
+  const commandMatch = detail.match(/running:\s*(.+)$/i);
+  if (commandMatch?.[1]) return commandMatch[1].trim().slice(0, 140);
+  const delegationMatch = detail.match(/delegating to\s+([a-z0-9\- ]+):?\s*(.*)$/i);
+  if (delegationMatch) {
+    const delegatedTask = delegationMatch[2]?.trim();
+    if (delegatedTask) return delegatedTask.slice(0, 140);
+  }
+  return detail.slice(0, 140);
+}
+
+function actorSummary(event: ActivityEvent): string {
+  const metadata = event.metadata || {};
+  const source = typeof metadata.source_agent === 'string' ? metadata.source_agent.trim() : '';
+  const target = typeof metadata.target_agent === 'string' ? metadata.target_agent.trim() : '';
+  if (source && target) return `${source} -> ${target}`;
+  return event.agent || 'System';
+}
+
+function extraSummaryRows(event: ActivityEvent): string[] {
+  const metadata = event.metadata || {};
+  const rows: string[] = [];
+  const command = typeof metadata.command === 'string' ? metadata.command.trim() : '';
+  const filePath = typeof metadata.file_path === 'string' ? metadata.file_path.trim() : '';
+  const workspacePath = typeof metadata.workspace_path === 'string' ? metadata.workspace_path.trim() : '';
+  const exitCode = typeof metadata.exit_code === 'number' ? metadata.exit_code : null;
+  if (command) rows.push(`Command: ${command}`);
+  if (filePath) rows.push(`File: ${filePath}`);
+  if (workspacePath) rows.push(`Workspace: ${workspacePath}`);
+  if (exitCode !== null) rows.push(`Exit: ${exitCode}`);
+  return rows.slice(0, 3);
+}
+
 // ---- Empty state ----
 function EmptyState() {
   return (
@@ -108,6 +145,9 @@ function EventBubble({ event, index }: EventBubbleProps) {
   const agentName = event.agent || 'System';
   const initial = agentName.charAt(0).toUpperCase();
   const color = agentAvatarColor(agentName);
+  const actor = actorSummary(event);
+  const task = taskLabel(event);
+  const extraRows = extraSummaryRows(event);
 
   return (
     <div
@@ -156,9 +196,19 @@ function EventBubble({ event, index }: EventBubbleProps) {
           className="rounded-lg px-3 py-2.5"
           style={{ backgroundColor: 'var(--tf-surface-raised)' }}
         >
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
-            {eventDetailText(event)}
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)', marginBottom: '4px' }}>
+            {task || '(no detail)'}
           </p>
+          <div className="space-y-1">
+            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+              <strong style={{ color: 'var(--tf-text-secondary)' }}>Who:</strong> {actor}
+            </p>
+            {extraRows.map((row) => (
+              <p key={row} className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+                {row}
+              </p>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -236,7 +286,8 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
     return all.filter((e) =>
       (e.agent || '').toLowerCase().includes(q) ||
       (e.action || '').toLowerCase().includes(q) ||
-      (e.detail || '').toLowerCase().includes(q)
+      (e.detail || '').toLowerCase().includes(q) ||
+      JSON.stringify(e.metadata || {}).toLowerCase().includes(q)
     );
   }, [events, auditSearch]);
 

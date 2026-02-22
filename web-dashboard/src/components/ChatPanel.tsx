@@ -5,6 +5,7 @@ import {
   clearChatHistory,
   createChatWebSocket,
   approveProjectPlan,
+  sendTelegramMessage,
   fetchMemory,
   addMemory,
   clearMemory,
@@ -42,6 +43,33 @@ function downloadFile(filename: string, content: string, mimeType: string) {
 // ---- Action text parser ----
 
 interface ActionInfo { label: string; icon: string; color: string; }
+
+function enrichActionText(
+  existing: string,
+  detail: { command?: string; filePath?: string; tool?: string },
+): string {
+  const trimmed = existing.trim();
+  const command = (detail.command || '').trim();
+  const filePath = (detail.filePath || '').trim();
+  const lower = trimmed.toLowerCase();
+
+  if (command && (
+    lower === 'running command…'
+    || lower.includes('details unavailable')
+    || lower.includes('using bash')
+    || lower.startsWith('running:')
+  )) {
+    const clipped = command.length > 180 ? `${command.slice(0, 177)}...` : command;
+    return `Running: ${clipped}`;
+  }
+
+  if (filePath && (lower.startsWith('write') || lower.startsWith('edit') || lower.startsWith('reading'))) {
+    const base = trimmed.split(':')[0] || trimmed;
+    return `${base}: ${filePath}`;
+  }
+
+  return trimmed;
+}
 
 function parseActionText(text: string): ActionInfo {
   const lower = text.toLowerCase();
@@ -108,6 +136,24 @@ const MICRO_COMPLEX_HINTS = [
   'strategy',
   'tradeoff',
 ];
+
+const TELEGRAM_KEYS = {
+  token: 'compaas_telegram_token',
+  chatId: 'compaas_telegram_chatid',
+  configured: 'compaas_telegram_configured',
+  mirror: 'compaas_telegram_mirror_enabled',
+} as const;
+
+function readTelegramCredentials(): { token: string; chatId: string; configured: boolean } {
+  try {
+    const token = localStorage.getItem(TELEGRAM_KEYS.token) ?? '';
+    const chatId = localStorage.getItem(TELEGRAM_KEYS.chatId) ?? '';
+    const configured = (localStorage.getItem(TELEGRAM_KEYS.configured) === 'true') && Boolean(token && chatId);
+    return { token, chatId, configured };
+  } catch {
+    return { token: '', chatId: '', configured: false };
+  }
+}
 
 function microComplexityReason(input: string): string | null {
   const text = input.trim();
@@ -343,6 +389,8 @@ interface ActionEntry {
 interface ActionDetailEntry {
   label: string;
   command?: string;
+  tool?: string;
+  file_path?: string;
   cwd?: string;
   duration_ms?: number;
   exit_code?: number;
@@ -629,6 +677,7 @@ interface ChatPanelProps {
   onMicroProjectModeChange?: (enabled: boolean) => void;
   onNavigateToProject?: (projectId: string) => void;
   onNavigateToProjects?: () => void;
+  onNavigateToSettings?: () => void;
   pendingApprovalProjects?: Project[];
   onProjectApproved?: (projectId: string) => void;
   projects?: Project[];
@@ -645,6 +694,7 @@ export default function ChatPanel({
   microProjectMode = false,
   onMicroProjectModeChange,
   onNavigateToProjects,
+  onNavigateToSettings,
   onNavigateToProject,
   pendingApprovalProjects = [],
   onProjectApproved,
@@ -658,7 +708,7 @@ export default function ChatPanel({
   const [isWaiting, setIsWaiting] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
-  const [showThinking, setShowThinking] = useState(false);
+  const showThinking = true;
   const [thinkingContent, setThinkingContent] = useState('');
   const [actionLog, setActionLog] = useState<ActionEntry[]>([]);
   const [actionDetails, setActionDetails] = useState<ActionDetailEntry[]>([]);
@@ -673,6 +723,16 @@ export default function ChatPanel({
 
   // Secondary actions menu
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+
+  // Telegram mirror mode
+  const [telegramMirrorEnabled, setTelegramMirrorEnabled] = useState(() => {
+    try {
+      return localStorage.getItem(TELEGRAM_KEYS.mirror) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [telegramConfigured, setTelegramConfigured] = useState(() => readTelegramCredentials().configured);
 
   // Feature: Micro Project mode (fast solo CEO path)
   const [showMicroApprovalCard, setShowMicroApprovalCard] = useState(false);
@@ -719,6 +779,26 @@ export default function ChatPanel({
   useEffect(() => { onActiveProjectChangeRef.current = onActiveProjectChange; }, [onActiveProjectChange]);
   useEffect(() => { onNewCeoMessageRef.current = onNewCeoMessage; }, [onNewCeoMessage]);
   useEffect(() => { if (showSearch) setTimeout(() => searchRef.current?.focus(), 50); }, [showSearch]);
+  useEffect(() => {
+    const syncTelegram = () => {
+      const creds = readTelegramCredentials();
+      setTelegramConfigured(creds.configured);
+      if (!creds.configured) {
+        setTelegramMirrorEnabled(false);
+      }
+    };
+    syncTelegram();
+    window.addEventListener('storage', syncTelegram);
+    return () => window.removeEventListener('storage', syncTelegram);
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TELEGRAM_KEYS.mirror, telegramMirrorEnabled ? 'true' : 'false');
+    } catch {
+      // ignore storage failures
+    }
+  }, [telegramMirrorEnabled]);
 
   // Pin
   const handlePin = useCallback((key: string) => {
@@ -807,18 +887,44 @@ export default function ChatPanel({
     });
   };
 
-  // Rough session token estimate: ~1.3 tokens per word
-  const sessionTokenEstimate = useMemo(() => {
-    const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
-    return Math.round(totalChars / 4); // ~4 chars per token
-  }, [messages]);
-
   const stopTypingAnimation = useCallback(() => {
     if (typingTimerRef.current) {
       clearTimeout(typingTimerRef.current);
       typingTimerRef.current = null;
     }
   }, []);
+
+  const mirrorTelegram = useCallback(async (speaker: string, content: string, projectId: string) => {
+    if (!telegramMirrorEnabled) return;
+    const creds = readTelegramCredentials();
+    if (!creds.configured) {
+      setTelegramConfigured(false);
+      setTelegramMirrorEnabled(false);
+      return;
+    }
+    const projectName = projects.find((project) => project.id === projectId)?.name || 'General';
+    const body = `[${projectName}] ${speaker}: ${content}`;
+    await sendTelegramMessage({
+      token: creds.token,
+      chat_id: creds.chatId,
+      text: body,
+    });
+  }, [projects, telegramMirrorEnabled]);
+
+  const safeMirrorTelegram = useCallback(async (speaker: string, content: string, projectId: string) => {
+    try {
+      await mirrorTelegram(speaker, content, projectId);
+    } catch {
+      setTelegramMirrorEnabled(false);
+      setTelegramConfigured(false);
+      setMessages((prev) => [...prev, {
+        role: 'ceo',
+        content: '[Warning] Telegram mirror failed. Re-check Telegram token/chat ID in Settings and enable again.',
+        timestamp: new Date().toISOString(),
+        project_id: projectId || activeProjectIdRef.current,
+      }]);
+    }
+  }, [mirrorTelegram]);
 
   const pushCeoMessage = useCallback((content: string, projectId: string) => {
     setMessages((prev) => [...prev, {
@@ -827,7 +933,8 @@ export default function ChatPanel({
       timestamp: new Date().toISOString(),
       project_id: projectId,
     }]);
-  }, []);
+    void safeMirrorTelegram(ceoName, content, projectId);
+  }, [ceoName, safeMirrorTelegram]);
 
   const completeAssistantTurn = useCallback(() => {
     turnErroredRef.current = false;
@@ -902,9 +1009,14 @@ export default function ChatPanel({
               {
                 const payload = wsContentObject(data.content);
                 if (!payload) break;
+                const command = payload.command ? String(payload.command) : undefined;
+                const tool = payload.tool ? String(payload.tool) : undefined;
+                const filePath = payload.file_path ? String(payload.file_path) : undefined;
                 setActionDetails((prev) => [...prev, {
                   label: String(payload.label || 'Action detail'),
-                  command: payload.command ? String(payload.command) : undefined,
+                  command,
+                  tool,
+                  file_path: filePath,
                   cwd: payload.cwd ? String(payload.cwd) : undefined,
                   duration_ms: typeof payload.duration_ms === 'number' ? payload.duration_ms : undefined,
                   exit_code: typeof payload.exit_code === 'number' ? payload.exit_code : undefined,
@@ -913,6 +1025,16 @@ export default function ChatPanel({
                   run_id: payload.run_id ? String(payload.run_id) : undefined,
                   at: new Date().toISOString(),
                 }].slice(-120));
+                if (String(payload.state || '').toLowerCase() === 'started') {
+                  setActionLog((prev) => {
+                    if (prev.length === 0) return prev;
+                    const last = prev[prev.length - 1];
+                    if (last.status !== 'running') return prev;
+                    const nextText = enrichActionText(last.text, { command, filePath, tool });
+                    if (nextText === last.text) return prev;
+                    return [...prev.slice(0, -1), { ...last, text: nextText }];
+                  });
+                }
               }
               break;
             case 'action_result':
@@ -1082,6 +1204,7 @@ export default function ChatPanel({
       timestamp: new Date().toISOString(),
       project_id: activeProjectId,
     }]);
+    void safeMirrorTelegram(userName, text, activeProjectId || '');
     setInput('');
     setIsWaiting(true);
     setStreamingContent('');
@@ -1111,7 +1234,7 @@ export default function ChatPanel({
       return;
     }
     ws.send(payload);
-  }, [input, isWaiting, connectWebSocket, microProjectMode, activeProjectId, stopTypingAnimation]);
+  }, [activeProjectId, connectWebSocket, input, isWaiting, microProjectMode, safeMirrorTelegram, stopTypingAnimation, userName]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -1135,6 +1258,15 @@ export default function ChatPanel({
   const visibleApprovals = pendingApprovalProjects.filter((p) => !dismissedProjectIds.has(p.id));
   const hasMessages = messages.length > 0 || streamingContent;
   const activeProject = projects.find((p) => p.id === activeProjectId) || null;
+  const showConversationPanel = Boolean(
+    hasMessages
+    || isWaiting
+    || microProjectMode
+    || telegramMirrorEnabled
+    || showMicroApprovalCard
+    || microPendingDecision
+    || planningPendingDecision
+  );
 
   // ---- Shared header controls ----
   const headerControls = (
@@ -1209,6 +1341,32 @@ export default function ChatPanel({
         Live Logs
       </button>
 
+      <button
+        onClick={() => {
+          const creds = readTelegramCredentials();
+          setTelegramConfigured(creds.configured);
+          if (!creds.configured) {
+            onNavigateToSettings?.();
+            return;
+          }
+          setTelegramMirrorEnabled((value) => !value);
+        }}
+        title={telegramConfigured ? 'Mirror this chat to Telegram bot messages' : 'Configure Telegram credentials in Settings first'}
+        style={{
+          padding: '5px 9px',
+          borderRadius: '6px',
+          fontSize: '12px',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          border: `1px solid ${telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+          backgroundColor: telegramMirrorEnabled ? 'rgba(88,166,255,0.12)' : 'transparent',
+          color: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+          opacity: telegramConfigured ? 1 : 0.75,
+        }}
+      >
+        Telegram {telegramMirrorEnabled ? 'On' : 'Off'}
+      </button>
+
       {/* Search */}
       <button onClick={() => { setShowSearch((v) => { if (v) setSearchQuery(''); return !v; }); }} title="Search messages"
         style={{ padding: '5px 9px', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', border: `1px solid ${showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`, backgroundColor: showSearch ? 'rgba(88,166,255,0.1)' : 'transparent', color: showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)' }}>
@@ -1227,18 +1385,19 @@ export default function ChatPanel({
       <div style={{ position: 'relative' }}>
         <button
           onClick={(e) => { e.stopPropagation(); setShowMoreMenu((v) => !v); }}
-          title="More actions"
+          title="Chat tools"
           style={{
             padding: '5px 9px',
             borderRadius: '6px',
-            fontSize: '13px',
+            fontSize: '12px',
             cursor: 'pointer',
             border: `1px solid ${showMoreMenu ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
             backgroundColor: showMoreMenu ? 'var(--tf-accent-dim)' : 'transparent',
             color: showMoreMenu ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+            fontWeight: 600,
           }}
         >
-          ⋯
+          Tools
         </button>
         {showMoreMenu && (
           <div
@@ -1274,14 +1433,6 @@ export default function ChatPanel({
                 </button>
               </>
             )}
-            {sessionTokenEstimate > 0 && (
-              <div
-                title={`Estimated session tokens: ${sessionTokenEstimate.toLocaleString()}`}
-                style={{ margin: '4px 0 2px', padding: '6px 10px', fontSize: '11px', color: 'var(--tf-text-muted)' }}
-              >
-                Session size: ~{sessionTokenEstimate >= 1000 ? `${(sessionTokenEstimate / 1000).toFixed(1)}k` : sessionTokenEstimate} tokens
-              </div>
-            )}
             <button
               onClick={() => {
                 setShowMemory((v) => !v);
@@ -1290,17 +1441,7 @@ export default function ChatPanel({
               title="Open CEO memory notes"
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-text-secondary)' }}
             >
-              CEO Memory{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
-            </button>
-            <button
-              onClick={() => {
-                setShowThinking((t) => !t);
-                setShowMoreMenu(false);
-              }}
-              title="Toggle CEO thinking trace preview"
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer', border: 'none', backgroundColor: showThinking ? 'var(--tf-surface-raised)' : 'transparent', color: 'var(--tf-text-secondary)' }}
-            >
-              {showThinking ? 'Hide thinking traces' : 'Show thinking traces'}
+              Memory Notes{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
             </button>
             {messages.length > 0 && (
               <button
@@ -1445,7 +1586,7 @@ export default function ChatPanel({
         className={`flex-1 overflow-y-auto ${floating ? 'px-3 py-3' : 'rounded-xl px-4 py-4'}`}
         style={floating ? { backgroundColor: 'var(--tf-bg)' } : { backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
       >
-        {!hasMessages && !isWaiting ? (
+        {!showConversationPanel ? (
           <EmptyState ceoName={ceoName} />
         ) : (
           <>
@@ -1493,6 +1634,23 @@ export default function ChatPanel({
                 </p>
                 <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
                   {ceoName} will work solo for speed. Output may be rougher than full-crew execution.
+                </p>
+              </div>
+            )}
+
+            {telegramMirrorEnabled && (
+              <div
+                className="mb-3 rounded-xl px-3 py-2 animate-slide-up"
+                style={{
+                  backgroundColor: 'rgba(88,166,255,0.1)',
+                  border: '1px solid rgba(88,166,255,0.35)',
+                }}
+              >
+                <p className="text-xs font-semibold" style={{ color: 'var(--tf-accent-blue)' }}>
+                  Telegram mirror is ON
+                </p>
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
+                  New user/CEO messages from this chat are mirrored to your configured Telegram bot conversation.
                 </p>
               </div>
             )}

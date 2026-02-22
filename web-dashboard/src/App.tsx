@@ -594,6 +594,7 @@ export default function App() {
             projects={filteredProjects}
             tasks={filteredAllTasks}
             events={filteredActivityEvents}
+            microProjectMode={microProjectMode}
             loadingAgents={loadingAgents}
             loadingProjects={loadingProjects}
             loadingTasks={loadingTasks}
@@ -686,6 +687,7 @@ export default function App() {
             projects={filteredProjects}
             tasks={filteredAllTasks}
             events={filteredActivityEvents}
+            microProjectMode={microProjectMode}
             loadingAgents={loadingAgents}
             loadingProjects={loadingProjects}
             loadingTasks={loadingTasks}
@@ -739,6 +741,10 @@ export default function App() {
             onMicroProjectModeChange={setMicroProjectMode}
             onNavigateToProjects={() => {
               setActiveTab('projects');
+              setChatOpen(false);
+            }}
+            onNavigateToSettings={() => {
+              setActiveTab('settings');
               setChatOpen(false);
             }}
             onNavigateToProject={navigateToProject}
