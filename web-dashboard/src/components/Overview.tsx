@@ -586,7 +586,6 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const hierarchyViewportRef = useRef<HTMLDivElement | null>(null);
   const hierarchyContentRef = useRef<HTMLDivElement | null>(null);
-  const [compactLayout, setCompactLayout] = useState(false);
   const [layoutMode, setLayoutMode] = useState<'hierarchy' | 'cluster' | 'timeline'>('hierarchy');
   const [hierarchyScale, setHierarchyScale] = useState(1);
   const [hierarchyHeight, setHierarchyHeight] = useState<number | null>(null);
@@ -780,19 +779,7 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
   }, [events]);
 
   useEffect(() => {
-    const node = chartContainerRef.current;
-    if (!node || typeof ResizeObserver === 'undefined') return;
-
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width ?? 0;
-      setCompactLayout(width > 0 && width < 1180);
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (layoutMode !== 'hierarchy' || compactLayout) return;
+    if (layoutMode !== 'hierarchy') return;
     const viewport = hierarchyViewportRef.current;
     const content = hierarchyContentRef.current;
     if (!viewport || !content || typeof ResizeObserver === 'undefined') return;
@@ -819,7 +806,7 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
       observer.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [layoutMode, compactLayout, agents.length, events.length]);
+  }, [layoutMode, agents.length, events.length]);
 
   if (loading) {
     return (
@@ -899,7 +886,7 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
             ))
           )}
         </div>
-      ) : (layoutMode === 'cluster' || compactLayout) ? (
+      ) : (layoutMode === 'cluster') ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {ceoAgent && (
             <div

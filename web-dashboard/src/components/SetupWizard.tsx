@@ -1055,13 +1055,13 @@ function StepBoardHead({
       </p>
       <div>
         <label
-          htmlFor="board-head-name"
+          htmlFor="chairman-name"
           style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
         >
-          Your name (Board Head)
+          Your name (Chairman)
         </label>
         <input
-          id="board-head-name"
+          id="chairman-name"
           type="text"
           value={userName}
           onChange={(e) => onUserNameChange(e.target.value)}
@@ -1551,7 +1551,7 @@ function StepComplete({
 
   const rows = [
     { label: 'AI Provider', value: providerLabel },
-    { label: 'Board Head', value: userName || '(not set)' },
+    { label: 'Chairman', value: userName || '(not set)' },
     { label: 'Team size', value: `${nameCount} agents configured` },
     { label: 'Theme', value: currentTheme.charAt(0).toUpperCase() + currentTheme.slice(1) },
     { label: 'Auto-open browser', value: autoOpenBrowser ? 'Enabled' : 'Disabled' },
@@ -1782,7 +1782,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [proxyEnabled, setProxyEnabled] = useState(false);
   const [proxyUrl, setProxyUrl] = useState('http://localhost:4000');
 
-  // Step 3 — Board Head name
+  // Step 3 — Chairman name
   const [userName, setUserName] = useState('');
 
   // Step 4 — Team Names
