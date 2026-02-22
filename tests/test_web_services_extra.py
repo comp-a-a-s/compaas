@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import yaml
@@ -169,6 +170,65 @@ def test_run_service_lifecycle_and_recovery(monkeypatch, tmp_path):
     assert recovered_run is not None
     assert recovered_run["status"] == "failed"
     assert any(item.get("metadata", {}).get("reason") == "recovered_interrupted_run" for item in recovered_run["timeline"])
+
+
+def test_run_service_runtime_guardrail_and_auto_expiry(monkeypatch, tmp_path):
+    data_dir = _make_data_dir(tmp_path)
+    settings = RuntimeSettings(
+        data_dir=data_dir,
+        project_root=str(tmp_path),
+        workspace_root=str(tmp_path / "workspace"),
+        max_project_concurrency=1,
+        duplicate_turn_window_seconds=600,
+    )
+
+    monkeypatch.setattr(
+        "src.web.services.run_service.resolve_sandbox_profile",
+        lambda _name: SandboxProfile(max_commands=50, max_runtime_seconds=60, max_files_touched=50),
+    )
+    service = RunService(data_dir, settings)
+    run, _ = service.create_run(
+        project_id="runtime-p1",
+        message="Build app shell",
+        provider="openai",
+    )
+    service.transition_run(run["id"], state="executing", label="Running")
+
+    # Backdate run to trigger runtime budget expiry logic.
+    registry_path = os.path.join(data_dir, "run_registry.yaml")
+    with open(registry_path, encoding="utf-8") as f:
+        registry = yaml.safe_load(f) or {"runs": []}
+    old_started = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    for row in registry.get("runs", []):
+        if row.get("id") == run["id"]:
+            row["started_at"] = old_started
+            row["status"] = "executing"
+            break
+    with open(registry_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(registry, f)
+
+    guardrails = service.guardrail_status(run["id"])
+    assert guardrails is not None
+    assert guardrails["runtime_exceeded"] is True
+    assert guardrails["over_budget"] is True
+    assert guardrails["max_runtime_seconds"] == 60
+
+    # New run for same project should auto-expire the stale one instead of 409.
+    next_run, created = service.create_run(
+        project_id="runtime-p1",
+        message="Build app shell v2",
+        provider="openai",
+    )
+    assert created is True
+    assert next_run["id"] != run["id"]
+
+    expired = service.get_run(run["id"])
+    assert expired is not None
+    assert expired["status"] == "failed"
+    assert any(
+        item.get("metadata", {}).get("reason") == "runtime_budget_exceeded"
+        for item in expired.get("timeline", [])
+    )
 
 
 def test_project_service_end_to_end(tmp_path):

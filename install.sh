@@ -127,6 +127,12 @@ echo -e "${YELLOW}[7/8] Initializing environment...${NC}"
 mkdir -p company_data/projects
 mkdir -p ~/projects
 
+# Fresh installs should start with an empty runtime state (no test/demo history).
+if [ ! -f company_data/config.yaml ]; then
+    rm -rf company_data/*
+    mkdir -p company_data/projects
+fi
+
 # Create .env if it doesn't exist
 if [ ! -f .env ]; then
     cp .env.example .env 2>/dev/null || cat > .env << 'ENVEOF'
@@ -152,11 +158,16 @@ echo -e "${GREEN}  ✓ Hooks made executable${NC}"
 
 # 8. Run tests
 echo -e "${YELLOW}[8/8] Running tests...${NC}"
-if python3 -m pytest tests/ -q 2>/dev/null; then
+TEST_SANDBOX_DIR="$(mktemp -d "${TMPDIR:-/tmp}/compaas-install-tests-XXXXXX")"
+TEST_DATA_DIR="$TEST_SANDBOX_DIR/company_data"
+TEST_WORKSPACE_DIR="$TEST_SANDBOX_DIR/projects"
+mkdir -p "$TEST_DATA_DIR" "$TEST_WORKSPACE_DIR"
+if COMPAAS_DATA_DIR="$TEST_DATA_DIR" COMPAAS_WORKSPACE_ROOT="$TEST_WORKSPACE_DIR" python3 -m pytest tests/ -q 2>/dev/null; then
     echo -e "${GREEN}  ✓ All tests passed${NC}"
 else
     echo -e "${RED}  ✗ Some tests failed — check output above${NC}"
 fi
+rm -rf "$TEST_SANDBOX_DIR"
 
 # Done!
 echo ""
