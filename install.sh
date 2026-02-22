@@ -87,20 +87,147 @@ offer_cli_install() {
     fi
 }
 
+run_with_privilege() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+        return $?
+    fi
+    if command -v sudo &>/dev/null; then
+        sudo "$@"
+        return $?
+    fi
+    echo -e "${RED}ERROR: sudo is required to auto-install Python.${NC}"
+    return 1
+}
+
+refresh_homebrew_shellenv() {
+    if [ -x /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+        return 0
+    fi
+    if [ -x /usr/local/bin/brew ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+        return 0
+    fi
+    return 1
+}
+
+install_python3_auto() {
+    local os_name
+    os_name="$(uname -s)"
+
+    if [ "$os_name" = "Darwin" ]; then
+        if ! command -v brew &>/dev/null; then
+            echo -e "${YELLOW}  ⚠ Homebrew not found. Installing Homebrew first...${NC}"
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            refresh_homebrew_shellenv || true
+        fi
+
+        if ! command -v brew &>/dev/null; then
+            echo -e "${RED}ERROR: Homebrew installation failed; cannot auto-install Python.${NC}"
+            return 1
+        fi
+
+        brew install python
+        return $?
+    fi
+
+    if command -v apt-get &>/dev/null; then
+        run_with_privilege apt-get update
+        run_with_privilege apt-get install -y python3 python3-venv python3-pip
+        return $?
+    fi
+    if command -v dnf &>/dev/null; then
+        run_with_privilege dnf install -y python3 python3-pip
+        return $?
+    fi
+    if command -v yum &>/dev/null; then
+        run_with_privilege yum install -y python3 python3-pip
+        return $?
+    fi
+    if command -v pacman &>/dev/null; then
+        run_with_privilege pacman -Sy --noconfirm python python-pip
+        return $?
+    fi
+    if command -v zypper &>/dev/null; then
+        run_with_privilege zypper --non-interactive install python3 python3-pip
+        return $?
+    fi
+    if command -v apk &>/dev/null; then
+        run_with_privilege apk add --no-cache python3 py3-pip
+        return $?
+    fi
+
+    echo -e "${RED}ERROR: Unsupported OS/package manager for automatic Python installation.${NC}"
+    return 1
+}
+
+check_python_version() {
+    if ! command -v python3 &>/dev/null; then
+        return 2
+    fi
+
+    PY_VERSION=$(python3 -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')")
+    local py_major py_minor
+    py_major=$(echo "$PY_VERSION" | cut -d. -f1)
+    py_minor=$(echo "$PY_VERSION" | cut -d. -f2)
+
+    if [ "$py_major" -lt 3 ] || ([ "$py_major" -eq 3 ] && [ "$py_minor" -lt 10 ]); then
+        return 3
+    fi
+    return 0
+}
+
+ensure_python_ready() {
+    local status
+    if check_python_version; then
+        echo -e "${GREEN}  ✓ Python $PY_VERSION${NC}"
+        return 0
+    fi
+    status=$?
+
+    if [ "$status" -eq 2 ]; then
+        echo -e "${YELLOW}  ⚠ Python 3 is not installed.${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Python 3.10+ is required (found $PY_VERSION).${NC}"
+    fi
+
+    if [ ! -t 0 ]; then
+        echo -e "${RED}ERROR: Non-interactive mode cannot auto-install Python. Install Python 3.10+ and rerun.${NC}"
+        return 1
+    fi
+
+    local install_python_now
+    read -r -p "  Press Enter to install the latest Python 3 and continue, or type 'n' to cancel: " install_python_now
+    if [[ "${install_python_now:-}" =~ ^[Nn]$ ]]; then
+        echo -e "${RED}ERROR: Python installation canceled. Install Python 3.10+ and rerun.${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}  Installing Python...${NC}"
+    if ! install_python3_auto; then
+        echo -e "${RED}ERROR: Automatic Python installation failed. Install Python manually and rerun.${NC}"
+        return 1
+    fi
+
+    refresh_homebrew_shellenv || true
+    hash -r
+
+    if ! check_python_version; then
+        echo -e "${RED}ERROR: Python 3.10+ is still unavailable on PATH after installation.${NC}"
+        echo -e "${YELLOW}Please restart your terminal (if needed), then rerun install.sh.${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}  ✓ Python $PY_VERSION${NC}"
+    return 0
+}
+
 # 1. Check Python 3.10+
 echo -e "${YELLOW}[1/8] Checking Python...${NC}"
-if ! command -v python3 &>/dev/null; then
-    echo -e "${RED}ERROR: python3 not found. Install Python 3.10+${NC}"
+if ! ensure_python_ready; then
     exit 1
 fi
-PY_VERSION=$(python3 -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')")
-PY_MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
-PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
-if [ "$PY_MAJOR" -lt 3 ] || ([ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]); then
-    echo -e "${RED}ERROR: Python 3.10+ required (found $PY_VERSION)${NC}"
-    exit 1
-fi
-echo -e "${GREEN}  ✓ Python $PY_VERSION${NC}"
 
 # 2. Check Node.js (optional, for web dashboard)
 echo -e "${YELLOW}[2/8] Checking Node.js (optional, for web dashboard)...${NC}"
