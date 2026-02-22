@@ -5,7 +5,6 @@ import {
   clearChatHistory,
   createChatWebSocket,
   approveProjectPlan,
-  createProject,
   sendTelegramMessage,
   fetchMemory,
   addMemory,
@@ -686,13 +685,14 @@ interface ChatPanelProps {
   microProjectMode?: boolean;
   onMicroProjectModeChange?: (enabled: boolean) => void;
   onNavigateToProject?: (projectId: string) => void;
-  onNavigateToProjects?: () => void;
-  onNavigateToSettings?: () => void;
   pendingApprovalProjects?: Project[];
   onProjectApproved?: (projectId: string) => void;
   projects?: Project[];
   activeProjectId?: string;
   onActiveProjectChange?: (projectId: string) => void;
+  telegramMirrorEnabled?: boolean;
+  onTelegramMirrorChange?: (enabled: boolean) => void;
+  microToggleRequestToken?: number;
 }
 
 export default function ChatPanel({
@@ -703,14 +703,15 @@ export default function ChatPanel({
   userName = 'You',
   microProjectMode = false,
   onMicroProjectModeChange,
-  onNavigateToProjects,
-  onNavigateToSettings,
   onNavigateToProject,
   pendingApprovalProjects = [],
   onProjectApproved,
   projects = [],
   activeProjectId = '',
   onActiveProjectChange,
+  telegramMirrorEnabled = false,
+  onTelegramMirrorChange,
+  microToggleRequestToken = 0,
 }: ChatPanelProps) {
   // Core state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -730,20 +731,7 @@ export default function ChatPanel({
   // Feature: Conversation search
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
-
-  // Project creation
-  const [creatingProject, setCreatingProject] = useState(false);
-  const [projectNotice, setProjectNotice] = useState('');
-
-  // Telegram mirror mode
-  const [telegramMirrorEnabled, setTelegramMirrorEnabled] = useState(() => {
-    try {
-      return localStorage.getItem(TELEGRAM_KEYS.mirror) === 'true';
-    } catch {
-      return false;
-    }
-  });
-  const [telegramConfigured, setTelegramConfigured] = useState(() => readTelegramCredentials().configured);
+  const [showToolsMenu, setShowToolsMenu] = useState(false);
 
   // Feature: Micro Project mode (fast solo CEO path)
   const [showMicroApprovalCard, setShowMicroApprovalCard] = useState(false);
@@ -796,26 +784,6 @@ export default function ChatPanel({
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
   useEffect(() => { if (showSearch) setTimeout(() => searchRef.current?.focus(), 50); }, [showSearch]);
-  useEffect(() => {
-    const syncTelegram = () => {
-      const creds = readTelegramCredentials();
-      setTelegramConfigured(creds.configured);
-      if (!creds.configured) {
-        setTelegramMirrorEnabled(false);
-      }
-    };
-    syncTelegram();
-    window.addEventListener('storage', syncTelegram);
-    return () => window.removeEventListener('storage', syncTelegram);
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(TELEGRAM_KEYS.mirror, telegramMirrorEnabled ? 'true' : 'false');
-    } catch {
-      // ignore storage failures
-    }
-  }, [telegramMirrorEnabled]);
 
   // Pin
   const handlePin = useCallback((key: string) => {
@@ -903,8 +871,7 @@ export default function ChatPanel({
     if (!telegramMirrorEnabledRef.current) return;
     const creds = readTelegramCredentials();
     if (!creds.configured) {
-      setTelegramConfigured(false);
-      setTelegramMirrorEnabled(false);
+      onTelegramMirrorChange?.(false);
       return;
     }
     const projectName = projectsRef.current.find((project) => project.id === projectId)?.name || 'General';
@@ -914,14 +881,13 @@ export default function ChatPanel({
       chat_id: creds.chatId,
       text: body,
     });
-  }, []);
+  }, [onTelegramMirrorChange]);
 
   const safeMirrorTelegram = useCallback(async (speaker: string, content: string, projectId: string) => {
     try {
       await mirrorTelegram(speaker, content, projectId);
     } catch {
-      setTelegramMirrorEnabled(false);
-      setTelegramConfigured(false);
+      onTelegramMirrorChange?.(false);
       setMessages((prev) => [...prev, {
         role: 'ceo',
         content: '[Warning] Telegram mirror failed. Re-check Telegram token/chat ID in Settings and enable again.',
@@ -929,7 +895,7 @@ export default function ChatPanel({
         project_id: projectId || activeProjectIdRef.current,
       }]);
     }
-  }, [mirrorTelegram]);
+  }, [mirrorTelegram, onTelegramMirrorChange]);
 
   const pushCeoMessage = useCallback((content: string, projectId: string) => {
     setMessages((prev) => [...prev, {
@@ -1204,32 +1170,14 @@ export default function ChatPanel({
     setShowMicroApprovalCard(true);
   }, []);
 
-  const handleCreateProject = useCallback(async () => {
-    if (creatingProject) return;
-    const suggestedName = input.trim()
-      ? `Project: ${input.trim().slice(0, 36)}`
-      : `Project ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
-    const name = window.prompt('Create new project', suggestedName);
-    if (!name || !name.trim()) return;
-    setCreatingProject(true);
-    setProjectNotice('');
-    const created = await createProject({
-      name: name.trim(),
-      description: `Created from CEO chat by ${userName}.`,
-      type: 'app',
-    });
-    setCreatingProject(false);
-    const nextProjectId = created?.project?.id;
-    if (!nextProjectId) {
-      setProjectNotice('Failed to create project. Please try again.');
-      return;
+  useEffect(() => {
+    if (microToggleRequestToken <= 0) return;
+    if (microProjectMode) {
+      setMicroMode(false);
+    } else {
+      tryEnableMicroMode();
     }
-    onActiveProjectChange?.(nextProjectId);
-    setProjectNotice(`Project "${created?.project?.name || name.trim()}" selected.`);
-    fetchChatHistory(150, nextProjectId).then((history) => {
-      if (Array.isArray(history)) setMessages(history);
-    }).catch(() => {});
-  }, [creatingProject, input, onActiveProjectChange, userName]);
+  }, [microProjectMode, microToggleRequestToken, setMicroMode, tryEnableMicroMode]);
 
   // Send message
   const sendMessage = useCallback((opts?: {
@@ -1243,7 +1191,7 @@ export default function ChatPanel({
     if (!activeProjectId) {
       setMessages((prev) => [...prev, {
         role: 'ceo',
-        content: 'Select a project (or create a new one) before starting CEO execution.',
+        content: 'Select or create a project from the top header before starting CEO execution.',
         timestamp: new Date().toISOString(),
         project_id: '',
       }]);
@@ -1314,7 +1262,10 @@ export default function ChatPanel({
 
   // Close menus on outside click
   useEffect(() => {
-    const close = () => { setShowMemory(false); };
+    const close = () => {
+      setShowMemory(false);
+      setShowToolsMenu(false);
+    };
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, []);
@@ -1333,268 +1284,180 @@ export default function ChatPanel({
   );
 
   // ---- Shared header controls ----
-  const projectContextControls = (
-    <div className="flex items-center gap-2 flex-wrap">
-      <span style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Project</span>
-      <select
-        value={activeProjectId}
-        onChange={(e) => {
-          setProjectNotice('');
-          onActiveProjectChange?.(e.target.value);
-        }}
-        disabled={isWaiting || creatingProject}
-        title="Select project context for CEO execution"
-        style={{
-          fontSize: '12px',
-          borderRadius: '6px',
-          border: '1px solid var(--tf-border)',
-          backgroundColor: 'var(--tf-surface)',
-          color: 'var(--tf-text)',
-          padding: '4px 8px',
-          minWidth: '170px',
-          opacity: isWaiting ? 0.72 : 1,
-          cursor: isWaiting ? 'not-allowed' : 'pointer',
-        }}
-      >
-        <option value="" disabled>{projects.length > 0 ? 'Select project…' : 'No projects yet'}</option>
-        {projects.map((project) => (
-          <option key={project.id} value={project.id}>
-            {project.name}
-          </option>
-        ))}
-      </select>
-      <button
-        onClick={() => { void handleCreateProject(); }}
-        disabled={creatingProject || isWaiting}
-        title="Create and immediately select a new project"
-        style={{
-          padding: '5px 9px',
-          borderRadius: '6px',
-          fontSize: '12px',
-          cursor: creatingProject || isWaiting ? 'not-allowed' : 'pointer',
-          border: '1px solid var(--tf-border)',
-          backgroundColor: 'transparent',
-          color: 'var(--tf-text-secondary)',
-          opacity: creatingProject || isWaiting ? 0.65 : 1,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {creatingProject ? 'Creating…' : 'New Project'}
-      </button>
-      <button
-        onClick={() => {
-          if (microProjectMode) {
-            setMicroMode(false);
-          } else {
-            tryEnableMicroMode();
-          }
-        }}
-        title="Micro Project mode: CEO-only fast path for very small tasks"
-        style={{
-          padding: '5px 9px',
-          borderRadius: '6px',
-          fontSize: '12px',
-          cursor: 'pointer',
-          border: `1px solid ${microProjectMode ? 'var(--tf-warning)' : 'var(--tf-border)'}`,
-          backgroundColor: microProjectMode ? 'rgba(240,170,74,0.14)' : 'transparent',
-          color: microProjectMode ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
-          fontWeight: microProjectMode ? 600 : 500,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        Micro {microProjectMode ? 'On' : 'Off'}
-      </button>
-    </div>
-  );
-
   const secondaryControls = (
-    <div className="chat-toolbar flex items-center gap-1" style={{ flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '2px' }}>
+    <div className="chat-toolbar flex items-center gap-2" style={{ position: 'relative' }}>
       <button
-        onClick={() => setShowActionDetails((v) => !v)}
-        title="Show detailed command/file execution log"
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowToolsMenu((v) => !v);
+        }}
+        title="Chat tools"
         style={{
-          padding: '5px 9px',
+          padding: '5px 10px',
           borderRadius: '6px',
           fontSize: '12px',
           cursor: 'pointer',
+          border: `1px solid ${showToolsMenu ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+          backgroundColor: showToolsMenu ? 'rgba(88,166,255,0.1)' : 'transparent',
+          color: showToolsMenu ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
           whiteSpace: 'nowrap',
-          border: `1px solid ${showActionDetails ? 'var(--tf-success)' : 'var(--tf-border)'}`,
-          backgroundColor: showActionDetails ? 'rgba(63,185,80,0.12)' : 'transparent',
-          color: showActionDetails ? 'var(--tf-success)' : 'var(--tf-text-muted)',
         }}
       >
-        Live Logs
+        Tools ▾
       </button>
 
-      <button
-        onClick={() => {
-          const creds = readTelegramCredentials();
-          setTelegramConfigured(creds.configured);
-          if (!creds.configured) {
-            onNavigateToSettings?.();
-            return;
-          }
-          setTelegramMirrorEnabled((value) => !value);
-        }}
-        title={telegramConfigured ? 'Mirror this chat to Telegram bot messages' : 'Configure Telegram credentials in Settings first'}
-        style={{
-          padding: '5px 9px',
-          borderRadius: '6px',
-          fontSize: '12px',
-          cursor: 'pointer',
-          whiteSpace: 'nowrap',
-          border: `1px solid ${telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
-          backgroundColor: telegramMirrorEnabled ? 'rgba(88,166,255,0.12)' : 'transparent',
-          color: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
-          opacity: telegramConfigured ? 1 : 0.75,
-        }}
-      >
-        Telegram {telegramMirrorEnabled ? 'On' : 'Off'}
-      </button>
-
-      <button
-        onClick={() => {
-          setShowSearch((v) => {
-            if (v) setSearchQuery('');
-            return !v;
-          });
-        }}
-        title="Search messages in this project conversation"
-        style={{
-          padding: '5px 9px',
-          borderRadius: '6px',
-          fontSize: '13px',
-          cursor: 'pointer',
-          border: `1px solid ${showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
-          backgroundColor: showSearch ? 'rgba(88,166,255,0.1)' : 'transparent',
-          color: showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
-        }}
-      >
-        ⌕
-      </button>
-
-      {pinnedIds.size > 0 && (
-        <button
-          onClick={() => setShowPinned((v) => !v)}
-          title={`${pinnedIds.size} pinned messages`}
+      {showToolsMenu && (
+        <div
+          onClick={(e) => e.stopPropagation()}
           style={{
-            padding: '5px 9px',
-            borderRadius: '6px',
-            fontSize: '12px',
-            cursor: 'pointer',
-            border: `1px solid ${showPinned ? 'var(--tf-warning)' : 'var(--tf-border)'}`,
-            backgroundColor: showPinned ? 'rgba(255,180,0,0.1)' : 'transparent',
-            color: showPinned ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Pin {pinnedIds.size}
-        </button>
-      )}
-
-      {messages.length > 0 && (
-        <button
-          onClick={() => { void handleClear(); }}
-          title="Clear message history for the selected project"
-          style={{
-            padding: '5px 9px',
-            borderRadius: '6px',
-            fontSize: '12px',
-            cursor: 'pointer',
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            zIndex: 52,
+            width: '220px',
+            backgroundColor: 'var(--tf-surface)',
             border: '1px solid var(--tf-border)',
-            backgroundColor: 'transparent',
-            color: 'var(--tf-text-muted)',
-            whiteSpace: 'nowrap',
+            borderRadius: '8px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+            overflow: 'hidden',
           }}
         >
-          Clear
-        </button>
+          <button
+            onClick={() => {
+              setShowActionDetails((v) => !v);
+              setShowToolsMenu(false);
+            }}
+            style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showActionDetails ? 'var(--tf-success)' : 'var(--tf-text-secondary)' }}
+          >
+            {showActionDetails ? 'Hide Live Logs' : 'Show Live Logs'}
+          </button>
+          <button
+            onClick={() => {
+              setShowSearch((v) => {
+                if (v) setSearchQuery('');
+                return !v;
+              });
+              setShowToolsMenu(false);
+            }}
+            style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showSearch ? 'var(--tf-accent-blue)' : 'var(--tf-text-secondary)' }}
+          >
+            {showSearch ? 'Hide Search' : 'Search Conversation'}
+          </button>
+          <button
+            onClick={() => {
+              setShowMemory((v) => !v);
+              setShowToolsMenu(false);
+            }}
+            style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showMemory ? 'var(--tf-accent-blue)' : 'var(--tf-text-secondary)' }}
+          >
+            Memory{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
+          </button>
+          {pinnedIds.size > 0 && (
+            <button
+              onClick={() => {
+                setShowPinned((v) => !v);
+                setShowToolsMenu(false);
+              }}
+              style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showPinned ? 'var(--tf-warning)' : 'var(--tf-text-secondary)' }}
+            >
+              {showPinned ? 'Hide Pinned Messages' : `Show Pinned (${pinnedIds.size})`}
+            </button>
+          )}
+          {messages.length > 0 && (
+            <button
+              onClick={() => {
+                void handleClear();
+                setShowToolsMenu(false);
+              }}
+              style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'var(--tf-text-secondary)' }}
+            >
+              Clear Conversation
+            </button>
+          )}
+        </div>
       )}
 
-      <div style={{ position: 'relative' }}>
-        <button
-          onClick={(e) => { e.stopPropagation(); setShowMemory((v) => !v); }}
-          title="Open CEO memory notes and retention policy"
+      {showMemory && (
+        <div
+          onClick={(e) => e.stopPropagation()}
           style={{
-            padding: '5px 9px',
-            borderRadius: '6px',
-            fontSize: '12px',
-            cursor: 'pointer',
-            border: `1px solid ${showMemory ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
-            backgroundColor: showMemory ? 'var(--tf-accent-dim)' : 'transparent',
-            color: showMemory ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
-            whiteSpace: 'nowrap',
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            zIndex: 50,
+            backgroundColor: 'var(--tf-surface)',
+            border: '1px solid var(--tf-border)',
+            borderRadius: '8px',
+            padding: '12px',
+            minWidth: '260px',
+            maxWidth: '320px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
           }}
         >
-          Memory{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
-        </button>
-        {showMemory && (
-          <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50, backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', borderRadius: '8px', padding: '12px', minWidth: '260px', maxWidth: '320px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <p style={{ fontSize: '12px', fontWeight: 600, color: 'var(--tf-text)' }}>CEO Memory</p>
-              {memoryEntries.length > 0 && (
-                <button onClick={handleClearMemory} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer', border: '1px solid var(--tf-error)', backgroundColor: 'transparent', color: 'var(--tf-error)' }}>
-                  Clear all
-                </button>
-              )}
-            </div>
-            {memoryEntries.length === 0 ? (
-              <p style={{ fontSize: '12px', color: 'var(--tf-text-muted)', marginBottom: '8px' }}>No memories saved yet. Add a note the CEO should always remember.</p>
-            ) : (
-              <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 8px', maxHeight: '140px', overflowY: 'auto' }}>
-                {memoryEntries.map((e, i) => (
-                  <li key={i} style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', padding: '3px 0', borderBottom: '1px solid var(--tf-border)', lineHeight: 1.4 }}>
-                    · {e}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div style={{ display: 'grid', gap: '6px', marginBottom: '8px', padding: '8px', borderRadius: '6px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Memory scope</label>
-                <select
-                  value={memoryScope}
-                  onChange={(e) => {
-                    const scope = e.target.value as 'global' | 'project' | 'session-only';
-                    persistMemoryPolicy(scope, memoryRetentionDays);
-                  }}
-                  style={{ fontSize: '11px', borderRadius: '4px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)', color: 'var(--tf-text)', padding: '2px 6px' }}
-                >
-                  <option value="global">Global</option>
-                  <option value="project">Project</option>
-                  <option value="session-only">Session only</option>
-                </select>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Retention (days)</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={365}
-                  value={memoryRetentionDays}
-                  onChange={(e) => {
-                    const days = Math.max(1, Math.min(365, Number(e.target.value) || 30));
-                    persistMemoryPolicy(memoryScope, days);
-                  }}
-                  style={{ width: '72px', fontSize: '11px', borderRadius: '4px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)', color: 'var(--tf-text)', padding: '2px 6px' }}
-                />
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
-              <input
-                value={newMemoryText}
-                onChange={(e) => setNewMemoryText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleAddMemory(); }}
-                placeholder="Add a memory…"
-                style={{ flex: 1, fontSize: '11px', padding: '4px 8px', borderRadius: '5px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-text)', outline: 'none' }}
-              />
-              <button onClick={() => { void handleAddMemory(); }} disabled={memorySaving || !newMemoryText.trim()} style={{ padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: 'none', backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}>
-                {memorySaving ? '…' : '+'}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <p style={{ fontSize: '12px', fontWeight: 600, color: 'var(--tf-text)' }}>CEO Memory</p>
+            {memoryEntries.length > 0 && (
+              <button onClick={handleClearMemory} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer', border: '1px solid var(--tf-error)', backgroundColor: 'transparent', color: 'var(--tf-error)' }}>
+                Clear all
               </button>
+            )}
+          </div>
+          {memoryEntries.length === 0 ? (
+            <p style={{ fontSize: '12px', color: 'var(--tf-text-muted)', marginBottom: '8px' }}>No memories saved yet. Add a note the CEO should always remember.</p>
+          ) : (
+            <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 8px', maxHeight: '140px', overflowY: 'auto' }}>
+              {memoryEntries.map((entry, i) => (
+                <li key={i} style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', padding: '3px 0', borderBottom: '1px solid var(--tf-border)', lineHeight: 1.4 }}>
+                  · {entry}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div style={{ display: 'grid', gap: '6px', marginBottom: '8px', padding: '8px', borderRadius: '6px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Memory scope</label>
+              <select
+                value={memoryScope}
+                onChange={(e) => {
+                  const scope = e.target.value as 'global' | 'project' | 'session-only';
+                  persistMemoryPolicy(scope, memoryRetentionDays);
+                }}
+                style={{ fontSize: '11px', borderRadius: '4px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)', color: 'var(--tf-text)', padding: '2px 6px' }}
+              >
+                <option value="global">Global</option>
+                <option value="project">Project</option>
+                <option value="session-only">Session only</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Retention (days)</label>
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={memoryRetentionDays}
+                onChange={(e) => {
+                  const days = Math.max(1, Math.min(365, Number(e.target.value) || 30));
+                  persistMemoryPolicy(memoryScope, days);
+                }}
+                style={{ width: '72px', fontSize: '11px', borderRadius: '4px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)', color: 'var(--tf-text)', padding: '2px 6px' }}
+              />
             </div>
           </div>
-        )}
-      </div>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <input
+              value={newMemoryText}
+              onChange={(e) => setNewMemoryText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleAddMemory(); }}
+              placeholder="Add a memory..."
+              style={{ flex: 1, fontSize: '11px', padding: '4px 8px', borderRadius: '5px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)', color: 'var(--tf-text)', outline: 'none' }}
+            />
+            <button onClick={() => { void handleAddMemory(); }} disabled={memorySaving || !newMemoryText.trim()} style={{ padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: 'none', backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}>
+              {memorySaving ? '...' : '+'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -1616,7 +1479,9 @@ export default function ChatPanel({
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <h3 className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>{ceoName} — CEO Chat</h3>
               <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>AI Virtual Company Orchestrator</p>
-              {projectContextControls}
+              <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+                Project: {activeProject ? activeProject.name : 'No project selected'}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -1631,12 +1496,9 @@ export default function ChatPanel({
         <div className="flex items-start justify-between px-3 py-2 flex-shrink-0 gap-2" style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
           <div className="flex items-start gap-2 flex-wrap">
             <StatusBadge status={connectionStatus} />
-            {onNavigateToProjects && (
-              <button onClick={onNavigateToProjects} title="Open the Projects tab" style={{ padding: '2px 8px', borderRadius: '4px', border: 'none', backgroundColor: 'transparent', color: 'var(--tf-accent-blue)', fontSize: '11px', cursor: 'pointer' }}>
-                Projects ↗
-              </button>
-            )}
-            {projectContextControls}
+            <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+              Project: {activeProject ? activeProject.name : 'No project selected'}
+            </span>
           </div>
           {secondaryControls}
         </div>
@@ -1694,12 +1556,7 @@ export default function ChatPanel({
               )}
               {!activeProject && (
                 <p className="text-xs mt-1" style={{ color: 'var(--tf-warning)' }}>
-                  Select or create a project above before sending a CEO message.
-                </p>
-              )}
-              {projectNotice && (
-                <p className="text-xs mt-1" style={{ color: 'var(--tf-accent-blue)' }}>
-                  {projectNotice}
+                  Select or create a project from the top header before sending a CEO message.
                 </p>
               )}
             </div>

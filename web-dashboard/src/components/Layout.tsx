@@ -1,6 +1,7 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import Tooltip from './Tooltip';
 import CompassRoseLogo from './CompassRoseLogo';
+import type { Project } from '../types';
 
 interface LayoutProps {
   activeTab: string;
@@ -15,6 +16,14 @@ interface LayoutProps {
   microProjectMode?: boolean;
   globalSearchQuery?: string;
   onGlobalSearchQueryChange?: (value: string) => void;
+  projects?: Project[];
+  activeProjectId?: string;
+  onActiveProjectChange?: (projectId: string) => void;
+  onCreateProjectRequest?: () => void;
+  telegramMirrorEnabled?: boolean;
+  telegramConfigured?: boolean;
+  onToggleTelegramMirror?: () => void;
+  onRequestMicroToggle?: () => void;
 }
 
 const NAV_ITEMS = [
@@ -28,6 +37,7 @@ const NAV_ITEMS = [
 
 const SIDEBAR_COLLAPSED_KEY = 'compaas_sidebar_collapsed';
 const CHAT_SPLIT_WIDTH_KEY = 'compaas_chat_split_width';
+const PROJECT_CREATE_SENTINEL = '__create_new_project__';
 
 const PAGE_LABELS: Record<string, string> = {
   overview: 'Overview',
@@ -50,7 +60,7 @@ function formatPollInterval(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s poll`;
 }
 
-function CeoBadge({ ceoName, microProjectMode = false }: { ceoName: string; microProjectMode?: boolean }) {
+function CeoBadge({ ceoName }: { ceoName: string }) {
   return (
     <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
       <div
@@ -67,25 +77,7 @@ function CeoBadge({ ceoName, microProjectMode = false }: { ceoName: string; micr
         <div className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>
           CEO Chat
         </div>
-        <div className="text-[10px] flex items-center gap-1.5" style={{ color: 'var(--tf-text-muted)' }}>
-          <span>{ceoName}</span>
-          {microProjectMode && (
-            <span
-              style={{
-                padding: '1px 5px',
-                borderRadius: '999px',
-                border: '1px solid rgba(240,170,74,0.45)',
-                color: 'var(--tf-warning)',
-                backgroundColor: 'rgba(240,170,74,0.1)',
-                fontSize: '9px',
-                fontWeight: 600,
-                letterSpacing: '0.02em',
-              }}
-            >
-              MICRO
-            </span>
-          )}
-        </div>
+        <div className="text-[10px]" style={{ color: 'var(--tf-text-muted)' }}>{ceoName}</div>
       </div>
     </div>
   );
@@ -104,6 +96,14 @@ export default function Layout({
   microProjectMode = false,
   globalSearchQuery = '',
   onGlobalSearchQueryChange,
+  projects = [],
+  activeProjectId = '',
+  onActiveProjectChange,
+  onCreateProjectRequest,
+  telegramMirrorEnabled = false,
+  telegramConfigured = false,
+  onToggleTelegramMirror,
+  onRequestMicroToggle,
 }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getStoredBoolean(SIDEBAR_COLLAPSED_KEY));
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -161,19 +161,30 @@ export default function Layout({
     };
   }, [draggingSplit, isMobileViewport, maxChatWidth, chatSplitWidth]);
 
-  const today = useMemo(() => new Date().toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }), []);
-
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
       localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
       return next;
     });
+  };
+
+  const handleProjectSelection = (projectId: string) => {
+    if (projectId === PROJECT_CREATE_SENTINEL) {
+      onCreateProjectRequest?.();
+      return;
+    }
+    onActiveProjectChange?.(projectId);
+  };
+
+  const splitHeaderButtonBase: React.CSSProperties = {
+    padding: '4px 8px',
+    borderRadius: '6px',
+    fontSize: '11px',
+    fontWeight: 600,
+    border: '1px solid var(--tf-border)',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
   };
 
   return (
@@ -425,7 +436,7 @@ export default function Layout({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="header-controls flex items-center gap-2">
             <Tooltip content={chatOpen ? 'Close CEO chat' : 'Open CEO chat'} position="bottom">
               <button
                 onClick={onChatToggle}
@@ -489,12 +500,48 @@ export default function Layout({
             </Tooltip>
 
             <div
-              className="text-xs px-2.5 py-1.5 rounded-full"
-              style={{ color: 'var(--tf-text-secondary)', backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
+              className="header-project-context"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 8px',
+                borderRadius: '999px',
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-surface)',
+                minWidth: '240px',
+                maxWidth: isMobileViewport ? 'min(56vw, 280px)' : '320px',
+              }}
             >
-              {today}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: 'var(--tf-text-muted)', flexShrink: 0 }}>
+                <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              <select
+                value={activeProjectId || ''}
+                onChange={(e) => handleProjectSelection(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  color: 'var(--tf-text)',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                }}
+                aria-label="Global project selector"
+                title="Select active project context"
+              >
+                <option value="" disabled>{projects.length > 0 ? 'Select project...' : 'No projects yet'}</option>
+                <option value={PROJECT_CREATE_SENTINEL}>+ Create New Project...</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
             </div>
             <div
+              className="header-global-search"
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -538,19 +585,46 @@ export default function Layout({
                 className="flex items-center justify-between px-4 py-3 flex-shrink-0"
                 style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
               >
-                <CeoBadge ceoName={ceoName} microProjectMode={microProjectMode} />
-                <button
-                  onClick={onChatToggle}
-                  className="w-6 h-6 rounded flex items-center justify-center cursor-pointer"
-                  style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)'; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                  aria-label="Close CEO chat"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                <CeoBadge ceoName={ceoName} />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={onRequestMicroToggle}
+                    title="Micro Project mode: CEO-only fast path for very small tasks"
+                    style={{
+                      ...splitHeaderButtonBase,
+                      borderColor: microProjectMode ? 'var(--tf-warning)' : 'var(--tf-border)',
+                      backgroundColor: microProjectMode ? 'rgba(240,170,74,0.14)' : 'transparent',
+                      color: microProjectMode ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
+                    }}
+                  >
+                    Micro {microProjectMode ? 'On' : 'Off'}
+                  </button>
+                  <button
+                    onClick={onToggleTelegramMirror}
+                    title={telegramConfigured ? 'Mirror this chat to Telegram messages' : 'Configure Telegram in Settings first'}
+                    style={{
+                      ...splitHeaderButtonBase,
+                      borderColor: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-border)',
+                      backgroundColor: telegramMirrorEnabled ? 'rgba(88,166,255,0.12)' : 'transparent',
+                      color: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+                      opacity: telegramConfigured ? 1 : 0.7,
+                    }}
+                  >
+                    Telegram {telegramMirrorEnabled ? 'On' : 'Off'}
+                  </button>
+                  <button
+                    onClick={onChatToggle}
+                    className="w-6 h-6 rounded flex items-center justify-center cursor-pointer"
+                    style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                    aria-label="Close CEO chat"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
               </div>
               <div className="flex-1 overflow-hidden">{chatPanel}</div>
             </div>
@@ -607,19 +681,46 @@ export default function Layout({
                 className="flex items-center justify-between px-4 py-3 flex-shrink-0"
                 style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
               >
-                <CeoBadge ceoName={ceoName} microProjectMode={microProjectMode} />
-                <button
-                  onClick={onChatToggle}
-                  className="w-6 h-6 rounded flex items-center justify-center cursor-pointer"
-                  style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)'; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
-                  aria-label="Close CEO chat"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                <CeoBadge ceoName={ceoName} />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={onRequestMicroToggle}
+                    title="Micro Project mode: CEO-only fast path for very small tasks"
+                    style={{
+                      ...splitHeaderButtonBase,
+                      borderColor: microProjectMode ? 'var(--tf-warning)' : 'var(--tf-border)',
+                      backgroundColor: microProjectMode ? 'rgba(240,170,74,0.14)' : 'transparent',
+                      color: microProjectMode ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
+                    }}
+                  >
+                    Micro {microProjectMode ? 'On' : 'Off'}
+                  </button>
+                  <button
+                    onClick={onToggleTelegramMirror}
+                    title={telegramConfigured ? 'Mirror this chat to Telegram messages' : 'Configure Telegram in Settings first'}
+                    style={{
+                      ...splitHeaderButtonBase,
+                      borderColor: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-border)',
+                      backgroundColor: telegramMirrorEnabled ? 'rgba(88,166,255,0.12)' : 'transparent',
+                      color: telegramMirrorEnabled ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+                      opacity: telegramConfigured ? 1 : 0.7,
+                    }}
+                  >
+                    Telegram {telegramMirrorEnabled ? 'On' : 'Off'}
+                  </button>
+                  <button
+                    onClick={onChatToggle}
+                    className="w-6 h-6 rounded flex items-center justify-center cursor-pointer"
+                    style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent'; }}
+                    aria-label="Close CEO chat"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
               </div>
               <div className="flex-1 overflow-hidden">{chatPanel}</div>
             </aside>
