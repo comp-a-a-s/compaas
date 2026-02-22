@@ -61,18 +61,21 @@ offer_cli_install() {
     echo -e "${YELLOW}    Install command: npm install -g ${npm_package}${NC}"
 
     if ! command -v npm &>/dev/null; then
-        echo -e "${YELLOW}    npm is unavailable, skipping auto-install${NC}"
-        return 0
+        echo -e "${YELLOW}    npm is unavailable. Node.js (with npm) is required first.${NC}"
+        if ! ensure_nodejs_ready "install ${cli_label}"; then
+            echo -e "${YELLOW}    ↷ Skipping ${cli_label} installation (npm unavailable).${NC}"
+            return 0
+        fi
     fi
 
     if [ -t 0 ]; then
-        read -r -p "  Install ${cli_label} now? [y/N] " INSTALL_NOW
+        read -r -p "  Press Enter to install ${cli_label}, or type 'n' to skip: " INSTALL_NOW
     else
         INSTALL_NOW="n"
     fi
-    INSTALL_NOW=${INSTALL_NOW:-N}
-
-    if [[ "$INSTALL_NOW" =~ ^[Yy]$ ]]; then
+    if [[ "${INSTALL_NOW:-}" =~ ^[Nn]$ ]]; then
+        echo -e "${YELLOW}  ↷ Skipping ${cli_label} installation${NC}"
+    else
         if npm install -g "$npm_package"; then
             if command -v "$cli_bin" &>/dev/null; then
                 echo -e "${GREEN}  ✓ ${cli_label} installed${NC}"
@@ -82,8 +85,6 @@ offer_cli_install() {
         else
             echo -e "${YELLOW}  ⚠ Failed to install ${cli_label}; continuing setup${NC}"
         fi
-    else
-        echo -e "${YELLOW}  ↷ Skipping ${cli_label} installation${NC}"
     fi
 }
 
@@ -96,7 +97,7 @@ run_with_privilege() {
         sudo "$@"
         return $?
     fi
-    echo -e "${RED}ERROR: sudo is required to auto-install Python.${NC}"
+    echo -e "${RED}ERROR: sudo is required to auto-install this dependency.${NC}"
     return 1
 }
 
@@ -160,6 +161,187 @@ install_python3_auto() {
 
     echo -e "${RED}ERROR: Unsupported OS/package manager for automatic Python installation.${NC}"
     return 1
+}
+
+install_nodejs_auto() {
+    local os_name
+    os_name="$(uname -s)"
+
+    if [ "$os_name" = "Darwin" ]; then
+        if ! command -v brew &>/dev/null; then
+            echo -e "${YELLOW}  ⚠ Homebrew not found. Installing Homebrew first...${NC}"
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            refresh_homebrew_shellenv || true
+        fi
+
+        if ! command -v brew &>/dev/null; then
+            echo -e "${RED}ERROR: Homebrew installation failed; cannot auto-install Node.js.${NC}"
+            return 1
+        fi
+
+        brew install node
+        return $?
+    fi
+
+    if command -v apt-get &>/dev/null; then
+        run_with_privilege apt-get update
+        run_with_privilege apt-get install -y nodejs npm
+        return $?
+    fi
+    if command -v dnf &>/dev/null; then
+        run_with_privilege dnf install -y nodejs npm
+        return $?
+    fi
+    if command -v yum &>/dev/null; then
+        run_with_privilege yum install -y nodejs npm
+        return $?
+    fi
+    if command -v pacman &>/dev/null; then
+        run_with_privilege pacman -Sy --noconfirm nodejs npm
+        return $?
+    fi
+    if command -v zypper &>/dev/null; then
+        run_with_privilege zypper --non-interactive install nodejs npm
+        return $?
+    fi
+    if command -v apk &>/dev/null; then
+        run_with_privilege apk add --no-cache nodejs npm
+        return $?
+    fi
+
+    echo -e "${RED}ERROR: Unsupported OS/package manager for automatic Node.js installation.${NC}"
+    return 1
+}
+
+check_node_version() {
+    if ! command -v node &>/dev/null; then
+        return 2
+    fi
+
+    NODE_VERSION=$(node -v | sed 's/^v//')
+    local node_major
+    node_major=$(echo "$NODE_VERSION" | cut -d. -f1)
+
+    if [ "$node_major" -lt 18 ]; then
+        return 3
+    fi
+    return 0
+}
+
+ensure_nodejs_ready() {
+    local reason="${1:-continue}"
+    local status
+    if check_node_version && command -v npm &>/dev/null; then
+        local node_display npm_display
+        node_display=$(node -v 2>/dev/null || echo "v$NODE_VERSION")
+        npm_display=$(npm -v 2>/dev/null || echo "unknown")
+        echo -e "${GREEN}  ✓ Node.js ${node_display}${NC}"
+        echo -e "${GREEN}  ✓ npm ${npm_display}${NC}"
+        return 0
+    fi
+    status=$?
+
+    if [ "$status" -eq 2 ]; then
+        echo -e "${YELLOW}  ⚠ Node.js/npm are not installed.${NC}"
+    elif [ "$status" -eq 3 ]; then
+        echo -e "${YELLOW}  ⚠ Node.js 18+ is required (found v${NODE_VERSION}).${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ npm is not installed.${NC}"
+    fi
+
+    if [ ! -t 0 ]; then
+        echo -e "${YELLOW}  ⚠ Non-interactive mode: cannot auto-install Node.js/npm for ${reason}.${NC}"
+        return 1
+    fi
+
+    local install_node_now
+    read -r -p "  Press Enter to install the latest Node.js (includes npm) and continue to ${reason}, or type 'n' to skip: " install_node_now
+    if [[ "${install_node_now:-}" =~ ^[Nn]$ ]]; then
+        echo -e "${YELLOW}  ↷ Skipping Node.js/npm installation${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}  Installing Node.js...${NC}"
+    if ! install_nodejs_auto; then
+        echo -e "${YELLOW}  ⚠ Automatic Node.js installation failed.${NC}"
+        return 1
+    fi
+
+    refresh_homebrew_shellenv || true
+    hash -r
+
+    if ! check_node_version || ! command -v npm &>/dev/null; then
+        echo -e "${YELLOW}  ⚠ Node.js/npm still unavailable after install. Restart terminal and rerun install.sh.${NC}"
+        return 1
+    fi
+
+    local node_display npm_display
+    node_display=$(node -v 2>/dev/null || echo "v$NODE_VERSION")
+    npm_display=$(npm -v 2>/dev/null || echo "unknown")
+    echo -e "${GREEN}  ✓ Node.js ${node_display}${NC}"
+    echo -e "${GREEN}  ✓ npm ${npm_display}${NC}"
+    return 0
+}
+
+install_ollama_auto() {
+    local os_name
+    os_name="$(uname -s)"
+
+    if [ "$os_name" = "Darwin" ]; then
+        if ! command -v brew &>/dev/null; then
+            echo -e "${YELLOW}  ⚠ Homebrew not found. Installing Homebrew first...${NC}"
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            refresh_homebrew_shellenv || true
+        fi
+        if ! command -v brew &>/dev/null; then
+            echo -e "${RED}ERROR: Homebrew installation failed; cannot auto-install Ollama.${NC}"
+            return 1
+        fi
+        brew install --cask ollama
+        return $?
+    fi
+
+    if command -v curl &>/dev/null; then
+        curl -fsSL https://ollama.com/install.sh | sh
+        return $?
+    fi
+
+    echo -e "${RED}ERROR: curl is required to auto-install Ollama.${NC}"
+    return 1
+}
+
+offer_ollama_install() {
+    if command -v ollama &>/dev/null; then
+        echo -e "${GREEN}  ✓ Ollama found${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}  ⚠ Ollama not found (optional for local model mode)${NC}"
+    echo -e "${YELLOW}    Install source: https://ollama.com/download${NC}"
+
+    if [ ! -t 0 ]; then
+        echo -e "${YELLOW}  ⚠ Non-interactive mode: skipping Ollama auto-install.${NC}"
+        return 0
+    fi
+
+    local install_ollama_now
+    read -r -p "  Press Enter to install Ollama now, or type 'n' to skip: " install_ollama_now
+    if [[ "${install_ollama_now:-}" =~ ^[Nn]$ ]]; then
+        echo -e "${YELLOW}  ↷ Skipping Ollama installation${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}  Installing Ollama...${NC}"
+    if install_ollama_auto; then
+        hash -r
+        if command -v ollama &>/dev/null; then
+            echo -e "${GREEN}  ✓ Ollama installed${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Ollama installed but not on PATH yet. Re-open terminal if needed.${NC}"
+        fi
+    else
+        echo -e "${YELLOW}  ⚠ Failed to install Ollama; continuing setup${NC}"
+    fi
 }
 
 check_python_version() {
@@ -231,9 +413,7 @@ fi
 
 # 2. Check Node.js (optional, for web dashboard)
 echo -e "${YELLOW}[2/8] Checking Node.js (optional, for web dashboard)...${NC}"
-if command -v node &>/dev/null; then
-    NODE_VERSION=$(node --version)
-    echo -e "${GREEN}  ✓ Node.js $NODE_VERSION${NC}"
+if ensure_nodejs_ready "web dashboard and CLI tools"; then
     HAS_NODE=true
 else
     echo -e "${YELLOW}  ⚠ Node.js not found — web dashboard will not be built${NC}"
@@ -245,12 +425,7 @@ fi
 echo -e "${YELLOW}[3/8] Checking AI runtime CLIs (optional)...${NC}"
 offer_cli_install "Claude Code CLI" "claude" "@anthropic-ai/claude-code"
 offer_cli_install "Codex CLI" "codex" "@openai/codex"
-if command -v ollama &>/dev/null; then
-    echo -e "${GREEN}  ✓ Ollama found${NC}"
-else
-    echo -e "${YELLOW}  ⚠ Ollama not found (optional for local model mode)${NC}"
-    echo -e "${YELLOW}    Install: https://ollama.com/download${NC}"
-fi
+offer_ollama_install
 
 # 4. Create Python virtual environment
 echo -e "${YELLOW}[4/8] Setting up Python virtual environment...${NC}"
