@@ -1455,10 +1455,18 @@ function StepTelegram({
       </div>
 
       <div style={{ padding: '14px', backgroundColor: 'rgba(44,165,224,0.08)', border: '1px solid rgba(44,165,224,0.25)', borderRadius: '8px', marginBottom: '20px' }}>
-        <p style={{ fontSize: '12px', color: '#2ca5e0' }}>
-          <strong>How it works:</strong> Create a Telegram bot via @BotFather, add it to a chat, then paste the credentials here.
-          Then enable the Telegram mirror toggle directly in CEO Chat.
+        <p style={{ fontSize: '12px', color: '#2ca5e0', marginBottom: '8px' }}>
+          <strong>How it works:</strong> COMPaaS can mirror the active CEO project chat to Telegram when you enable Telegram in CEO Chat.
         </p>
+        <ol style={{ margin: '0 0 0 16px', padding: 0, color: C.textSecondary, fontSize: '11px', lineHeight: 1.55 }}>
+          <li style={{ marginBottom: '5px' }}>Open Telegram and message <strong>@BotFather</strong>.</li>
+          <li style={{ marginBottom: '5px' }}>Run <Code>/newbot</Code>, choose a bot name + username, copy the bot token.</li>
+          <li style={{ marginBottom: '5px' }}>Send one message to your bot (required so chat id appears in updates).</li>
+          <li style={{ marginBottom: '5px' }}>
+            Open <Code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</Code> and copy <Code>chat.id</Code>.
+          </li>
+          <li>Paste token + chat id here, finish setup, then switch Telegram <strong>On</strong> inside CEO Chat.</li>
+        </ol>
       </div>
 
       {/* Bot token input */}
@@ -1496,7 +1504,7 @@ function StepTelegram({
       </div>
 
       <p style={{ fontSize: '11px', color: C.textMuted, marginTop: '12px' }}>
-        You can skip this step and configure Telegram later in Settings.
+        You can skip this step and configure Telegram later in Settings. Group chats often use IDs starting with <Code>-100</Code>.
       </p>
     </div>
   );

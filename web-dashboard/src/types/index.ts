@@ -3,6 +3,10 @@ export interface Agent {
   name: string;
   role: string;
   model: string;
+  runtime_provider?: string;
+  runtime_mode?: string;
+  runtime_model?: string;
+  runtime_label?: string;
   status: string;
   team?: string;
   expertise?: string;
