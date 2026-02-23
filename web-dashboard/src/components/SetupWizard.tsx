@@ -4,6 +4,7 @@ import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
 import CompassRoseLogo from './CompassRoseLogo';
+import FloatingSelect from './ui/FloatingSelect';
 
 // ---- Types ----
 
@@ -1388,7 +1389,6 @@ function StepPreferences({
         }}
       >
         <label
-          htmlFor="poll-interval"
           style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textPrimary, marginBottom: '2px' }}
         >
           Poll interval
@@ -1396,30 +1396,17 @@ function StepPreferences({
         <p style={{ fontSize: '11px', color: C.textSecondary, marginBottom: '10px' }}>
           How often the dashboard fetches updated data from the backend.
         </p>
-        <select
-          id="poll-interval"
-          value={pollInterval}
-          onChange={(e) => onPollIntervalChange(Number(e.target.value))}
+        <FloatingSelect
+          value={String(pollInterval)}
+          options={POLL_INTERVAL_OPTIONS.map((opt) => ({ value: String(opt.value), label: opt.label }))}
+          onChange={(nextValue) => onPollIntervalChange(Number(nextValue))}
+          ariaLabel="Poll interval"
+          size="md"
+          variant="input"
           style={{
-            padding: '7px 12px',
-            backgroundColor: C.surface,
-            border: `1px solid ${C.border}`,
-            borderRadius: '6px',
-            color: C.textPrimary,
-            fontSize: '13px',
-            outline: 'none',
-            cursor: 'pointer',
             minWidth: '160px',
           }}
-          onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-          onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-        >
-          {POLL_INTERVAL_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+        />
       </div>
     </div>
   );

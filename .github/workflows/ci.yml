@@ -46,3 +46,27 @@ jobs:
 
       - name: Check imports resolve
         run: python -c "from src.mcp_server.server import create_server; print('OK')"
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web-dashboard/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Guard against native selectors
+        run: npm run check:no-native-select
+
+      - name: Build frontend
+        run: npm run build

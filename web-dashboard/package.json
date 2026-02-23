@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:no-native-select": "if grep -R -nE \"<select|</select>|HTMLSelectElement\" src --include='*.tsx' --include='*.ts'; then echo 'Native select is not allowed in web-dashboard/src'; exit 1; else echo 'No native selectors found'; fi"
   },
   "dependencies": {
     "react": "^19.2.0",

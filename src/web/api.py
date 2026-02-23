@@ -1975,6 +1975,72 @@ def _guardrail_violation_message(guardrails: dict[str, Any] | None) -> str:
     return "Execution budget exceeded; stopping run."
 
 
+def _normalize_chat_activity_metadata(
+    agent: str,
+    action: str,
+    detail: str,
+    *,
+    project_id: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Normalize activity metadata so UI can drive deterministic live flow visuals."""
+    normalized: dict[str, Any] = dict(metadata or {})
+    action_upper = str(action or "").upper()
+
+    event_kind = str(normalized.get("event_kind", "") or "").strip().lower()
+    if not event_kind:
+        if action_upper == "DELEGATED":
+            event_kind = "delegation_start"
+        elif action_upper in {"COMPLETED", "DONE"}:
+            event_kind = "task_end"
+        elif action_upper in {"STARTED", "CREATED", "ASSIGNED"}:
+            event_kind = "task_start"
+        elif action_upper in {"ERROR", "BLOCKED"}:
+            event_kind = "task_error"
+        else:
+            event_kind = "task_progress"
+    normalized["event_kind"] = event_kind
+
+    source_agent = str(normalized.get("source_agent", "") or "").strip().lower()
+    target_agent = str(normalized.get("target_agent", "") or "").strip().lower()
+    if not source_agent:
+        source_agent = str(agent or "").strip().lower()
+    normalized["source_agent"] = source_agent
+    if target_agent:
+        normalized["target_agent"] = target_agent
+
+    flow = str(normalized.get("flow", "") or "").strip().lower()
+    if not flow:
+        if source_agent == "ceo" and target_agent and target_agent != "ceo":
+            flow = "down"
+        elif target_agent == "ceo" and source_agent and source_agent != "ceo":
+            flow = "up"
+        else:
+            flow = "internal"
+    normalized["flow"] = flow
+
+    state = str(normalized.get("state", "") or "").strip().lower()
+    if not state:
+        if action_upper in {"COMPLETED", "DONE"}:
+            state = "completed"
+        elif action_upper in {"ERROR", "BLOCKED"}:
+            state = "failed"
+        elif action_upper in {"STARTED", "CREATED", "ASSIGNED", "DELEGATED"}:
+            state = "started"
+        else:
+            state = "running"
+    normalized["state"] = state
+
+    if not str(normalized.get("task", "") or "").strip():
+        task = str(detail or "").strip()
+        normalized["task"] = task[:280] if task else action.title()
+
+    if project_id and not normalized.get("project_id"):
+        normalized["project_id"] = project_id
+
+    return normalized
+
+
 def _emit_chat_activity(
     agent: str,
     action: str,
@@ -1983,13 +2049,21 @@ def _emit_chat_activity(
     project_id: str = "",
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    normalized_project_id = _normalize_project_id(project_id)
+    normalized_metadata = _normalize_chat_activity_metadata(
+        agent,
+        action,
+        detail,
+        project_id=normalized_project_id,
+        metadata=metadata,
+    )
     emit_activity(
         DATA_DIR,
         agent,
         action,
         detail,
-        project_id=_normalize_project_id(project_id),
-        metadata=metadata,
+        project_id=normalized_project_id,
+        metadata=normalized_metadata,
     )
 
 
