@@ -193,7 +193,7 @@ offer_cli_install() {
     if [[ "${INSTALL_NOW:-}" =~ ^[Nn]$ ]]; then
         log_warn "Skipping ${cli_label} installation"
     else
-        if npm install -g "$npm_package"; then
+        if install_npm_cli_with_fallback "$cli_label" "$cli_bin" "$npm_package"; then
             if command -v "$cli_bin" &>/dev/null; then
                 log_ok "${cli_label} installed"
             else
@@ -203,6 +203,88 @@ offer_cli_install() {
             log_warn "Failed to install ${cli_label}; continuing setup"
         fi
     fi
+}
+
+detect_shell_rc_file() {
+    local shell_name
+    shell_name="$(basename "${SHELL:-}")"
+    case "$shell_name" in
+        zsh)
+            echo "$HOME/.zshrc"
+            ;;
+        bash)
+            if [ -f "$HOME/.bash_profile" ]; then
+                echo "$HOME/.bash_profile"
+            else
+                echo "$HOME/.bashrc"
+            fi
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+ensure_npm_prefix_on_path() {
+    local prefix_dir="$1"
+    local path_dir="${prefix_dir}/bin"
+    local path_line="export PATH=\"${path_dir}:\$PATH\""
+    local shell_rc
+
+    export PATH="${path_dir}:$PATH"
+    hash -r
+
+    shell_rc="$(detect_shell_rc_file)"
+    if [ -z "$shell_rc" ]; then
+        log_info "Add ${path_dir} to your PATH to use npm global CLIs in new terminals."
+        return 0
+    fi
+
+    touch "$shell_rc" 2>/dev/null || true
+    if [ -f "$shell_rc" ] && grep -Fq "$path_line" "$shell_rc"; then
+        return 0
+    fi
+
+    if [ -f "$shell_rc" ] || touch "$shell_rc" 2>/dev/null; then
+        if {
+            echo ""
+            echo "# Added by COMPaaS installer for npm global tools"
+            echo "$path_line"
+        } >> "$shell_rc"; then
+            log_info "Added ${path_dir} to PATH in ${shell_rc}"
+        else
+            log_info "Could not update ${shell_rc}. Add ${path_dir} to PATH manually."
+        fi
+    else
+        log_info "Add ${path_dir} to your PATH to use npm global CLIs in new terminals."
+    fi
+}
+
+install_npm_cli_with_fallback() {
+    local cli_label="$1"
+    local cli_bin="$2"
+    local npm_package="$3"
+    local npm_prefix="$HOME/.npm-global"
+
+    if npm install -g "$npm_package"; then
+        return 0
+    fi
+
+    log_warn "Global npm install failed for ${cli_label}; retrying with user-local npm prefix (${npm_prefix})..."
+    if ! mkdir -p "$npm_prefix"; then
+        return 1
+    fi
+    if npm install -g "$npm_package" --prefix "$npm_prefix"; then
+        ensure_npm_prefix_on_path "$npm_prefix"
+        if command -v "$cli_bin" &>/dev/null; then
+            return 0
+        fi
+        if [ -x "${npm_prefix}/bin/${cli_bin}" ]; then
+            log_info "${cli_label} installed at ${npm_prefix}/bin/${cli_bin}"
+            return 0
+        fi
+    fi
+    return 1
 }
 
 run_with_privilege() {
