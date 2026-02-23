@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Project, Task, Decision } from '../types';
 import { fetchProjectDecisions, fetchProjectSpecs, approveProjectPlan, createProject } from '../api/client';
+import FloatingSelect from './ui/FloatingSelect';
 
 interface ProjectPanelProps {
   projects: Project[];
@@ -1387,6 +1388,25 @@ export default function ProjectPanel({
   const [newProjectBranch, setNewProjectBranch] = useState(defaultGithubBranch || 'master');
   const [projectError, setProjectError] = useState('');
 
+  const projectModeOptions = useMemo(() => ([
+    {
+      value: 'local',
+      label: 'Local workspace',
+      description: 'Write project files under the COMPaaS projects folder.',
+      badge: 'Ready',
+      keywords: ['local', 'workspace', 'filesystem'],
+    },
+    {
+      value: 'github',
+      label: 'GitHub repository',
+      description: githubConfigured
+        ? 'Use connected repository defaults and branch routing.'
+        : 'GitHub connector setup is required in Settings.',
+      badge: githubConfigured ? 'Ready' : 'Setup required',
+      keywords: ['github', 'repo', 'branch', 'remote'],
+    },
+  ]), [githubConfigured]);
+
   useEffect(() => {
     setNewProjectMode(defaultWorkspaceMode === 'github' ? 'github' : 'local');
   }, [defaultWorkspaceMode]);
@@ -1519,21 +1539,18 @@ export default function ProjectPanel({
           />
           <div className="flex items-center gap-2 mb-2">
             <label className="text-xs font-medium" style={{ color: 'var(--tf-text-secondary)' }}>Location</label>
-            <select
+            <FloatingSelect
               value={newProjectMode}
-              onChange={(e) => setNewProjectMode((e.target.value === 'github' ? 'github' : 'local'))}
+              options={projectModeOptions}
+              onChange={(nextMode) => setNewProjectMode(nextMode === 'github' ? 'github' : 'local')}
+              variant="card"
+              searchable={false}
+              ariaLabel="Project delivery mode"
+              size="sm"
               style={{
-                backgroundColor: 'var(--tf-bg)',
-                border: '1px solid var(--tf-border)',
-                borderRadius: '8px',
-                color: 'var(--tf-text)',
-                fontSize: '12px',
-                padding: '6px 8px',
+                width: '230px',
               }}
-            >
-              <option value="local">Local workspace</option>
-              <option value="github">GitHub repository</option>
-            </select>
+            />
           </div>
           {newProjectMode === 'github' && (
             <>
@@ -1643,23 +1660,19 @@ export default function ProjectPanel({
               padding: '7px 9px',
             }}
           />
-          <select
+          <FloatingSelect
             value={newProjectMode}
-            onChange={(e) => setNewProjectMode((e.target.value === 'github' ? 'github' : 'local'))}
+            options={projectModeOptions}
+            onChange={(nextMode) => setNewProjectMode(nextMode === 'github' ? 'github' : 'local')}
+            variant="card"
+            searchable={false}
+            ariaLabel="Project delivery mode"
+            size="sm"
             style={{
               width: '100%',
               marginBottom: '8px',
-              backgroundColor: 'var(--tf-bg)',
-              border: '1px solid var(--tf-border)',
-              borderRadius: '8px',
-              color: 'var(--tf-text)',
-              fontSize: '12px',
-              padding: '7px 9px',
             }}
-          >
-            <option value="local">Local workspace</option>
-            <option value="github">GitHub repository</option>
-          </select>
+          />
           {newProjectMode === 'github' && (
             <>
               <input

@@ -20,6 +20,7 @@ import {
 import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
+import FloatingSelect from './ui/FloatingSelect';
 
 // ---- Types ----
 
@@ -1691,25 +1692,19 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
 
             <div>
               <label
-                htmlFor="settings-poll"
                 style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
               >
                 Poll Interval
               </label>
-              <select
-                id="settings-poll"
-                value={pollInterval}
-                onChange={(e) => setPollInterval(Number(e.target.value))}
-                style={{ ...inputStyle(), maxWidth: '200px', cursor: 'pointer' }}
-                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
-                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
-              >
-                {POLL_INTERVAL_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+              <FloatingSelect
+                value={String(pollInterval)}
+                options={POLL_INTERVAL_OPTIONS.map((opt) => ({ value: String(opt.value), label: opt.label }))}
+                onChange={(nextValue) => setPollInterval(Number(nextValue))}
+                ariaLabel="Poll interval"
+                variant="input"
+                size="md"
+                style={{ maxWidth: '200px' }}
+              />
             </div>
 
             <Toggle
@@ -2020,14 +2015,18 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                   />
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <label style={{ fontSize: '11px', color: C.textSecondary }}>Default deploy target</label>
-                    <select
+                    <FloatingSelect
                       value={vercelDefaultTarget}
-                      onChange={(e) => setVercelDefaultTarget(e.target.value === 'production' ? 'production' : 'preview')}
-                      style={{ ...inputStyle({ maxWidth: '150px', fontSize: '11px', padding: '5px 8px' }) }}
-                    >
-                      <option value="preview">Preview</option>
-                      <option value="production">Production</option>
-                    </select>
+                      options={[
+                        { value: 'preview', label: 'Preview' },
+                        { value: 'production', label: 'Production' },
+                      ]}
+                      onChange={(nextValue) => setVercelDefaultTarget(nextValue === 'production' ? 'production' : 'preview')}
+                      ariaLabel="Default Vercel deploy target"
+                      variant="input"
+                      size="sm"
+                      style={{ maxWidth: '150px' }}
+                    />
                     <button
                       onClick={() => { void handleQuickVerifyVercel(); }}
                       disabled={quickVerifyBusy.length > 0}
@@ -2257,17 +2256,21 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                     </button>
                   </div>
                   {githubRepoOptions.length > 0 && (
-                    <select
+                    <FloatingSelect
                       value={githubRepo}
-                      onChange={(e) => setGithubRepo(e.target.value)}
-                      style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
-                    >
-                      {githubRepoOptions.map((repo) => (
-                        <option key={repo.full_name} value={repo.full_name}>
-                          {repo.full_name} ({repo.default_branch})
-                        </option>
-                      ))}
-                    </select>
+                      options={githubRepoOptions.map((repo) => ({
+                        value: repo.full_name,
+                        label: repo.full_name,
+                        description: `default branch: ${repo.default_branch}`,
+                        keywords: [repo.full_name, repo.default_branch],
+                      }))}
+                      onChange={setGithubRepo}
+                      searchable
+                      ariaLabel="GitHub repository options"
+                      variant="input"
+                      size="sm"
+                      style={{ maxWidth: '420px' }}
+                    />
                   )}
                   <input
                     type="text"

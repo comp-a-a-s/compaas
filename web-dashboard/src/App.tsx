@@ -714,6 +714,7 @@ export default function App() {
             projects={filteredProjects}
             tasks={filteredAllTasks}
             events={filteredActivityEvents}
+            activeProjectId={activeProjectId}
             microProjectMode={microProjectMode}
             loadingAgents={loadingAgents}
             loadingProjects={loadingProjects}
@@ -818,6 +819,7 @@ export default function App() {
             projects={filteredProjects}
             tasks={filteredAllTasks}
             events={filteredActivityEvents}
+            activeProjectId={activeProjectId}
             microProjectMode={microProjectMode}
             loadingAgents={loadingAgents}
             loadingProjects={loadingProjects}

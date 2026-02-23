@@ -13,6 +13,7 @@ import {
   updateMemoryPolicy,
   deployProjectToVercel,
 } from '../api/client';
+import FloatingSelect from './ui/FloatingSelect';
 
 // ---- Helpers ----
 
@@ -32,6 +33,60 @@ function msgKey(msg: ChatMessage): string {
 // ---- Action text parser ----
 
 interface ActionInfo { label: string; icon: string; color: string; }
+
+function prettyAgentName(raw: string): string {
+  const normalized = raw.replace(/^chief-/i, 'chief ').replace(/^vp-/i, 'vp ');
+  return normalized
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function summarizeCommand(command: string): string {
+  const cmd = command.toLowerCase();
+  if (!cmd) return 'Running implementation step';
+  if (/\b(pwd|ls|find|rg --files)\b/.test(cmd)) return 'Reviewing workspace structure';
+  if (/\b(cat|sed|head|tail)\b/.test(cmd)) return 'Reading project files';
+  if (/\b(apply_patch|cat >|tee |echo .*>|mkdir|touch)\b/.test(cmd)) return 'Writing project files';
+  if (/\b(pytest|npm test|pnpm test|vitest|jest)\b/.test(cmd)) return 'Running test checks';
+  if (/\b(npm run build|vite build|tsc|npm run lint|eslint)\b/.test(cmd)) return 'Running build and quality checks';
+  if (/\b(git )\b/.test(cmd)) return 'Preparing git workspace';
+  return 'Running implementation step';
+}
+
+function summarizeActionPayload(payload: {
+  label?: string;
+  command?: string;
+  tool?: string;
+  actor?: string;
+  target?: string;
+  source_agent?: string;
+  target_agent?: string;
+  flow?: string;
+  task?: string;
+}): string {
+  const actorRaw = String(payload.actor || payload.source_agent || 'CEO');
+  const targetRaw = String(payload.target || payload.target_agent || '');
+  const actor = prettyAgentName(actorRaw);
+  const target = targetRaw ? prettyAgentName(targetRaw) : '';
+  const task = String(payload.task || '').trim();
+  const flow = String(payload.flow || '').toLowerCase();
+  const tool = String(payload.tool || '').toLowerCase();
+  const command = String(payload.command || '').trim();
+
+  if (flow === 'down' && target) return `${actor} delegated work to ${target}`;
+  if (flow === 'up' && target) return `${actor} delivered results to ${target}`;
+  if (flow === 'blocked') return `${actor} hit a blocker and is requesting guidance`;
+  if (task && actor) return `${actor} is handling: ${task.slice(0, 92)}`;
+  if (command) return `${actor} is ${summarizeCommand(command).toLowerCase()}`;
+  if (tool.includes('websearch')) return `${actor} is researching references`;
+  if (tool.includes('webfetch')) return `${actor} is collecting source content`;
+  if (tool.includes('grep') || tool.includes('glob') || tool.includes('read')) return `${actor} is inspecting the codebase`;
+  if (tool.includes('write') || tool.includes('edit') || tool.includes('multiedit')) return `${actor} is updating project files`;
+  if (tool.includes('bash') || tool.includes('command_execution')) return `${actor} is running implementation steps`;
+  return payload.label ? String(payload.label) : `${actor} is executing a task`;
+}
 
 function enrichActionText(
   existing: string,
@@ -102,6 +157,12 @@ function parseActionText(text: string): ActionInfo {
     return { label: f ? `Writing ${f[0]}` : 'Writing code…', icon: '✎', color: 'var(--tf-success)' };
   }
   if (lower.includes('bash') || lower.includes('run') || lower.includes('execut') || lower.includes('command')) {
+    if (lower.includes('command exit=0') || lower.includes('exit=0')) {
+      return { label: 'Command completed successfully', icon: '✓', color: 'var(--tf-success)' };
+    }
+    if (lower.includes('command exit=') || lower.includes('exit=1') || lower.includes('error')) {
+      return { label: 'Command completed with issues', icon: '!', color: 'var(--tf-warning)' };
+    }
     const commandHint = normalized.match(/`([^`]+)`/)?.[1] ?? '';
     if (commandHint) {
       const clipped = commandHint.length > 72 ? `${commandHint.slice(0, 69)}…` : commandHint;
@@ -116,7 +177,7 @@ function parseActionText(text: string): ActionInfo {
       const clipped = normalized.length > 72 ? `${normalized.slice(0, 69)}…` : normalized;
       return { label: clipped, icon: '⚡', color: 'var(--tf-warning)' };
     }
-    return { label: 'Running command…', icon: '⚡', color: 'var(--tf-accent)' };
+    return { label: 'Running implementation step', icon: '⚡', color: 'var(--tf-accent)' };
   }
   if (lower.includes('plan') || lower.includes('analyz') || lower.includes('review'))
     return { label: 'Analyzing…', icon: '◈', color: 'var(--tf-warning)' };
@@ -919,6 +980,11 @@ export default function ChatPanel({
   }, [messages, searchQuery]);
 
   const pinnedMessages = useMemo(() => messages.filter((m) => pinnedIds.has(msgKey(m))), [messages, pinnedIds]);
+  const memoryScopeOptions = useMemo(() => ([
+    { value: 'global', label: 'Global', description: 'Shared across all projects.' },
+    { value: 'project', label: 'Project', description: 'Scoped to the active project.' },
+    { value: 'session-only', label: 'Session only', description: 'Temporary until this session ends.' },
+  ]), []);
 
   // Scroll
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
@@ -1090,11 +1156,16 @@ export default function ChatPanel({
               }
               break;
             case 'action':
-              setActionLog((prev) => [...prev, {
-                text: wsContentText(data.content, ''),
-                status: 'running',
-                at: new Date().toISOString(),
-              }]);
+              {
+                const rawText = wsContentText(data.content, '');
+                const parsed = parseActionText(rawText);
+                const normalizedText = parsed.label || rawText || 'Working on task';
+                setActionLog((prev) => [...prev, {
+                  text: normalizedText,
+                  status: 'running',
+                  at: new Date().toISOString(),
+                }]);
+              }
               break;
             case 'action_detail':
               {
@@ -1103,13 +1174,26 @@ export default function ChatPanel({
                 const command = payload.command ? String(payload.command) : undefined;
                 const tool = payload.tool ? String(payload.tool) : undefined;
                 const filePath = payload.file_path ? String(payload.file_path) : undefined;
-                setActionDetails((prev) => [...prev, {
+                const actor = payload.actor ? String(payload.actor) : (payload.source_agent ? String(payload.source_agent) : undefined);
+                const target = payload.target ? String(payload.target) : (payload.target_agent ? String(payload.target_agent) : undefined);
+                const summaryLabel = summarizeActionPayload({
                   label: String(payload.label || 'Action detail'),
                   command,
                   tool,
+                  actor,
+                  target,
+                  source_agent: payload.source_agent ? String(payload.source_agent) : undefined,
+                  target_agent: payload.target_agent ? String(payload.target_agent) : undefined,
+                  flow: payload.flow ? String(payload.flow) : undefined,
+                  task: payload.task ? String(payload.task) : undefined,
+                });
+                setActionDetails((prev) => [...prev, {
+                  label: summaryLabel,
+                  command,
+                  tool,
                   file_path: filePath,
-                  actor: payload.actor ? String(payload.actor) : (payload.source_agent ? String(payload.source_agent) : undefined),
-                  target: payload.target ? String(payload.target) : (payload.target_agent ? String(payload.target_agent) : undefined),
+                  actor,
+                  target,
                   flow: payload.flow ? String(payload.flow) : undefined,
                   cwd: payload.cwd ? String(payload.cwd) : undefined,
                   duration_ms: typeof payload.duration_ms === 'number' ? payload.duration_ms : undefined,
@@ -1124,7 +1208,7 @@ export default function ChatPanel({
                     if (prev.length === 0) return prev;
                     const last = prev[prev.length - 1];
                     if (last.status !== 'running') return prev;
-                    const nextText = enrichActionText(last.text, { command, filePath, tool });
+                    const nextText = summaryLabel || enrichActionText(last.text, { command, filePath, tool });
                     if (nextText === last.text) return prev;
                     return [...prev.slice(0, -1), { ...last, text: nextText }];
                   });
@@ -1132,19 +1216,24 @@ export default function ChatPanel({
               }
               break;
             case 'action_result':
-              setActionLog((prev) => prev.length > 0 ? [
-                ...prev.slice(0, -1),
-                {
-                  ...prev[prev.length - 1],
+              {
+                const resultRaw = wsContentText(data.content, '');
+                const parsedResult = parseActionText(resultRaw).label;
+                const resultText = parsedResult || (resultRaw ? 'Task completed' : '');
+                setActionLog((prev) => prev.length > 0 ? [
+                  ...prev.slice(0, -1),
+                  {
+                    ...prev[prev.length - 1],
+                    status: 'done',
+                    result: resultText,
+                  },
+                ] : [{
+                  text: 'Task completed',
                   status: 'done',
-                  result: wsContentText(data.content, prev[prev.length - 1].result || ''),
-                },
-              ] : [{
-                text: 'Action completed',
-                status: 'done',
-                result: wsContentText(data.content, ''),
-                at: new Date().toISOString(),
-              }]);
+                  result: resultText,
+                  at: new Date().toISOString(),
+                }]);
+              }
               break;
             case 'chunk': {
               stopTypingAnimation();
@@ -1473,7 +1562,7 @@ export default function ChatPanel({
             }}
             style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showActionDetails ? 'var(--tf-success)' : 'var(--tf-text-secondary)' }}
           >
-            {showActionDetails ? 'Hide Live Logs' : 'Show Live Logs'}
+            {showActionDetails ? 'Hide Technical Details' : 'Show Technical Details'}
           </button>
           <button
             onClick={() => {
@@ -1560,18 +1649,18 @@ export default function ChatPanel({
           <div style={{ display: 'grid', gap: '6px', marginBottom: '8px', padding: '8px', borderRadius: '6px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
               <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Memory scope</label>
-              <select
+              <FloatingSelect
                 value={memoryScope}
-                onChange={(e) => {
-                  const scope = e.target.value as 'global' | 'project' | 'session-only';
+                options={memoryScopeOptions}
+                onChange={(nextValue) => {
+                  const scope = nextValue as 'global' | 'project' | 'session-only';
                   persistMemoryPolicy(scope, memoryRetentionDays);
                 }}
-                style={{ fontSize: '11px', borderRadius: '4px', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)', color: 'var(--tf-text)', padding: '2px 6px' }}
-              >
-                <option value="global">Global</option>
-                <option value="project">Project</option>
-                <option value="session-only">Session only</option>
-              </select>
+                ariaLabel="Memory scope"
+                size="sm"
+                variant="input"
+                style={{ width: '146px' }}
+              />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
               <label style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>Retention (days)</label>
@@ -1998,7 +2087,7 @@ export default function ChatPanel({
             {showActionDetails && actionDetails.length > 0 && (
               <div className="mx-1 mb-3 rounded-lg overflow-hidden" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-bg)' }}>
                 <div className="px-3 py-1.5 text-xs font-medium" style={{ color: 'var(--tf-text-secondary)', borderBottom: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
-                  Execution Details {latestRunId ? `• Run ${latestRunId}` : ''}
+                  Technical Details {latestRunId ? `• Run ${latestRunId}` : ''}
                 </div>
                 <div className="px-3 py-2 space-y-2 max-h-44 overflow-y-auto">
                   {actionDetails.map((d, idx) => (

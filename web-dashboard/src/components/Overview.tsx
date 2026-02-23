@@ -7,6 +7,7 @@ interface OverviewProps {
   projects: Project[];
   tasks: Task[];
   events: ActivityEvent[];
+  activeProjectId?: string;
   microProjectMode?: boolean;
   loadingAgents: boolean;
   loadingProjects: boolean;
@@ -138,8 +139,18 @@ interface OrgNodeProps {
   onAgentClick?: (agent: Agent) => void;
   recentlyActive?: boolean;
   muted?: boolean;
+  activeTaskLabel?: string;
+  blocked?: boolean;
 }
-function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false, muted = false }: OrgNodeProps) {
+function OrgNode({
+  agent,
+  displayRole,
+  onAgentClick,
+  recentlyActive = false,
+  muted = false,
+  activeTaskLabel,
+  blocked = false,
+}: OrgNodeProps) {
   const color = modelColor(effectiveModel(agent));
   const initial = agent.name.charAt(0).toUpperCase();
   const isActive = !muted && (
@@ -155,8 +166,12 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false, mut
     <div
       className="flex flex-col items-center gap-1 px-3 py-2 rounded-xl"
       style={{
-        backgroundColor: muted ? 'color-mix(in srgb, var(--tf-surface-raised) 84%, var(--tf-bg))' : isActive ? 'rgba(63,185,80,0.06)' : 'var(--tf-surface-raised)',
-        border: `1px solid ${isActive ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+        backgroundColor: muted
+          ? 'color-mix(in srgb, var(--tf-surface-raised) 84%, var(--tf-bg))'
+          : blocked
+            ? 'rgba(234,114,103,0.08)'
+            : isActive ? 'rgba(63,185,80,0.06)' : 'var(--tf-surface-raised)',
+        border: `1px solid ${blocked ? 'var(--tf-error)' : isActive ? 'var(--tf-success)' : 'var(--tf-border)'}`,
         minWidth: '88px',
         maxWidth: '128px',
         cursor: onAgentClick ? 'pointer' : 'default',
@@ -173,7 +188,9 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false, mut
       }}
       onMouseLeave={(e) => {
         if (onAgentClick) {
-          (e.currentTarget as HTMLDivElement).style.borderColor = isActive ? 'var(--tf-success)' : 'var(--tf-border)';
+          (e.currentTarget as HTMLDivElement).style.borderColor = blocked
+            ? 'var(--tf-error)'
+            : isActive ? 'var(--tf-success)' : 'var(--tf-border)';
         }
       }}
       role={onAgentClick ? 'button' : undefined}
@@ -224,7 +241,15 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false, mut
         {displayRole ?? agent.role}
       </p>
       {/* Show live activity label when working */}
-      {isActive && latestActivity && (
+      {activeTaskLabel && !muted ? (
+        <p
+          className="text-xs text-center leading-tight animate-pulse-dot"
+          style={{ color: blocked ? 'var(--tf-error)' : 'var(--tf-success)', maxWidth: '96px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          title={activeTaskLabel}
+        >
+          {activeTaskLabel}
+        </p>
+      ) : isActive && latestActivity ? (
         <p
           className="text-xs text-center leading-tight animate-pulse-dot"
           style={{ color: 'var(--tf-success)', maxWidth: '90px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -232,7 +257,7 @@ function OrgNode({ agent, displayRole, onAgentClick, recentlyActive = false, mut
         >
           {latestActivity.action}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -406,8 +431,9 @@ interface TreeNodeProps {
   recentActiveIds: Set<string>;
   activeIds: Set<string>;
   mutedAgentIds: Set<string>;
-  flowEdgeKeys: Set<string>;
-  flowDirection: FlowDirection;
+  flowEdgeDirections: Map<string, FlowDirection>;
+  activeTaskByAgent: Map<string, string>;
+  blockedAgentIds: Set<string>;
 }
 
 function TreeNode({
@@ -417,8 +443,9 @@ function TreeNode({
   recentActiveIds,
   activeIds,
   mutedAgentIds,
-  flowEdgeKeys,
-  flowDirection,
+  flowEdgeDirections,
+  activeTaskByAgent,
+  blockedAgentIds,
 }: TreeNodeProps) {
   const agent = agentMap.get(node.id);
   const children = node.children ?? [];
@@ -428,10 +455,12 @@ function TreeNode({
   const hasChildren = children.length > 0;
   const recentlyActive = recentActiveIds.has(node.id);
   const muted = mutedAgentIds.has(node.id);
+  const blocked = blockedAgentIds.has(node.id);
   const childSubtreeActive = children.some((c) => subtreeHasActive(c, activeIds))
-    || children.some((c) => flowEdgeKeys.has(orgEdgeKey(node.id, c.id)));
-  const stemDirection: FlowDirection = children.some((c) => flowEdgeKeys.has(orgEdgeKey(node.id, c.id)))
-    ? flowDirection
+    || children.some((c) => flowEdgeDirections.has(orgEdgeKey(node.id, c.id)));
+  const firstFlowEdge = children.find((c) => flowEdgeDirections.has(orgEdgeKey(node.id, c.id)));
+  const stemDirection: FlowDirection = firstFlowEdge
+    ? (flowEdgeDirections.get(orgEdgeKey(node.id, firstFlowEdge.id)) || 'down')
     : 'down';
 
   return (
@@ -443,6 +472,8 @@ function TreeNode({
           onAgentClick={onAgentClick}
           recentlyActive={recentlyActive}
           muted={muted}
+          blocked={blocked}
+          activeTaskLabel={activeTaskByAgent.get(node.id)}
         />
       </Tooltip>
 
@@ -457,8 +488,9 @@ function TreeNode({
             recentActiveIds={recentActiveIds}
             activeIds={activeIds}
             mutedAgentIds={mutedAgentIds}
-            flowEdgeKeys={flowEdgeKeys}
-            flowDirection={flowDirection}
+            flowEdgeDirections={flowEdgeDirections}
+            activeTaskByAgent={activeTaskByAgent}
+            blockedAgentIds={blockedAgentIds}
           />
         </>
       )}
@@ -473,8 +505,9 @@ interface ChildrenGroupProps {
   recentActiveIds: Set<string>;
   activeIds: Set<string>;
   mutedAgentIds: Set<string>;
-  flowEdgeKeys: Set<string>;
-  flowDirection: FlowDirection;
+  flowEdgeDirections: Map<string, FlowDirection>;
+  activeTaskByAgent: Map<string, string>;
+  blockedAgentIds: Set<string>;
 }
 
 function ChildrenGroup({
@@ -484,8 +517,9 @@ function ChildrenGroup({
   recentActiveIds,
   activeIds,
   mutedAgentIds,
-  flowEdgeKeys,
-  flowDirection,
+  flowEdgeDirections,
+  activeTaskByAgent,
+  blockedAgentIds,
 }: ChildrenGroupProps) {
   const children = node.children ?? [];
   const visibleChildren = children.filter((c) => agentMap.has(c.id));
@@ -494,11 +528,12 @@ function ChildrenGroup({
 
   if (visibleChildren.length === 1) {
     const edgeKey = orgEdgeKey(node.id, visibleChildren[0].id);
-    const edgeInFlow = flowEdgeKeys.has(edgeKey);
+    const edgeInFlow = flowEdgeDirections.has(edgeKey);
     const childActive = edgeInFlow || subtreeHasActive(visibleChildren[0], activeIds);
+    const edgeDirection = flowEdgeDirections.get(edgeKey) || 'down';
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <Connector vertical size={20} active={childActive} flowDirection={edgeInFlow ? flowDirection : 'down'} />
+        <Connector vertical size={20} active={childActive} flowDirection={edgeDirection} />
         <TreeNode
           node={visibleChildren[0]}
           agentMap={agentMap}
@@ -506,8 +541,9 @@ function ChildrenGroup({
           recentActiveIds={recentActiveIds}
           activeIds={activeIds}
           mutedAgentIds={mutedAgentIds}
-          flowEdgeKeys={flowEdgeKeys}
-          flowDirection={flowDirection}
+          flowEdgeDirections={flowEdgeDirections}
+          activeTaskByAgent={activeTaskByAgent}
+          blockedAgentIds={blockedAgentIds}
         />
       </div>
     );
@@ -519,9 +555,9 @@ function ChildrenGroup({
         const isFirst = idx === 0;
         const isLast = idx === visibleChildren.length - 1;
         const edgeKey = orgEdgeKey(node.id, child.id);
-        const edgeInFlow = flowEdgeKeys.has(edgeKey);
+        const edgeInFlow = flowEdgeDirections.has(edgeKey);
         const childActive = edgeInFlow || subtreeHasActive(child, activeIds);
-        const edgeDirection: FlowDirection = edgeInFlow ? flowDirection : 'down';
+        const edgeDirection: FlowDirection = flowEdgeDirections.get(edgeKey) || 'down';
 
         return (
           <div
@@ -564,8 +600,9 @@ function ChildrenGroup({
               recentActiveIds={recentActiveIds}
               activeIds={activeIds}
               mutedAgentIds={mutedAgentIds}
-              flowEdgeKeys={flowEdgeKeys}
-              flowDirection={flowDirection}
+              flowEdgeDirections={flowEdgeDirections}
+              activeTaskByAgent={activeTaskByAgent}
+              blockedAgentIds={blockedAgentIds}
             />
           </div>
         );
@@ -578,10 +615,11 @@ interface OrgChartProps {
   agents: Agent[];
   loading: boolean;
   events: ActivityEvent[];
+  activeProjectId?: string;
   microProjectMode?: boolean;
 }
 
-function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChartProps) {
+function OrgChart({ agents, loading, events, activeProjectId = '', microProjectMode = false }: OrgChartProps) {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const hierarchyViewportRef = useRef<HTMLDivElement | null>(null);
@@ -598,17 +636,23 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
     return map;
   }, [agents]);
 
+  const scopedEvents = useMemo(() => {
+    if (!activeProjectId) return events;
+    const byProject = events.filter((evt) => (evt.project_id || '') === activeProjectId);
+    return byProject.length > 0 ? byProject : events;
+  }, [events, activeProjectId]);
+
   // Set of recently active IDs inferred from live activity events.
   const recentActiveIds = useMemo(() => {
     const s = new Set<string>();
     for (const agent of agents) {
       if (microProjectMode && agent.id !== 'ceo') continue;
-      if (isAgentRecentlyActive(agent.id, agent.name, events)) {
+      if (isAgentRecentlyActive(agent.id, agent.name, scopedEvents)) {
         s.add(agent.id);
       }
     }
     return s;
-  }, [agents, events, microProjectMode]);
+  }, [agents, scopedEvents, microProjectMode]);
 
   // Broader active set to drive connector highlights even when events are sparse.
   const activeIds = useMemo(() => {
@@ -631,14 +675,38 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
     return map;
   }, [agents]);
 
-  const latestFlow = useMemo((): { edgeKeys: Set<string>; direction: FlowDirection } => {
+  const latestFlow = useMemo((): {
+    edgeDirections: Map<string, FlowDirection>;
+    activeTaskByAgent: Map<string, string>;
+    blockedAgentIds: Set<string>;
+  } => {
     if (microProjectMode) {
-      return { edgeKeys: new Set<string>(), direction: null };
+      return {
+        edgeDirections: new Map<string, FlowDirection>(),
+        activeTaskByAgent: new Map<string, string>(),
+        blockedAgentIds: new Set<string>(),
+      };
     }
-    const FLOW_WINDOW_MS = 20_000;
-    const latestEventTimestamp = events.length > 0
-      ? new Date(events[events.length - 1].timestamp || '').getTime()
+    const FLOW_WINDOW_MS = 12_000;
+    const latestEventTimestamp = scopedEvents.length > 0
+      ? new Date(scopedEvents[scopedEvents.length - 1].timestamp || '').getTime()
       : 0;
+    const edgeDirections = new Map<string, FlowDirection>();
+    const activeTaskByAgent = new Map<string, string>();
+    const blockedAgentIds = new Set<string>();
+    const trackedFlows = new Set<string>();
+
+    const addEdgeDirection = (edgeKey: string, direction: FlowDirection) => {
+      if (edgeDirections.has(edgeKey)) {
+        edgeDirections.delete(edgeKey);
+      }
+      edgeDirections.set(edgeKey, direction);
+      while (edgeDirections.size > 2) {
+        const first = edgeDirections.keys().next().value;
+        if (!first) break;
+        edgeDirections.delete(first);
+      }
+    };
 
     const safeAgentId = (value: unknown): string => {
       const normalized = String(value || '').trim().toLowerCase();
@@ -646,19 +714,24 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
       return aliasToId.get(normalized) || normalized;
     };
 
-    const buildFlowToAgent = (agentId: string, direction: FlowDirection) => {
+    const buildFlowToAgent = (agentId: string, direction: FlowDirection, task: string) => {
       if (!agentId || agentId === 'ceo') return null;
       const targetPath = findPathToNode(ORG_TREE, agentId);
       if (!targetPath || targetPath.length < 2) return null;
-      const edgeKeys = new Set<string>();
+      const flowKey = `${agentId}:${direction}`;
+      if (trackedFlows.has(flowKey)) return null;
+      trackedFlows.add(flowKey);
       for (let i = 0; i < targetPath.length - 1; i += 1) {
-        edgeKeys.add(orgEdgeKey(targetPath[i], targetPath[i + 1]));
+        addEdgeDirection(orgEdgeKey(targetPath[i], targetPath[i + 1]), direction);
       }
-      return { edgeKeys, direction };
+      if (task) {
+        activeTaskByAgent.set(agentId, task.slice(0, 70));
+      }
+      return true;
     };
 
-    for (let idx = events.length - 1; idx >= 0; idx -= 1) {
-      const evt = events[idx];
+    for (let idx = scopedEvents.length - 1; idx >= 0; idx -= 1) {
+      const evt = scopedEvents[idx];
       const evtTs = evt.timestamp ? new Date(evt.timestamp).getTime() : 0;
       if (
         latestEventTimestamp
@@ -672,31 +745,37 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
       const meta = (evt.metadata || {}) as Record<string, unknown>;
       const sourceMeta = safeAgentId(meta.source_agent ?? meta.from_agent);
       const targetMeta = safeAgentId(meta.target_agent ?? meta.to_agent);
+      const flowMeta = String(meta.flow || '').toLowerCase();
+      const taskText = String(meta.task || evt.detail || evt.action || '').trim();
+      if (flowMeta === 'blocked') {
+        if (sourceMeta) blockedAgentIds.add(sourceMeta);
+        if (targetMeta) blockedAgentIds.add(targetMeta);
+      }
       if (sourceMeta && targetMeta && sourceMeta !== targetMeta) {
         if (sourceMeta === 'ceo' && targetMeta !== 'ceo') {
-          const downFlow = buildFlowToAgent(targetMeta, 'down');
-          if (downFlow) return downFlow;
+          buildFlowToAgent(targetMeta, 'down', taskText);
+          if (edgeDirections.size >= 2) break;
         }
         if (targetMeta === 'ceo' && sourceMeta !== 'ceo') {
-          const upFlow = buildFlowToAgent(sourceMeta, 'up');
-          if (upFlow) return upFlow;
+          buildFlowToAgent(sourceMeta, 'up', taskText);
+          if (edgeDirections.size >= 2) break;
         }
       }
 
       const detail = (evt.detail || '').toLowerCase();
       const downMatch = detail.match(/delegating to ([a-z0-9\- ]+)/i);
       if (downMatch) {
-        const fromDetail = buildFlowToAgent(safeAgentId(downMatch[1].trim()), 'down');
-        if (fromDetail) return fromDetail;
+        buildFlowToAgent(safeAgentId(downMatch[1].trim()), 'down', taskText);
+        if (edgeDirections.size >= 2) break;
       }
       const upMatch = detail.match(/(update|result|response) from ([a-z0-9\- ]+)/i);
       if (upMatch) {
-        const fromDetail = buildFlowToAgent(safeAgentId(upMatch[2].trim()), 'up');
-        if (fromDetail) return fromDetail;
+        buildFlowToAgent(safeAgentId(upMatch[2].trim()), 'up', taskText);
+        if (edgeDirections.size >= 2) break;
       }
     }
-    return { edgeKeys: new Set<string>(), direction: null };
-  }, [aliasToId, events, microProjectMode]);
+    return { edgeDirections, activeTaskByAgent, blockedAgentIds };
+  }, [aliasToId, scopedEvents, microProjectMode]);
 
   const mutedAgentIds = useMemo(() => {
     if (!microProjectMode) return new Set<string>();
@@ -713,13 +792,13 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
 
   const workloadMap = useMemo(() => {
     const out = new Map<string, number>();
-    for (const evt of events) {
+    for (const evt of scopedEvents) {
       const key = (evt.agent || '').toLowerCase();
       if (!key) continue;
       out.set(key, (out.get(key) || 0) + 1);
     }
     return out;
-  }, [events]);
+  }, [scopedEvents]);
 
   const handoffPairs = useMemo(() => {
     if (microProjectMode) return [] as Array<[string, number]>;
@@ -738,7 +817,7 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
     };
 
     const edges = new Map<string, number>();
-    for (const evt of events) {
+    for (const evt of scopedEvents) {
       const metadata = (evt.metadata || {}) as Record<string, unknown>;
       let source = normalizeAgentId(metadata.source_agent ?? metadata.from_agent ?? evt.agent);
       let target = normalizeAgentId(metadata.target_agent ?? metadata.to_agent);
@@ -769,14 +848,14 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
     }
 
     return Array.from(edges.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  }, [agents, aliasToId, events, microProjectMode]);
+  }, [agents, aliasToId, scopedEvents, microProjectMode]);
 
   const timelineEvents = useMemo(() => {
-    return [...events]
+    return [...scopedEvents]
       .filter((e) => e.agent || e.detail)
       .slice(-220)
       .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
-  }, [events]);
+  }, [scopedEvents]);
 
   useEffect(() => {
     if (layoutMode !== 'hierarchy') return;
@@ -806,7 +885,7 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
       observer.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [layoutMode, agents.length, events.length]);
+  }, [layoutMode, agents.length, scopedEvents.length]);
 
   if (loading) {
     return (
@@ -850,6 +929,19 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
       >
         Organization Chart
       </p>
+      {activeProjectId && (
+        <p
+          style={{
+            marginTop: '-12px',
+            marginBottom: '10px',
+            textAlign: 'center',
+            fontSize: '10px',
+            color: 'var(--tf-text-muted)',
+          }}
+        >
+          Focused on project: {activeProjectId}
+        </p>
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '14px' }}>
         {(['hierarchy', 'cluster', 'timeline'] as const).map((mode) => (
@@ -1024,8 +1116,9 @@ function OrgChart({ agents, loading, events, microProjectMode = false }: OrgChar
                 recentActiveIds={recentActiveIds}
                 activeIds={activeIds}
                 mutedAgentIds={mutedAgentIds}
-                flowEdgeKeys={latestFlow.edgeKeys}
-                flowDirection={latestFlow.direction}
+                flowEdgeDirections={latestFlow.edgeDirections}
+                activeTaskByAgent={latestFlow.activeTaskByAgent}
+                blockedAgentIds={latestFlow.blockedAgentIds}
               />
             </div>
           </div>
@@ -1253,6 +1346,7 @@ export default function Overview({
   projects,
   tasks,
   events,
+  activeProjectId = '',
   microProjectMode = false,
   loadingAgents,
   loadingProjects,
@@ -1348,6 +1442,7 @@ export default function Overview({
             agents={agents}
             loading={loadingAgents}
             events={events}
+            activeProjectId={activeProjectId}
             microProjectMode={microProjectMode}
           />
         </div>

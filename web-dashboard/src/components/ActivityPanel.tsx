@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import type { ActivityEvent } from '../types';
+import FloatingSelect from './ui/FloatingSelect';
 
 interface ActivityPanelProps {
   events: ActivityEvent[];
@@ -274,6 +275,14 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
     return Array.from(names).sort();
   }, [events]);
 
+  const agentOptions = useMemo(
+    () => [
+      { value: '', label: 'All Agents', description: 'Show events from the entire organization.' },
+      ...agentNames.map((name) => ({ value: name, label: name })),
+    ],
+    [agentNames],
+  );
+
   // Filter events
   const filteredEvents = useMemo(() => {
     return events.filter((e) => {
@@ -352,31 +361,21 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
       >
         <div className="flex items-center gap-2">
           <label
-            htmlFor="agent-filter"
             className="text-xs font-medium"
             style={{ color: 'var(--tf-text-muted)' }}
           >
             Agent
           </label>
-          <select
-            id="agent-filter"
+          <FloatingSelect
             value={agentFilter}
-            onChange={(e) => setAgentFilter(e.target.value)}
-            className="text-xs rounded-lg px-2 py-1.5 transition-colors duration-200 cursor-pointer"
-            style={{
-              backgroundColor: 'var(--tf-surface)',
-              border: '1px solid var(--tf-border)',
-              color: 'var(--tf-text)',
-              outline: 'none',
-            }}
-          >
-            <option value="">All Agents</option>
-            {agentNames.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+            options={agentOptions}
+            onChange={setAgentFilter}
+            searchable
+            ariaLabel="Agent filter"
+            size="sm"
+            variant="input"
+            style={{ width: '210px' }}
+          />
         </div>
 
         <div className="flex items-center gap-2">
