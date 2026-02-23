@@ -5,11 +5,17 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import subprocess
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
+
+try:
+    import certifi
+except Exception:  # pragma: no cover - optional dependency
+    certifi = None
 
 
 def _utcnow_iso() -> str:
@@ -21,6 +27,18 @@ class IntegrationService:
 
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
+
+    @staticmethod
+    def _request_ssl_context() -> ssl.SSLContext:
+        """Build a TLS context with system trust and optional certifi bundle."""
+        context = ssl.create_default_context()
+        if certifi is not None:
+            try:
+                context.load_verify_locations(cafile=certifi.where())
+            except Exception:
+                # Fall back to system trust when certifi cannot be loaded.
+                pass
+        return context
 
     @staticmethod
     def _github_request(token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
@@ -39,7 +57,7 @@ class IntegrationService:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=20, context=IntegrationService._request_ssl_context()) as resp:
                 status = resp.getcode()
                 body = resp.read().decode("utf-8")
                 return status, json.loads(body) if body else {}
@@ -305,7 +323,7 @@ class IntegrationService:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=20, context=IntegrationService._request_ssl_context()) as resp:
                 body = resp.read().decode("utf-8")
                 return resp.getcode(), json.loads(body) if body else {}
         except urllib.error.HTTPError as exc:
