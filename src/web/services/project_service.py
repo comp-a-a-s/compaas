@@ -86,6 +86,10 @@ class ProjectService:
         description: str,
         project_type: str = "general",
         idempotency_key: str = "",
+        delivery_mode: str = "local",
+        github_repo: str = "",
+        github_branch: str = "master",
+        workspace_path: str = "",
     ) -> tuple[dict[str, Any], bool]:
         """Create project with optional idempotency key.
 
@@ -100,7 +104,15 @@ class ProjectService:
                     if existing:
                         return existing, False
 
-        project_id = self.state_manager.create_project(name, description, project_type)
+        project_id = self.state_manager.create_project(
+            name,
+            description,
+            project_type,
+            workspace_path=workspace_path,
+            delivery_mode=delivery_mode,
+            github_repo=github_repo,
+            github_branch=github_branch,
+        )
         project = self.state_manager.get_project(project_id) or {"id": project_id, "name": name}
         self.ensure_metadata(project_id)
         if idempotency_key:
@@ -162,6 +174,9 @@ class ProjectService:
             name=clone_name,
             description=str(source.get("description", "")),
             project_type=str(source.get("type", "general")),
+            delivery_mode=str(source.get("delivery_mode", "local") or "local"),
+            github_repo=str(source.get("github_repo", "") or ""),
+            github_branch=str(source.get("github_branch", "master") or "master"),
         )
         cloned_id = str(cloned_project.get("id", "") or "")
 
@@ -180,6 +195,74 @@ class ProjectService:
         self._save_metadata(cloned_id, cloned_meta)
 
         return self.state_manager.get_project(cloned_id) or {"id": cloned_id, "name": clone_name}
+
+    def plan_packet_status(self, project_id: str) -> dict[str, Any]:
+        """Return planning packet completeness for Chairman approval gating."""
+        project = self.state_manager.get_project(project_id)
+        if not project:
+            raise ValueError("Project not found")
+
+        project_root = os.path.join(self.projects_dir, project_id)
+        specs_dir = os.path.join(project_root, "specs")
+        artifacts_dir = os.path.join(project_root, "artifacts")
+        files = {
+            "stakeholder_summary": os.path.join(specs_dir, "00_stakeholder_meeting_summary.md"),
+            "execution_plan": os.path.join(specs_dir, "01_full_execution_plan.md"),
+            "activation_guide": os.path.join(artifacts_dir, "02_activation_guide.md"),
+            "project_handoff": os.path.join(artifacts_dir, "03_project_handoff.md"),
+        }
+
+        missing_items: list[str] = []
+        sections: dict[str, dict[str, Any]] = {}
+        total_char_count = 0
+
+        for key, path in files.items():
+            exists = os.path.exists(path)
+            content = ""
+            if exists:
+                try:
+                    with open(path) as f:
+                        content = f.read()
+                except OSError:
+                    content = ""
+            cleaned = content.strip()
+            length_ok = len(cleaned) >= 120
+            looks_template = (
+                "Decision 1:" in cleaned
+                or "Problem statement:" in cleaned
+                or "- What was built:" in cleaned
+                or "Steps to reproduce" in cleaned
+            )
+            if key in {"stakeholder_summary", "execution_plan", "activation_guide"}:
+                if not exists:
+                    missing_items.append(f"Missing file: {os.path.basename(path)}")
+                elif not length_ok:
+                    missing_items.append(f"File too short: {os.path.basename(path)}")
+                elif looks_template:
+                    missing_items.append(f"Replace template placeholders in: {os.path.basename(path)}")
+            total_char_count += len(cleaned)
+            sections[key] = {
+                "path": path,
+                "exists": exists,
+                "length": len(cleaned),
+                "looks_template": looks_template,
+            }
+
+        ready = len(missing_items) == 0
+        summary = (
+            "Planning packet is complete and ready for Chairman approval."
+            if ready
+            else "Planning packet is not ready yet. Complete missing items before approval."
+        )
+        return {
+            "ready": ready,
+            "missing_items": missing_items,
+            "summary": summary,
+            "updated_at": _utcnow_iso(),
+            "wording": "business",
+            "total_characters": total_char_count,
+            "sections": sections,
+        }
 
     def set_archived(self, project_id: str, archived: bool) -> dict[str, Any]:
         metadata = self.ensure_metadata(project_id)

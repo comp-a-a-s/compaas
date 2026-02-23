@@ -31,7 +31,26 @@ export interface Project {
   total_tasks?: number;
   plan_approved?: boolean;
   workspace_path?: string;
+  delivery_mode?: 'local' | 'github';
+  github_repo?: string;
+  github_branch?: string;
+  plan_packet?: PlanningPacketStatus;
   metadata?: ProjectMetadata;
+}
+
+export interface PlanningPacketStatus {
+  ready: boolean;
+  missing_items: string[];
+  summary: string;
+  updated_at?: string;
+  total_characters?: number;
+  wording?: string;
+  sections?: Record<string, {
+    path?: string;
+    exists?: boolean;
+    length?: number;
+    looks_template?: boolean;
+  }>;
 }
 
 export interface Task {

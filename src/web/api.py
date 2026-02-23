@@ -311,10 +311,19 @@ def list_projects() -> list[dict]:
         for t in tasks:
             s = t.get("status", "todo")
             status_counts[s] = status_counts.get(s, 0) + 1
+        try:
+            plan_packet = project_service.plan_packet_status(str(proj["id"]))
+        except ValueError:
+            plan_packet = {
+                "ready": False,
+                "missing_items": ["Project metadata unavailable."],
+                "summary": "Planning packet could not be evaluated.",
+            }
         result.append({
             **proj,
             "task_counts": status_counts,
             "total_tasks": len(tasks),
+            "plan_packet": plan_packet,
         })
     return result
 
@@ -326,6 +335,16 @@ def create_project(request: Request, body: dict | None = None) -> dict:
     name = str(payload.get("name", "") or "").strip()
     description = str(payload.get("description", "") or "").strip()
     project_type = str(payload.get("type", "") or "general").strip() or "general"
+    requested_mode = str(payload.get("delivery_mode", "") or "").strip().lower()
+    workspace_path = str(payload.get("workspace_path", "") or "").strip()
+    github_repo = str(payload.get("github_repo", "") or "").strip()
+    github_branch = str(payload.get("github_branch", "") or "master").strip() or "master"
+    if requested_mode in {"local", "github"}:
+        delivery_mode = requested_mode
+    else:
+        cfg = _load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        delivery_mode = "github" if str(integrations.get("workspace_mode", "local") or "local").strip().lower() == "github" else "local"
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required.")
 
@@ -338,8 +357,13 @@ def create_project(request: Request, body: dict | None = None) -> dict:
         description=description,
         project_type=project_type,
         idempotency_key=idempotency_key,
+        delivery_mode=delivery_mode,
+        github_repo=github_repo,
+        github_branch=github_branch,
+        workspace_path=workspace_path,
     )
     project_id = str(project.get("id", "") or "")
+    plan_packet = project_service.plan_packet_status(project_id)
     emit_activity(
         DATA_DIR,
         "ceo",
@@ -350,9 +374,10 @@ def create_project(request: Request, body: dict | None = None) -> dict:
             "workspace_path": project.get("workspace_path", ""),
             "idempotency_key": idempotency_key[:80],
             "created": created,
+            "delivery_mode": delivery_mode,
         },
     )
-    return {"status": "ok", "created": created, "project": project}
+    return {"status": "ok", "created": created, "project": project, "plan_packet": plan_packet}
 
 
 @app.get("/api/projects/{project_id}", summary="Get a single project with full task board")
@@ -366,7 +391,15 @@ def get_project(project_id: str) -> dict:
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
     tasks = task_board.get_board(project_id)
-    return {**project, "tasks": tasks, "project": project}
+    try:
+        plan_packet = project_service.plan_packet_status(project_id)
+    except ValueError:
+        plan_packet = {
+            "ready": False,
+            "missing_items": ["Project metadata unavailable."],
+            "summary": "Planning packet could not be evaluated.",
+        }
+    return {**project, "tasks": tasks, "project": project, "plan_packet": plan_packet}
 
 
 # ---------------------------------------------------------------------------
@@ -1036,15 +1069,28 @@ def list_project_specs(project_id: str) -> list[dict]:
 
 @app.post("/api/projects/{project_id}/approve", summary="Approve the project plan")
 def approve_project_plan(project_id: str) -> dict:
-    """Set plan_approved=true on the project, marking the Chairman has approved it."""
+    """Approve a project only when the planning packet checklist is complete."""
     try:
         validate_safe_id(project_id, "project_id")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid project ID format.")
+    try:
+        plan_packet = project_service.plan_packet_status(project_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+    if not bool(plan_packet.get("ready")):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Planning packet is incomplete.",
+                "missing_items": plan_packet.get("missing_items", []),
+                "summary": plan_packet.get("summary", ""),
+            },
+        )
     ok = state_manager.update_project(project_id, {"plan_approved": True, "status": "active"})
     if not ok:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
-    return {"status": "approved"}
+    return {"status": "approved", "plan_packet": plan_packet}
 
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1168,29 @@ _EXECUTION_INTENT_KEYWORDS = (
     "deploy",
     "code",
 )
+_GREETING_HINTS = (
+    "hi",
+    "hello",
+    "hey",
+    "good morning",
+    "good afternoon",
+    "good evening",
+)
+_STATUS_HINTS = (
+    "status",
+    "progress",
+    "update",
+    "where are we",
+    "how far",
+    "what happened",
+)
+_CLARIFICATION_HINTS = (
+    "what do you think",
+    "can you explain",
+    "help me understand",
+    "clarify",
+    "question",
+)
 _PROJECT_START_HINTS = (
     "new project",
     "start a project",
@@ -1151,6 +1220,21 @@ def _normalize_project_id(project_id: str) -> str:
     except ValueError:
         return ""
     return pid
+
+
+def _contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+    normalized = f" {text.strip().lower()} "
+    for keyword in keywords:
+        kw = keyword.strip().lower()
+        if not kw:
+            continue
+        if " " in kw:
+            if kw in normalized:
+                return True
+            continue
+        if re.search(rf"\b{re.escape(kw)}\b", normalized):
+            return True
+    return False
 
 
 def _load_chat_messages(project_id: str = "", include_global: bool = False) -> list[dict]:
@@ -1250,8 +1334,14 @@ def _latest_chat_project_id() -> str:
 
 
 def _message_requests_execution(message: str) -> bool:
-    lower = (message or "").lower()
-    return any(keyword in lower for keyword in _EXECUTION_INTENT_KEYWORDS)
+    lower = (message or "").strip().lower()
+    if not lower:
+        return False
+    # Pure greetings/salutations should never trigger implementation mode.
+    greeting_only = _contains_keyword(lower, _GREETING_HINTS) and len(lower.split()) <= 4
+    if greeting_only:
+        return False
+    return _contains_keyword(lower, _EXECUTION_INTENT_KEYWORDS)
 
 
 def _message_starts_new_project(message: str) -> bool:
@@ -1302,7 +1392,21 @@ def _resolve_chat_project(project_id: str, user_message: str, user_name: str) ->
     if _message_starts_new_project(user_message):
         project_name = _infer_project_name_from_message(user_message)
         project_desc = f"Auto-created from CEO chat request by {user_name}."
-        new_pid = state_manager.create_project(project_name, project_desc, "app")
+        cfg = _load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        delivery_mode = "github" if str(integrations.get("workspace_mode", "local") or "local").strip().lower() == "github" else "local"
+        new_pid = state_manager.create_project(
+            project_name,
+            project_desc,
+            "app",
+            delivery_mode=delivery_mode,
+            github_repo=str(integrations.get("github_repo", "") or "").strip(),
+            github_branch=str(integrations.get("github_default_branch", "master") or "master").strip() or "master",
+        )
+        try:
+            project_service.ensure_metadata(new_pid)
+        except Exception:
+            pass
         new_project = state_manager.get_project(new_pid)
         emit_activity(
             DATA_DIR,
@@ -1390,14 +1494,19 @@ def _build_context_prompt(
         parts.append("")
 
     workspace_mode = integrations.get("workspace_mode", "local")
+    project_delivery_mode = str((active_project or {}).get("delivery_mode", "") or "").strip().lower()
+    effective_delivery_mode = project_delivery_mode if project_delivery_mode in {"local", "github"} else str(workspace_mode or "local").strip().lower()
     github_repo = str(integrations.get("github_repo", "") or "").strip()
     github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
+    if active_project:
+        github_repo = str(active_project.get("github_repo", github_repo) or github_repo).strip()
+        github_branch = str(active_project.get("github_branch", github_branch) or github_branch).strip() or github_branch
     github_auto_push = bool(integrations.get("github_auto_push"))
     github_auto_pr = bool(integrations.get("github_auto_pr"))
     vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
     vercel_connected = bool(str(integrations.get("vercel_token", "") or "").strip())
 
-    if workspace_mode == "github":
+    if effective_delivery_mode == "github":
         repo_label = github_repo or "(not configured)"
         parts.append(
             "[DELIVERY MODE: GitHub. "
@@ -1427,6 +1536,7 @@ def _build_context_prompt(
     parts.append("")
     parts.append(
         f"Respond to {user_name}'s latest message. "
+        "Use an executive, human tone for a Chairman/CEO conversation: concise, clear, respectful, practical. "
         "Do not re-introduce yourself every turn (avoid phrases like '<CEO> here'). "
         "Keep one clear final response per turn, and avoid narrating every intermediate step in prose. "
         "For build requests, execute concrete implementation actions and report files/commands explicitly."
@@ -1576,27 +1686,101 @@ def _micro_project_complexity_reason(user_message: str) -> str | None:
 
 
 def _classify_execution_intent(user_message: str) -> dict[str, Any]:
-    """Heuristic execution-intent classifier used for run routing/gates."""
-    text = (user_message or "").strip().lower()
+    """Stage-gated intent classifier used for routing, delegation, and approval gating."""
+    raw = (user_message or "").strip()
+    text = raw.lower()
     if not text:
-        return {"intent": "unknown", "confidence": 0.0, "needs_planning": False}
+        return {
+            "intent": "unknown",
+            "class": "clarification",
+            "confidence": 0.0,
+            "needs_planning": False,
+            "actionable": False,
+            "delegate_allowed": False,
+        }
 
-    execution_terms = ("build", "implement", "create", "write", "generate", "deploy", "fix")
-    planning_terms = ("plan", "architecture", "roadmap", "strategy", "research", "tradeoff")
-    complex_terms = ("production", "security", "scalable", "migration", "ci/cd", "end-to-end")
+    execution_terms = ("build", "implement", "create", "write", "generate", "deploy", "fix", "ship")
+    planning_terms = ("plan", "architecture", "roadmap", "strategy", "research", "tradeoff", "scope")
+    complex_terms = ("production", "security", "scalable", "migration", "ci/cd", "end-to-end", "compliance")
+    review_terms = ("review", "qa", "test", "regression", "validate", "verify")
 
-    execution_hits = sum(1 for t in execution_terms if t in text)
-    planning_hits = sum(1 for t in planning_terms if t in text)
-    complex_hits = sum(1 for t in complex_terms if t in text)
+    execution_hits = sum(1 for t in execution_terms if _contains_keyword(text, (t,)))
+    planning_hits = sum(1 for t in planning_terms if _contains_keyword(text, (t,)))
+    complex_hits = sum(1 for t in complex_terms if _contains_keyword(text, (t,)))
+    review_hits = sum(1 for t in review_terms if _contains_keyword(text, (t,)))
+    is_greeting = _contains_keyword(text, _GREETING_HINTS) and len(text.split()) <= 6 and execution_hits == 0 and planning_hits == 0
+    is_status = _contains_keyword(text, _STATUS_HINTS) and execution_hits == 0 and planning_hits == 0
+    is_question = "?" in text or _contains_keyword(text, _CLARIFICATION_HINTS)
 
+    if is_greeting:
+        return {
+            "intent": "qa",
+            "class": "greeting",
+            "confidence": 0.96,
+            "needs_planning": False,
+            "actionable": False,
+            "delegate_allowed": False,
+        }
+    if is_status:
+        return {
+            "intent": "qa",
+            "class": "status",
+            "confidence": 0.82,
+            "needs_planning": False,
+            "actionable": False,
+            "delegate_allowed": False,
+        }
     if planning_hits > execution_hits:
-        confidence = min(0.98, 0.58 + planning_hits * 0.1)
-        return {"intent": "planning", "confidence": round(confidence, 2), "needs_planning": True}
+        confidence = min(0.98, 0.62 + planning_hits * 0.08)
+        return {
+            "intent": "planning",
+            "class": "planning",
+            "confidence": round(confidence, 2),
+            "needs_planning": True,
+            "actionable": True,
+            "delegate_allowed": True,
+        }
     if execution_hits > 0:
-        confidence = min(0.98, 0.6 + execution_hits * 0.08)
-        needs_planning = complex_hits > 0 or (len(text.split()) > 45)
-        return {"intent": "execution", "confidence": round(confidence, 2), "needs_planning": needs_planning}
-    return {"intent": "qa", "confidence": 0.52, "needs_planning": False}
+        needs_planning = complex_hits > 0 or planning_hits > 0 or (len(text.split()) > 45)
+        confidence = min(0.98, 0.64 + execution_hits * 0.07)
+        delegate_allowed = needs_planning or execution_hits > 1 or _contains_keyword(
+            text,
+            ("frontend", "backend", "api", "ux", "database", "auth", "deploy", "security"),
+        )
+        return {
+            "intent": "execution",
+            "class": "execution",
+            "confidence": round(confidence, 2),
+            "needs_planning": needs_planning,
+            "actionable": True,
+            "delegate_allowed": bool(delegate_allowed),
+        }
+    if review_hits > 0:
+        return {
+            "intent": "qa",
+            "class": "review",
+            "confidence": 0.68,
+            "needs_planning": False,
+            "actionable": True,
+            "delegate_allowed": True,
+        }
+    if is_question:
+        return {
+            "intent": "qa",
+            "class": "clarification",
+            "confidence": 0.6,
+            "needs_planning": False,
+            "actionable": False,
+            "delegate_allowed": False,
+        }
+    return {
+        "intent": "qa",
+        "class": "clarification",
+        "confidence": 0.52,
+        "needs_planning": False,
+        "actionable": False,
+        "delegate_allowed": False,
+    }
 
 
 def _structured_response_payload(text: str) -> dict[str, Any]:
@@ -1623,6 +1807,43 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
         "risks": risks[:10],
         "next_actions": next_actions[:10],
     }
+
+
+def _lightweight_ceo_response(
+    *,
+    intent: dict[str, Any],
+    user_name: str,
+    ceo_name: str,
+    project: dict | None,
+) -> str | None:
+    """Return deterministic, non-delegating chat replies for lightweight turns."""
+    intent_class = str(intent.get("class", "") or "")
+    if intent_class == "greeting":
+        if project:
+            project_name = str(project.get("name", "the project") or "the project")
+            return (
+                f"Hi {user_name}. Ready to move on {project_name}. "
+                "Tell me the outcome you want, and I’ll take it from there."
+            )
+        return (
+            f"Hi {user_name}. I’m ready. "
+            "Share what you want to build, and once you choose a project location (Local or GitHub), I’ll execute."
+        )
+    if intent_class == "status":
+        if not project:
+            return (
+                f"{user_name}, we are in conversation mode with no active project selected. "
+                "Select or create a project when you want execution."
+            )
+        project_name = str(project.get("name", "Project") or "Project")
+        status = str(project.get("status", "planning") or "planning")
+        workspace = str(project.get("workspace_path", "") or "")
+        return (
+            f"{user_name}, current status for {project_name} is '{status}'. "
+            f"Workspace path: {workspace or '(not set)'}. "
+            "I can provide the next execution step as soon as you ask."
+        )
+    return None
 
 
 def _build_micro_project_prompt(prompt: str, *, user_name: str, ceo_name: str) -> str:
@@ -1704,8 +1925,20 @@ def _emit_chat_activity(
     )
 
 
-def _should_trigger_execution_bridge(user_message: str, project_id: str) -> bool:
-    if not project_id:
+def _should_trigger_execution_bridge(
+    user_message: str,
+    project_id: str,
+    *,
+    intent: dict[str, Any] | None = None,
+    project: dict | None = None,
+    micro_project_mode: bool = False,
+) -> bool:
+    if micro_project_mode or not project_id:
+        return False
+    profile = intent or _classify_execution_intent(user_message)
+    if str(profile.get("intent", "")) != "execution":
+        return False
+    if bool(profile.get("needs_planning")) and not bool((project or {}).get("plan_approved")):
         return False
     return _message_requests_execution(user_message)
 
@@ -1764,27 +1997,38 @@ def _configured_agent_name(agent_id: str, config: dict) -> str:
     return get_agent_display_name(agent_id)
 
 
-def _infer_support_agents(user_message: str) -> list[str]:
-    """Infer which specialist agents should be involved for a request."""
+def _infer_support_agents(user_message: str, *, intent: dict[str, Any] | None = None) -> list[str]:
+    """Infer specialist involvement with conservative delegation defaults."""
     text = (user_message or "").lower()
-    inferred: list[str] = ["cto", "vp-engineering"]
+    profile = intent or _classify_execution_intent(user_message)
+    intent_class = str(profile.get("class", "") or "")
+    actionable = bool(profile.get("actionable"))
+    delegate_allowed = bool(profile.get("delegate_allowed"))
+    if intent_class in {"greeting", "clarification", "status"} or not actionable or not delegate_allowed:
+        return []
+
+    inferred: list[str] = []
     for keywords, agent_id in _SUPPORT_AGENT_HINTS:
         if any(keyword in text for keyword in keywords):
             inferred.append(agent_id)
-    if _message_requests_execution(text):
+
+    if intent_class == "planning":
+        inferred.extend(["chief-researcher", "cto", "vp-engineering"])
+
+    if str(profile.get("intent", "")) == "execution":
+        # Add delivery defaults only for real implementation turns.
         if not any(agent in inferred for agent in ("lead-frontend", "lead-backend")):
-            inferred.append("lead-frontend")
-        if "qa-lead" not in inferred:
-            inferred.append("qa-lead")
-        if "tech-writer" not in inferred:
-            inferred.append("tech-writer")
-    if any(word in text for word in ("plan", "scope", "requirements")):
-        inferred.append("chief-researcher")
-    return [
+            inferred.append("vp-engineering")
+        inferred.append("qa-lead")
+        inferred.append("tech-writer")
+
+    ordered = [
         agent_id
         for agent_id in _ordered_unique(inferred)
         if agent_id in AGENT_REGISTRY and agent_id != "ceo"
-    ][:6]
+    ]
+    # Cap concurrent delegation to reduce noise and over-orchestration.
+    return ordered[:4]
 
 
 def _agent_task_summary(agent_id: str, user_message: str) -> str:
@@ -1928,6 +2172,143 @@ def _seed_project_execution_scaffold(
     )
 
 
+def _write_text_file(path: str, content: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+
+
+def _generate_planning_packet(
+    project_id: str,
+    *,
+    user_message: str,
+    user_name: str,
+    ceo_name: str,
+) -> dict[str, Any]:
+    """Create or refresh planning packet docs in business language."""
+    project = state_manager.get_project(project_id) or {}
+    project_name = str(project.get("name", project_id) or project_id)
+    workspace_path = str(project.get("workspace_path", "") or "")
+    delivery_mode = str(project.get("delivery_mode", "local") or "local")
+    github_repo = str(project.get("github_repo", "") or "").strip()
+    github_branch = str(project.get("github_branch", "master") or "master").strip() or "master"
+    concise_request = re.sub(r"\s+", " ", (user_message or "").strip())
+    now_label = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    project_root = safe_path_join(DATA_DIR, "projects", project_id)
+    stakeholder_path = safe_path_join(project_root, "specs", "00_stakeholder_meeting_summary.md")
+    plan_path = safe_path_join(project_root, "specs", "01_full_execution_plan.md")
+    activation_path = safe_path_join(project_root, "artifacts", "02_activation_guide.md")
+    handoff_path = safe_path_join(project_root, "artifacts", "03_project_handoff.md")
+
+    meeting_summary = (
+        f"# Stakeholder Meeting Summary: {project_name}\n\n"
+        f"_Prepared on {now_label}_\n\n"
+        "## Participants\n"
+        f"- {user_name} (Chairman)\n"
+        f"- {ceo_name} (CEO)\n"
+        "- Specialist contributors (assigned after approval)\n\n"
+        "## Business Need\n"
+        f"- Request received: {concise_request or 'Clarify project objective.'}\n"
+        "- Deliver a practical outcome with clear activation steps and documented handoff.\n\n"
+        "## Decisions Recorded\n"
+        "- Proceed with a staged plan before full execution.\n"
+        "- Keep all outputs in the project workspace and project documentation folders.\n\n"
+        "## Open Questions\n"
+        "- Any additional constraints on deadline, budget, or preferred stack?\n"
+        "- Success metric the Chairman wants to optimize first?\n"
+    )
+
+    delivery_line = (
+        f"- Delivery mode: GitHub (`{github_repo or 'repository not set'}` on `{github_branch}`)"
+        if delivery_mode == "github"
+        else f"- Delivery mode: Local workspace (`{workspace_path}`)"
+    )
+    execution_plan = (
+        f"# Full Execution Plan: {project_name}\n\n"
+        f"_Prepared on {now_label}_\n\n"
+        "## Scope\n"
+        f"- Primary objective: {concise_request or 'Define the requested deliverable.'}\n"
+        "- Expected deliverables: working output, validation evidence, and activation guide.\n\n"
+        "## Acceptance Criteria\n"
+        "- Output is runnable with clear setup/run steps.\n"
+        "- Core user flow is validated and documented.\n"
+        "- Handoff notes explain what was built and any known limitations.\n\n"
+        "## Risks and Dependencies\n"
+        "- Risk: unclear requirements can delay implementation quality.\n"
+        "- Mitigation: confirm assumptions early and keep scope explicit.\n"
+        "- Dependency: selected AI runtime/provider availability during execution.\n\n"
+        "## Execution Waves\n"
+        "1. Planning alignment and scope lock.\n"
+        "2. Build implementation with tracked activity.\n"
+        "3. QA verification and regression checks.\n"
+        "4. Release handoff and activation walkthrough.\n\n"
+        "## Delivery Context\n"
+        f"{delivery_line}\n"
+        f"- Workspace path: `{workspace_path}`\n"
+    )
+
+    activation_guide = (
+        f"# Activation Guide: {project_name}\n\n"
+        f"_Prepared on {now_label}_\n\n"
+        "## Output Location\n"
+        f"- Workspace path: `{workspace_path}`\n"
+        f"{delivery_line}\n\n"
+        "## Setup\n"
+        "1. Open the workspace path above.\n"
+        "2. Install dependencies used by the project.\n"
+        "3. Configure required environment variables.\n\n"
+        "## Run and Verify\n"
+        "1. Start the application using the project run command.\n"
+        "2. Validate the primary user flow and expected result.\n"
+        "3. Confirm no blocking errors in runtime logs.\n\n"
+        "## Deployment\n"
+        "1. If GitHub mode is selected, push branch updates and create a PR.\n"
+        "2. If Vercel is connected, deploy the approved branch/artifact.\n"
+        "3. Record final deployment URL in the handoff note.\n"
+    )
+
+    handoff = (
+        f"# Project Handoff: {project_name}\n\n"
+        "## Final Summary\n"
+        "- To be completed after execution.\n\n"
+        "## Files and Modules\n"
+        "- To be completed after execution.\n\n"
+        "## Operational Notes\n"
+        "- Monitoring and fallback notes to be completed after execution.\n"
+    )
+
+    _write_text_file(stakeholder_path, meeting_summary)
+    _write_text_file(plan_path, execution_plan)
+    _write_text_file(activation_path, activation_guide)
+    if not os.path.exists(handoff_path):
+        _write_text_file(handoff_path, handoff)
+
+    try:
+        metadata = project_service.get_metadata(project_id)
+        charter = metadata.get("charter", {}) if isinstance(metadata.get("charter"), dict) else {}
+        charter["scope"] = concise_request or charter.get("scope", "")
+        charter["acceptance_criteria"] = _ordered_unique([
+            "Runnable output with clear activation steps",
+            "Validated core flow",
+            "Documented handoff",
+        ])
+        notes = metadata.get("stakeholder_notes", []) if isinstance(metadata.get("stakeholder_notes"), list) else []
+        notes.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "author": ceo_name,
+            "note": f"Planning packet refreshed for request: {concise_request[:180]}",
+        })
+        project_service.update_metadata(project_id, {
+            "charter": charter,
+            "stakeholder_notes": notes[-50:],
+        })
+    except Exception:
+        pass
+
+    return project_service.plan_packet_status(project_id)
+
+
 def _build_synthetic_delegation_plan(
     user_message: str,
     support_agents: list[str],
@@ -1970,6 +2351,8 @@ async def _emit_synthetic_delegation_start(
                 "tool": "synthetic_delegation",
                 "source_agent": "ceo",
                 "target_agent": agent_id,
+                "actor": "ceo",
+                "target": agent_id,
                 "flow": "down",
                 "task": task[:280],
                 **runtime_metadata,
@@ -2026,6 +2409,8 @@ async def _emit_synthetic_delegation_completion(
                 "tool": "synthetic_delegation",
                 "source_agent": agent_id,
                 "target_agent": "ceo",
+                "actor": agent_id,
+                "target": "ceo",
                 "flow": "up",
                 "task": task[:280],
                 **runtime_metadata,
@@ -2336,6 +2721,37 @@ async def _handle_ceo_claude(
                         saw_tool_use = True
                         tool_name = str(block.get("name", "tool") or "tool")
                         tool_input = block.get("input", {}) if isinstance(block.get("input", {}), dict) else {}
+                        if micro_project_mode and tool_name == "Task":
+                            violation_message = (
+                                "Micro Project mode is CEO-only. Delegation to specialist agents was blocked. "
+                                "Turn Micro mode off to run the full crew."
+                            )
+                            await websocket.send_json({
+                                "type": "action",
+                                "content": "Micro mode blocked a delegation attempt.",
+                            })
+                            await websocket.send_json({
+                                "type": "action_detail",
+                                "content": {
+                                    "label": "Micro mode blocked a delegation attempt.",
+                                    "tool": "Task",
+                                    "state": "blocked",
+                                    "run_id": run_id,
+                                    "actor": "ceo",
+                                    "target": "delegation",
+                                    "flow": "blocked",
+                                    **runtime_metadata,
+                                },
+                            })
+                            await websocket.send_json({"type": "micro_project_warning", "content": violation_message})
+                            _emit_chat_activity(
+                                "ceo",
+                                "WARNING",
+                                "Micro mode blocked specialist delegation.",
+                                project_id=project_id,
+                                metadata={"tool": "Task", **runtime_metadata},
+                            )
+                            continue
                         action_label = _format_tool_action(tool_name, tool_input)
                         activity_metadata: dict[str, Any] = {"tool": tool_name, **runtime_metadata}
                         if tool_name == "Bash":
@@ -2352,6 +2768,9 @@ async def _handle_ceo_claude(
                                 "tool": tool_name,
                                 "state": "started",
                                 "run_id": run_id,
+                                "actor": "ceo",
+                                "target": "workspace",
+                                "flow": "internal",
                                 **activity_metadata,
                             },
                         })
@@ -2421,6 +2840,9 @@ async def _handle_ceo_claude(
                                     "label": preview,
                                     "state": "completed",
                                     "run_id": run_id,
+                                    "actor": delegated_agent or "workspace",
+                                    "target": "ceo",
+                                    "flow": "up" if delegated_agent else "internal",
                                     **result_metadata,
                                 },
                             })
@@ -2803,6 +3225,9 @@ async def _handle_ceo_codex(
                                 "cwd": run_cwd,
                                 "state": "started",
                                 "run_id": run_id,
+                                "actor": "ceo",
+                                "target": "workspace",
+                                "flow": "internal",
                             },
                         })
                         _emit_chat_activity(
@@ -2831,6 +3256,9 @@ async def _handle_ceo_codex(
                                 "output_preview": output_preview,
                                 "state": "completed",
                                 "run_id": run_id,
+                                "actor": "workspace",
+                                "target": "ceo",
+                                "flow": "up",
                             },
                         })
                         _emit_chat_activity(
@@ -2856,6 +3284,18 @@ async def _handle_ceo_codex(
                     if event_type == "item.started":
                         label = f"Updating file: {changed[:180]}" if changed else "Updating files"
                         await websocket.send_json({"type": "action", "content": label})
+                        await websocket.send_json({
+                            "type": "action_detail",
+                            "content": {
+                                "label": label,
+                                "file_path": changed[:400],
+                                "state": "started",
+                                "run_id": run_id,
+                                "actor": "ceo",
+                                "target": changed[:160] or "workspace",
+                                "flow": "down",
+                            },
+                        })
                         _emit_chat_activity(
                             "ceo",
                             "STARTED",
@@ -2866,6 +3306,18 @@ async def _handle_ceo_codex(
                     else:
                         result = f"Updated file: {changed[:180]}" if changed else "File update completed"
                         await websocket.send_json({"type": "action_result", "content": result})
+                        await websocket.send_json({
+                            "type": "action_detail",
+                            "content": {
+                                "label": result,
+                                "file_path": changed[:400],
+                                "state": "completed",
+                                "run_id": run_id,
+                                "actor": "workspace",
+                                "target": "ceo",
+                                "flow": "up",
+                            },
+                        })
                         _emit_chat_activity(
                             "ceo",
                             "COMPLETED",
@@ -3072,6 +3524,7 @@ async def _handle_ceo_openai(
     run_id: str = "",
     support_agents: list[str] | None = None,
     micro_project_mode: bool = False,
+    intent: dict[str, Any] | None = None,
     user_name: str = "User",
     config: dict | None = None,
 ) -> str | None:
@@ -3099,7 +3552,13 @@ async def _handle_ceo_openai(
     response_parts: list[str] = []
     first_token = True
     stream_warning: str | None = None
-    should_bridge_execution = _should_trigger_execution_bridge(user_message, project_id)
+    should_bridge_execution = _should_trigger_execution_bridge(
+        user_message,
+        project_id,
+        intent=intent,
+        project=project,
+        micro_project_mode=micro_project_mode,
+    )
 
     def _stream_timeout_seconds(env_name: str, default_value: float) -> float:
         raw = str(os.getenv(env_name, "") or "").strip()
@@ -3509,8 +3968,19 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 user_name,
             )
             intent = _classify_execution_intent(user_message)
-            support_agents = [] if micro_project_mode else _infer_support_agents(user_message)
-            if active_project_id and _message_requests_execution(user_message):
+            intent_class = str(intent.get("class", "clarification") or "clarification")
+            planning_approved_flag = bool(data.get("planning_approved", False))
+            if micro_project_mode:
+                no_delegation_mode = True
+            if intent_class in {"greeting", "clarification", "status"}:
+                no_delegation_mode = True
+            support_agents = [] if micro_project_mode else _infer_support_agents(user_message, intent=intent)
+            is_execution_turn = str(intent.get("intent", "")) == "execution" and bool(intent.get("actionable"))
+            if active_project_id and is_execution_turn and (
+                not bool(intent.get("needs_planning"))
+                or planning_approved_flag
+                or bool((active_project or {}).get("plan_approved"))
+            ):
                 _seed_project_execution_scaffold(
                     active_project_id,
                     user_message,
@@ -3520,6 +3990,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     config=config,
                 )
                 active_project = state_manager.get_project(active_project_id) or active_project
+            plan_packet_status: dict[str, Any] = {"ready": False, "missing_items": [], "summary": ""}
+            if active_project_id:
+                try:
+                    plan_packet_status = project_service.plan_packet_status(active_project_id)
+                except ValueError:
+                    plan_packet_status = {"ready": False, "missing_items": ["Project not found."], "summary": ""}
             sandbox_profile = str(data.get("sandbox_profile", "standard") or "standard").strip().lower()
             idempotency_key = str(data.get("idempotency_key", "") or "").strip()
             run_mode = "micro_project" if micro_project_mode else "full_crew"
@@ -3531,7 +4007,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     sandbox_profile=sandbox_profile,
                     idempotency_key=idempotency_key,
                     mode=run_mode,
-                    metadata={"intent": intent},
+                    metadata={"intent": intent, "intent_class": intent_class, "support_agents": support_agents},
                 )
             except RuntimeError as exc:
                 await websocket.send_json({"type": "error", "content": str(exc)})
@@ -3544,7 +4020,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 run_id,
                 state="planning",
                 label="Turn accepted and queued for planning",
-                metadata={"intent": intent, "sandbox_profile": sandbox_profile},
+                metadata={"intent": intent, "intent_class": intent_class, "sandbox_profile": sandbox_profile},
             )
             await websocket.send_json({
                 "type": "run",
@@ -3553,7 +4029,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     "status": run_record.get("status", "queued"),
                     "mode": run_mode,
                     "intent": intent,
+                    "intent_class": intent_class,
                     "sandbox_profile": sandbox_profile,
+                    "support_agents": support_agents,
                 },
             })
 
@@ -3573,6 +4051,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     "project_id": active_project_id,
                     "created": created_project,
                     "project": active_project,
+                    "plan_packet": plan_packet_status,
                 })
 
             prompt = _build_context_prompt(
@@ -3606,23 +4085,56 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 # Codex runtime is fixed regardless of intent routing settings.
                 effective_llm_cfg["model"] = "codex"
             planning_gate_enabled = bool(feature_flags.get("planning_approval_gate", True))
-            planning_approved = bool(data.get("planning_approved", False))
-            if planning_gate_enabled and intent.get("needs_planning") and not planning_approved:
+            planning_approved = planning_approved_flag
+            if (
+                planning_gate_enabled
+                and bool(intent.get("needs_planning"))
+                and active_project_id
+                and not planning_approved
+                and not bool((active_project or {}).get("plan_approved"))
+            ):
+                if not bool(plan_packet_status.get("ready")):
+                    plan_packet_status = _generate_planning_packet(
+                        active_project_id,
+                        user_message=user_message,
+                        user_name=user_name,
+                        ceo_name=ceo_name,
+                    )
+                    active_project = state_manager.get_project(active_project_id) or active_project
+                    await websocket.send_json({
+                        "type": "action_result",
+                        "content": "Planning packet prepared with meeting summary, execution plan, and activation guide.",
+                    })
+                    _emit_chat_activity(
+                        "ceo",
+                        "UPDATED",
+                        "Planning packet prepared and ready for Chairman approval.",
+                        project_id=active_project_id,
+                        metadata={"intent": intent, "plan_packet": plan_packet_status},
+                    )
                 run_service.transition_run(
                     run_id,
                     state="planning",
                     label="Planning approval required before execution",
-                    metadata={"intent": intent},
+                    metadata={"intent": intent, "plan_packet": plan_packet_status},
                 )
                 await websocket.send_json({
                     "type": "planning_approval_required",
                     "content": {
-                        "reason": "This request appears non-trivial and should be approved at planning stage.",
+                        "reason": str(plan_packet_status.get("summary", "") or "Planning packet is ready for approval."),
                         "intent": intent,
                         "run_id": run_id,
+                        "plan_packet": plan_packet_status,
                     },
                 })
-                await websocket.send_json({"type": "done", "content": "", "project_id": active_project_id, "run_id": run_id})
+                await websocket.send_json({
+                    "type": "done",
+                    "content": "",
+                    "project_id": active_project_id,
+                    "run_id": run_id,
+                    "intent_class": intent_class,
+                    "planning_packet_status": plan_packet_status,
+                })
                 inflight_run_id = ""
                 inflight_project_id = ""
                 continue
@@ -3647,7 +4159,28 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     })
                 prompt = _build_micro_project_prompt(prompt, user_name=user_name, ceo_name=ceo_name)
 
-            if provider == "openai" and openai_mode == "codex":
+            lightweight_response = _lightweight_ceo_response(
+                intent=intent,
+                user_name=user_name,
+                ceo_name=ceo_name,
+                project=active_project,
+            )
+            if lightweight_response and no_delegation_mode:
+                full_response = lightweight_response
+                run_service.transition_run(
+                    run_id,
+                    state="done",
+                    label="Lightweight conversational response generated",
+                    metadata={"intent": intent, "intent_class": intent_class},
+                )
+                _emit_chat_activity(
+                    "ceo",
+                    "COMPLETED",
+                    "Lightweight conversational response generated",
+                    project_id=active_project_id,
+                    metadata={"intent": intent, "intent_class": intent_class},
+                )
+            elif provider == "openai" and openai_mode == "codex":
                 project_workdir = str((active_project or {}).get("workspace_path", "") or "").strip()
                 full_response = await _handle_ceo_codex(
                     websocket,
@@ -3675,6 +4208,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     run_id=run_id,
                     support_agents=support_agents,
                     micro_project_mode=micro_project_mode,
+                    intent=intent,
                     user_name=user_name,
                     config=config,
                 )
@@ -3736,11 +4270,18 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 if run_state and str(run_state.get("status", "")) in {"queued", "planning", "executing", "verifying"}:
                     run_service.transition_run(run_id, state="failed", label="Provider returned no response")
             structured_enabled = bool(feature_flags.get("structured_ceo_response", True) or data.get("structured_response"))
+            if active_project_id:
+                try:
+                    plan_packet_status = project_service.plan_packet_status(active_project_id)
+                except ValueError:
+                    plan_packet_status = {"ready": False, "missing_items": ["Project metadata unavailable."], "summary": ""}
             done_payload: dict[str, Any] = {
                 "type": "done",
                 "content": full_response or "",
                 "project_id": active_project_id,
                 "run_id": run_id,
+                "intent_class": intent_class,
+                "planning_packet_status": plan_packet_status,
             }
             if structured_enabled:
                 done_payload["structured"] = _structured_response_payload(full_response or "")

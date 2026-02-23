@@ -394,16 +394,31 @@ export default function App() {
     const suggestedName = `Project ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
     const name = window.prompt('Create new project', suggestedName);
     if (!name || !name.trim()) return;
+    const defaultMode = config?.integrations?.workspace_mode === 'github' ? 'github' : 'local';
+    const modeInput = window.prompt('Project location mode (local/github)', defaultMode);
+    const normalizedMode = (modeInput || defaultMode).trim().toLowerCase();
+    const deliveryMode = normalizedMode === 'github' ? 'github' : 'local';
+    const defaultRepo = config?.integrations?.github_repo?.trim() || '';
+    const defaultBranch = config?.integrations?.github_default_branch?.trim() || 'master';
+    let githubRepo = defaultRepo;
+    let githubBranch = defaultBranch;
+    if (deliveryMode === 'github') {
+      githubRepo = (window.prompt('GitHub repository (owner/repo)', defaultRepo) || '').trim();
+      githubBranch = (window.prompt('GitHub default branch', defaultBranch) || defaultBranch).trim() || 'master';
+    }
     const created = await createProject({
       name: name.trim(),
       description: `Created from the global project selector by ${config?.user?.name || 'Chairman'}.`,
       type: 'app',
+      delivery_mode: deliveryMode,
+      github_repo: githubRepo,
+      github_branch: githubBranch,
     });
     const nextProjectId = created?.project?.id;
     if (!nextProjectId) return;
     setActiveProjectId(nextProjectId);
     await loadProjects(true);
-  }, [config?.user?.name, loadProjects]);
+  }, [config?.integrations?.github_default_branch, config?.integrations?.github_repo, config?.integrations?.workspace_mode, config?.user?.name, loadProjects]);
 
   const loadMetrics = useCallback(async () => {
     try {
@@ -554,6 +569,7 @@ export default function App() {
         project.id === activeProjectId
         && project.plan_approved !== true
         && project.status === 'planning'
+        && Boolean(project.plan_packet?.ready)
     );
   }, [projects, activeProjectId]);
   const handleConfigUpdated = useCallback(() => {
@@ -728,6 +744,9 @@ export default function App() {
             onSelectProject={(projectId) => setActiveProjectId(projectId)}
             onProjectIdConsumed={() => setPendingProjectId(null)}
             onRefresh={loadProjects}
+            defaultWorkspaceMode={config?.integrations?.workspace_mode === 'github' ? 'github' : 'local'}
+            defaultGithubRepo={config?.integrations?.github_repo || ''}
+            defaultGithubBranch={config?.integrations?.github_default_branch || 'master'}
             onProjectCreated={(projectId) => {
               setActiveProjectId(projectId);
               setPendingProjectId(projectId);

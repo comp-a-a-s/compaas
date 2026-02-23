@@ -1464,7 +1464,7 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
                 htmlFor="settings-username"
                 style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
               >
-                Your Name (Board Head)
+                Your Name (Chairman)
               </label>
               <input
                 id="settings-username"

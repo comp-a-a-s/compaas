@@ -11,6 +11,7 @@ import type {
   ProjectMetadata,
   RunRecord,
   FeatureFlags,
+  PlanningPacketStatus,
 } from '../types';
 
 const BASE = '/api';
@@ -161,15 +162,55 @@ export async function fetchProjectSpecs(id: string): Promise<{ filename: string;
   return safeFetch(`${BASE}/projects/${encodeURIComponent(id)}/specs`, []);
 }
 
-export async function approveProjectPlan(id: string): Promise<boolean> {
-  return safeMutate(`${BASE}/projects/${encodeURIComponent(id)}/approve`, 'POST');
+export interface ApproveProjectPlanResult {
+  ok: boolean;
+  missing_items?: string[];
+  summary?: string;
+}
+
+export async function approveProjectPlan(id: string): Promise<ApproveProjectPlanResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE}/projects/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      signal: controller.signal,
+    });
+    if (res.ok) return { ok: true };
+    let payload: unknown = null;
+    try {
+      payload = await res.json();
+    } catch {
+      payload = null;
+    }
+    const detail = (payload && typeof payload === 'object' && 'detail' in payload)
+      ? (payload as { detail?: unknown }).detail
+      : null;
+    if (res.status === 409 && detail && typeof detail === 'object') {
+      const d = detail as { missing_items?: unknown; summary?: unknown };
+      return {
+        ok: false,
+        missing_items: Array.isArray(d.missing_items) ? d.missing_items.map(String) : [],
+        summary: typeof d.summary === 'string' ? d.summary : 'Planning packet is incomplete.',
+      };
+    }
+    return { ok: false, summary: `HTTP ${res.status}` };
+  } catch {
+    return { ok: false, summary: 'Network error while approving plan.' };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function createProject(data: {
   name: string;
   description?: string;
   type?: string;
-}): Promise<{ status: string; project?: Project } | null> {
+  delivery_mode?: 'local' | 'github';
+  github_repo?: string;
+  github_branch?: string;
+  workspace_path?: string;
+}): Promise<{ status: string; project?: Project; plan_packet?: PlanningPacketStatus } | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {

@@ -12,6 +12,9 @@ interface ProjectPanelProps {
   onProjectIdConsumed?: () => void;
   onRefresh?: () => void;
   onProjectCreated?: (projectId: string) => void;
+  defaultWorkspaceMode?: 'local' | 'github';
+  defaultGithubRepo?: string;
+  defaultGithubBranch?: string;
 }
 
 type ProjectTab = 'tasks' | 'plan' | 'milestones' | 'sprint' | 'discussions' | 'team' | 'info';
@@ -425,7 +428,10 @@ function PlanTab({ project, onApproved }: PlanTabProps) {
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState('');
+  const [missingItems, setMissingItems] = useState<string[]>([]);
   const approved = project.plan_approved ?? false;
+  const planPacket = project.plan_packet;
 
   useEffect(() => {
     let cancelled = false;
@@ -443,11 +449,16 @@ function PlanTab({ project, onApproved }: PlanTabProps) {
 
   const handleApprove = async () => {
     setApproving(true);
-    const ok = await approveProjectPlan(project.id);
+    setApprovalError('');
+    setMissingItems([]);
+    const result = await approveProjectPlan(project.id);
     setApproving(false);
-    if (ok) {
+    if (result.ok) {
       onApproved();
+      return;
     }
+    if (result.missing_items?.length) setMissingItems(result.missing_items);
+    setApprovalError(result.summary || 'Unable to approve plan yet.');
   };
 
   return (
@@ -475,17 +486,56 @@ function PlanTab({ project, onApproved }: PlanTabProps) {
           </p>
           <button
             onClick={handleApprove}
-            disabled={approving}
+            disabled={approving || !planPacket?.ready}
             className="flex-shrink-0 text-xs px-3 py-1.5 rounded-lg font-medium transition-all duration-200 cursor-pointer"
             style={{
-              backgroundColor: approving ? 'var(--tf-surface)' : 'var(--tf-accent)',
-              color: approving ? 'var(--tf-text-muted)' : 'var(--tf-bg)',
+              backgroundColor: approving || !planPacket?.ready ? 'var(--tf-surface)' : 'var(--tf-accent)',
+              color: approving || !planPacket?.ready ? 'var(--tf-text-muted)' : 'var(--tf-bg)',
               border: 'none',
-              cursor: approving ? 'wait' : 'pointer',
+              cursor: approving || !planPacket?.ready ? 'not-allowed' : 'pointer',
             }}
           >
             {approving ? 'Approving…' : '✓ Approve Plan'}
           </button>
+        </div>
+      )}
+      {!approved && planPacket && (
+        <div
+          className="rounded-xl px-4 py-3"
+          style={{
+            backgroundColor: planPacket.ready ? 'rgba(63,185,80,0.08)' : 'rgba(240,170,74,0.1)',
+            border: planPacket.ready ? '1px solid rgba(63,185,80,0.25)' : '1px solid rgba(240,170,74,0.3)',
+          }}
+        >
+          <p className="text-xs font-semibold" style={{ color: planPacket.ready ? 'var(--tf-success)' : 'var(--tf-warning)' }}>
+            {planPacket.ready ? 'Planning packet ready for approval' : 'Planning packet still incomplete'}
+          </p>
+          <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
+            {planPacket.summary}
+          </p>
+          {!planPacket.ready && planPacket.missing_items?.length > 0 && (
+            <ul className="mt-2 space-y-1">
+              {planPacket.missing_items.map((item, idx) => (
+                <li key={`${item}-${idx}`} className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+                  • {item}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {(approvalError || missingItems.length > 0) && (
+        <div className="rounded-xl px-4 py-3" style={{ backgroundColor: 'rgba(255,95,109,0.08)', border: '1px solid rgba(255,95,109,0.3)' }}>
+          {approvalError && <p className="text-xs font-semibold" style={{ color: 'var(--tf-error)' }}>{approvalError}</p>}
+          {missingItems.length > 0 && (
+            <ul className="mt-1 space-y-1">
+              {missingItems.map((item, idx) => (
+                <li key={`${item}-${idx}`} className="text-xs" style={{ color: 'var(--tf-text-secondary)' }}>
+                  • {item}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -500,6 +550,34 @@ function PlanTab({ project, onApproved }: PlanTabProps) {
           </p>
         </div>
       )}
+
+      <div>
+        <p className="text-xs uppercase tracking-widest mb-2" style={{ color: 'var(--tf-text-muted)' }}>
+          Delivery
+        </p>
+        <p className="text-xs" style={{ color: 'var(--tf-text)' }}>
+          Mode: {project.delivery_mode === 'github' ? 'GitHub' : 'Local workspace'}
+        </p>
+        {project.delivery_mode === 'github' && (
+          <>
+            {project.github_repo && (
+              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
+                Repo: {project.github_repo}
+              </p>
+            )}
+            {project.github_branch && (
+              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
+                Branch: {project.github_branch}
+              </p>
+            )}
+          </>
+        )}
+        {project.workspace_path && (
+          <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)', wordBreak: 'break-all' }}>
+            Workspace: {project.workspace_path}
+          </p>
+        )}
+      </div>
 
       {/* Spec files */}
       {loading ? (
@@ -1291,13 +1369,31 @@ export default function ProjectPanel({
   onProjectIdConsumed,
   onRefresh,
   onProjectCreated,
+  defaultWorkspaceMode = 'local',
+  defaultGithubRepo = '',
+  defaultGithubBranch = 'master',
 }: ProjectPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [creatingProject, setCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [newProjectMode, setNewProjectMode] = useState<'local' | 'github'>(defaultWorkspaceMode === 'github' ? 'github' : 'local');
+  const [newProjectRepo, setNewProjectRepo] = useState(defaultGithubRepo);
+  const [newProjectBranch, setNewProjectBranch] = useState(defaultGithubBranch || 'master');
   const [projectError, setProjectError] = useState('');
+
+  useEffect(() => {
+    setNewProjectMode(defaultWorkspaceMode === 'github' ? 'github' : 'local');
+  }, [defaultWorkspaceMode]);
+
+  useEffect(() => {
+    setNewProjectRepo(defaultGithubRepo);
+  }, [defaultGithubRepo]);
+
+  useEffect(() => {
+    setNewProjectBranch(defaultGithubBranch || 'master');
+  }, [defaultGithubBranch]);
 
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -1326,12 +1422,19 @@ export default function ProjectPanel({
   const handleCreateProject = async () => {
     const name = newProjectName.trim();
     if (!name || creatingProject) return;
+    if (newProjectMode === 'github' && !newProjectRepo.trim()) {
+      setProjectError('GitHub mode requires a repository (owner/repo).');
+      return;
+    }
     setCreatingProject(true);
     setProjectError('');
     const created = await createProject({
       name,
       description: newProjectDescription.trim(),
       type: 'app',
+      delivery_mode: newProjectMode,
+      github_repo: newProjectMode === 'github' ? newProjectRepo.trim() : '',
+      github_branch: newProjectMode === 'github' ? (newProjectBranch.trim() || 'master') : '',
     });
     setCreatingProject(false);
     if (!created?.project?.id) {
@@ -1403,6 +1506,60 @@ export default function ProjectPanel({
               padding: '8px 10px',
             }}
           />
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs font-medium" style={{ color: 'var(--tf-text-secondary)' }}>Location</label>
+            <select
+              value={newProjectMode}
+              onChange={(e) => setNewProjectMode((e.target.value === 'github' ? 'github' : 'local'))}
+              style={{
+                backgroundColor: 'var(--tf-bg)',
+                border: '1px solid var(--tf-border)',
+                borderRadius: '8px',
+                color: 'var(--tf-text)',
+                fontSize: '12px',
+                padding: '6px 8px',
+              }}
+            >
+              <option value="local">Local workspace</option>
+              <option value="github">GitHub repository</option>
+            </select>
+          </div>
+          {newProjectMode === 'github' && (
+            <>
+              <input
+                type="text"
+                value={newProjectRepo}
+                onChange={(e) => setNewProjectRepo(e.target.value)}
+                placeholder="owner/repo"
+                style={{
+                  width: '100%',
+                  marginBottom: '8px',
+                  backgroundColor: 'var(--tf-bg)',
+                  border: '1px solid var(--tf-border)',
+                  borderRadius: '8px',
+                  color: 'var(--tf-text)',
+                  fontSize: '13px',
+                  padding: '8px 10px',
+                }}
+              />
+              <input
+                type="text"
+                value={newProjectBranch}
+                onChange={(e) => setNewProjectBranch(e.target.value)}
+                placeholder="Branch (default: master)"
+                style={{
+                  width: '100%',
+                  marginBottom: '10px',
+                  backgroundColor: 'var(--tf-bg)',
+                  border: '1px solid var(--tf-border)',
+                  borderRadius: '8px',
+                  color: 'var(--tf-text)',
+                  fontSize: '13px',
+                  padding: '8px 10px',
+                }}
+              />
+            </>
+          )}
           {projectError && <div className="text-xs mb-2" style={{ color: 'var(--tf-error)' }}>{projectError}</div>}
           <button
             onClick={handleCreateProject}
@@ -1460,6 +1617,59 @@ export default function ProjectPanel({
               padding: '7px 9px',
             }}
           />
+          <select
+            value={newProjectMode}
+            onChange={(e) => setNewProjectMode((e.target.value === 'github' ? 'github' : 'local'))}
+            style={{
+              width: '100%',
+              marginBottom: '8px',
+              backgroundColor: 'var(--tf-bg)',
+              border: '1px solid var(--tf-border)',
+              borderRadius: '8px',
+              color: 'var(--tf-text)',
+              fontSize: '12px',
+              padding: '7px 9px',
+            }}
+          >
+            <option value="local">Local workspace</option>
+            <option value="github">GitHub repository</option>
+          </select>
+          {newProjectMode === 'github' && (
+            <>
+              <input
+                type="text"
+                value={newProjectRepo}
+                onChange={(e) => setNewProjectRepo(e.target.value)}
+                placeholder="owner/repo"
+                style={{
+                  width: '100%',
+                  marginBottom: '8px',
+                  backgroundColor: 'var(--tf-bg)',
+                  border: '1px solid var(--tf-border)',
+                  borderRadius: '8px',
+                  color: 'var(--tf-text)',
+                  fontSize: '12px',
+                  padding: '7px 9px',
+                }}
+              />
+              <input
+                type="text"
+                value={newProjectBranch}
+                onChange={(e) => setNewProjectBranch(e.target.value)}
+                placeholder="branch (master)"
+                style={{
+                  width: '100%',
+                  marginBottom: '8px',
+                  backgroundColor: 'var(--tf-bg)',
+                  border: '1px solid var(--tf-border)',
+                  borderRadius: '8px',
+                  color: 'var(--tf-text)',
+                  fontSize: '12px',
+                  padding: '7px 9px',
+                }}
+              />
+            </>
+          )}
           <button
             onClick={handleCreateProject}
             disabled={!newProjectName.trim() || creatingProject}

@@ -144,6 +144,14 @@ const MICRO_COMPLEX_HINTS = [
   'tradeoff',
 ];
 
+const EXECUTION_HINTS = ['build', 'create', 'develop', 'implement', 'fix', 'deploy', 'code', 'scaffold', 'ship'];
+
+function looksExecutionRequest(input: string): boolean {
+  const lower = input.trim().toLowerCase();
+  if (!lower) return false;
+  return EXECUTION_HINTS.some((word) => new RegExp(`\\b${word}\\b`, 'i').test(lower));
+}
+
 const TELEGRAM_KEYS = {
   token: 'compaas_telegram_token',
   chatId: 'compaas_telegram_chatid',
@@ -178,10 +186,81 @@ function microComplexityReason(input: string): string | null {
 
 // ---- Markdown renderers ----
 
+function splitTrailingPunctuation(token: string): { core: string; trailing: string } {
+  const match = token.match(/^(.+?)([.,!?;:)\]]*)$/);
+  if (!match) return { core: token, trailing: '' };
+  return { core: match[1], trailing: match[2] || '' };
+}
+
+function linkifyInlineText(text: string, keyBase: string): React.ReactNode[] {
+  const pattern = /(https?:\/\/[^\s<>"`]+|(?:\/[A-Za-z0-9._-]+){2,})/g;
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null = null;
+  let idx = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) {
+      parts.push(text.slice(cursor, match.index));
+    }
+    const token = match[0];
+    const { core, trailing } = splitTrailingPunctuation(token);
+    const isUrl = /^https?:\/\//i.test(core);
+    if (isUrl) {
+      parts.push(
+        <a
+          key={`${keyBase}-url-${idx}`}
+          href={core}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: 'var(--tf-accent-blue)', textDecoration: 'underline', textUnderlineOffset: '2px' }}
+          title={core}
+        >
+          {core}
+        </a>
+      );
+    } else {
+      parts.push(
+        <button
+          key={`${keyBase}-path-${idx}`}
+          type="button"
+          onClick={() => {
+            void navigator.clipboard.writeText(core).catch(() => {});
+          }}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            padding: 0,
+            margin: 0,
+            color: 'var(--tf-accent)',
+            cursor: 'copy',
+            textDecoration: 'underline',
+            textUnderlineOffset: '2px',
+            font: 'inherit',
+          }}
+          title={`Copy path: ${core}`}
+        >
+          {core}
+        </button>
+      );
+    }
+    if (trailing) parts.push(trailing);
+    cursor = match.index + token.length;
+    idx += 1;
+  }
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return parts;
+}
+
 function renderInlineMarkdown(text: string): React.ReactNode {
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let key = 0;
+  const pushInlineText = (value: string) => {
+    const linked = linkifyInlineText(value, `inline-${key++}`);
+    parts.push(...linked);
+  };
   while (remaining.length > 0) {
     const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
     const italicMatch = remaining.match(/\*(.+?)\*/);
@@ -191,9 +270,9 @@ function renderInlineMarkdown(text: string): React.ReactNode {
       italicMatch ? { index: italicMatch.index!, match: italicMatch, type: 'italic' } : null,
       codeMatch   ? { index: codeMatch.index!,   match: codeMatch,   type: 'code' }   : null,
     ].filter(Boolean) as { index: number; match: RegExpMatchArray; type: string }[];
-    if (matches.length === 0) { parts.push(remaining); break; }
+    if (matches.length === 0) { pushInlineText(remaining); break; }
     const first = matches.reduce((a, b) => a.index <= b.index ? a : b);
-    if (first.index > 0) parts.push(remaining.slice(0, first.index));
+    if (first.index > 0) pushInlineText(remaining.slice(0, first.index));
     if (first.type === 'bold')
       parts.push(<strong key={key++} style={{ fontWeight: 700, color: 'var(--tf-text)' }}>{first.match[1]}</strong>);
     else if (first.type === 'italic')
@@ -400,6 +479,9 @@ interface ActionDetailEntry {
   command?: string;
   tool?: string;
   file_path?: string;
+  actor?: string;
+  target?: string;
+  flow?: string;
   cwd?: string;
   duration_ms?: number;
   exit_code?: number;
@@ -476,11 +558,21 @@ interface ProjectApprovalCardProps {
 function ProjectApprovalCard({ project, ceoName, onApproved, onRevise, onNavigateToProject }: ProjectApprovalCardProps) {
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
+  const [error, setError] = useState('');
+  const [missingItems, setMissingItems] = useState<string[]>([]);
   const handleApprove = async () => {
     setApproving(true);
-    const ok = await approveProjectPlan(project.id);
+    setError('');
+    setMissingItems([]);
+    const result = await approveProjectPlan(project.id);
     setApproving(false);
-    if (ok) { setApproved(true); onApproved(project.id); }
+    if (result.ok) {
+      setApproved(true);
+      onApproved(project.id);
+      return;
+    }
+    if (result.missing_items?.length) setMissingItems(result.missing_items);
+    setError(result.summary || 'Plan is not ready for approval yet.');
   };
   if (approved) {
     return (
@@ -527,6 +619,18 @@ function ProjectApprovalCard({ project, ceoName, onApproved, onRevise, onNavigat
           </button>
         )}
       </div>
+      {(error || missingItems.length > 0) && (
+        <div className="px-4 py-2.5" style={{ borderTop: '1px solid var(--tf-border)' }}>
+          {error && <p className="text-xs font-medium" style={{ color: 'var(--tf-error)' }}>{error}</p>}
+          {missingItems.length > 0 && (
+            <ul className="mt-1 space-y-1">
+              {missingItems.map((item, idx) => (
+                <li key={`${item}-${idx}`} className="text-xs" style={{ color: 'var(--tf-text-secondary)' }}>• {item}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -591,7 +695,10 @@ interface WsMessage {
     id?: string;
     status?: string;
     mode?: string;
-    intent?: { intent?: string; confidence?: number; needs_planning?: boolean };
+    intent?: { intent?: string; class?: string; confidence?: number; needs_planning?: boolean; actionable?: boolean };
+    intent_class?: string;
+    plan_packet?: { ready?: boolean; missing_items?: string[]; summary?: string };
+    planning_packet_status?: { ready?: boolean; missing_items?: string[]; summary?: string };
     reason?: string;
     run_id?: string;
     [k: string]: unknown;
@@ -725,7 +832,7 @@ export default function ChatPanel({
   const [actionDetails, setActionDetails] = useState<ActionDetailEntry[]>([]);
   const [showActionDetails, setShowActionDetails] = useState(false);
   const [latestRunId, setLatestRunId] = useState('');
-  const [planningPendingDecision, setPlanningPendingDecision] = useState<{ message: string; reason: string } | null>(null);
+  const [planningPendingDecision, setPlanningPendingDecision] = useState<{ message: string; reason: string; missingItems?: string[] } | null>(null);
   const [dismissedProjectIds, setDismissedProjectIds] = useState<Set<string>>(new Set());
 
   // Feature: Conversation search
@@ -751,6 +858,7 @@ export default function ChatPanel({
   const [showMemory, setShowMemory] = useState(false);
   const [newMemoryText, setNewMemoryText] = useState('');
   const [memorySaving, setMemorySaving] = useState(false);
+  const lastHandledMicroToggleRequestRef = useRef(0);
   const [memoryScope, setMemoryScope] = useState<'global' | 'project' | 'session-only'>('project');
   const [memoryRetentionDays, setMemoryRetentionDays] = useState(30);
 
@@ -918,15 +1026,19 @@ export default function ChatPanel({
 
   const typewriteAndCommit = useCallback((content: string, projectId: string) => {
     stopTypingAnimation();
-    const chars = Array.from(content);
+    const tokens = content.split(/(\s+)/).filter((token) => token.length > 0);
     let cursor = 0;
-    const stride = chars.length > 900 ? 12 : chars.length > 350 ? 8 : 5;
+    const pace = tokens.length > 260 ? 0.65 : tokens.length > 140 ? 0.8 : 1;
 
     const step = () => {
-      cursor = Math.min(chars.length, cursor + stride);
-      setStreamingContent(chars.slice(0, cursor).join(''));
-      if (cursor < chars.length) {
-        typingTimerRef.current = setTimeout(step, 18);
+      cursor = Math.min(tokens.length, cursor + 1);
+      setStreamingContent(tokens.slice(0, cursor).join(''));
+      if (cursor < tokens.length) {
+        const prev = (tokens[cursor - 1] || '').trim();
+        let delay = Math.max(28, Math.round(62 * pace));
+        if (/[,;:]$/.test(prev)) delay += Math.round(65 * pace);
+        if (/[.!?]$/.test(prev)) delay += Math.round(125 * pace);
+        typingTimerRef.current = setTimeout(step, delay);
         return;
       }
       typingTimerRef.current = null;
@@ -988,6 +1100,9 @@ export default function ChatPanel({
                   command,
                   tool,
                   file_path: filePath,
+                  actor: payload.actor ? String(payload.actor) : (payload.source_agent ? String(payload.source_agent) : undefined),
+                  target: payload.target ? String(payload.target) : (payload.target_agent ? String(payload.target_agent) : undefined),
+                  flow: payload.flow ? String(payload.flow) : undefined,
                   cwd: payload.cwd ? String(payload.cwd) : undefined,
                   duration_ms: typeof payload.duration_ms === 'number' ? payload.duration_ms : undefined,
                   exit_code: typeof payload.exit_code === 'number' ? payload.exit_code : undefined,
@@ -1093,9 +1208,16 @@ export default function ChatPanel({
                 const payload = wsContentObject(data.content);
                 if (!payload) break;
                 const reason = String(payload.reason || 'Planning approval required.');
+                const packet = payload.plan_packet && typeof payload.plan_packet === 'object'
+                  ? payload.plan_packet as { missing_items?: unknown }
+                  : null;
+                const missingItems = Array.isArray(packet?.missing_items)
+                  ? packet?.missing_items?.map((item) => String(item))
+                  : [];
                 setPlanningPendingDecision({
                   message: lastOutboundMessageRef.current || '',
                   reason,
+                  missingItems,
                 });
               }
               setIsWaiting(false);
@@ -1156,8 +1278,8 @@ export default function ChatPanel({
 
   const setMicroMode = useCallback((enabled: boolean) => {
     onMicroProjectModeChange?.(enabled);
+    setShowMicroApprovalCard(false);
     if (!enabled) {
-      setShowMicroApprovalCard(false);
       setMicroPendingDecision(null);
     }
   }, [onMicroProjectModeChange]);
@@ -1168,6 +1290,8 @@ export default function ChatPanel({
 
   useEffect(() => {
     if (microToggleRequestToken <= 0) return;
+    if (microToggleRequestToken === lastHandledMicroToggleRequestRef.current) return;
+    lastHandledMicroToggleRequestRef.current = microToggleRequestToken;
     if (microProjectMode) {
       setMicroMode(false);
     } else {
@@ -1184,10 +1308,10 @@ export default function ChatPanel({
   }) => {
     const text = (opts?.textOverride ?? input).trim();
     if (!text || isWaiting) return;
-    if (!activeProjectId) {
+    if (!activeProjectId && looksExecutionRequest(text)) {
       setMessages((prev) => [...prev, {
         role: 'ceo',
-        content: 'Select or create a project from the top header before starting CEO execution.',
+        content: 'This looks like an execution request. Select or create a project from the top header first (choose Local or GitHub).',
         timestamp: new Date().toISOString(),
         project_id: '',
       }]);
@@ -1482,6 +1606,14 @@ export default function ChatPanel({
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <StatusBadge status={connectionStatus} />
+            {microProjectMode && (
+              <span
+                className="text-xs px-2 py-0.5 rounded-full"
+                style={{ color: 'var(--tf-warning)', border: '1px solid rgba(240,170,74,0.45)', backgroundColor: 'rgba(240,170,74,0.14)' }}
+              >
+                CEO Solo Mode
+              </span>
+            )}
             {secondaryControls}
           </div>
         </div>
@@ -1492,6 +1624,14 @@ export default function ChatPanel({
         <div className="flex items-start justify-between px-3 py-2 flex-shrink-0 gap-2" style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
           <div className="flex items-start gap-2 flex-wrap">
             <StatusBadge status={connectionStatus} />
+            {microProjectMode && (
+              <span
+                className="text-xs px-2 py-0.5 rounded-full"
+                style={{ color: 'var(--tf-warning)', border: '1px solid rgba(240,170,74,0.45)', backgroundColor: 'rgba(240,170,74,0.14)' }}
+              >
+                CEO Solo Mode
+              </span>
+            )}
             <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
               Project: {activeProject ? activeProject.name : 'No project selected'}
             </span>
@@ -1538,17 +1678,29 @@ export default function ChatPanel({
                 Active context: {activeProject ? activeProject.name : 'No project selected'}
               </p>
               {activeProject?.workspace_path && (
-                <p
-                  className="text-xs mt-1"
-                  style={{
-                    color: 'var(--tf-text-muted)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Workspace: {activeProject.workspace_path}
-                </p>
+                <div className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                  <span>Workspace: </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(activeProject.workspace_path || '').catch(() => {});
+                    }}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      padding: 0,
+                      margin: 0,
+                      color: 'var(--tf-accent)',
+                      cursor: 'copy',
+                      textDecoration: 'underline',
+                      textUnderlineOffset: '2px',
+                      font: 'inherit',
+                    }}
+                    title={`Copy path: ${activeProject.workspace_path}`}
+                  >
+                    {activeProject.workspace_path}
+                  </button>
+                </div>
               )}
               {!activeProject && (
                 <p className="text-xs mt-1" style={{ color: 'var(--tf-warning)' }}>
@@ -1693,6 +1845,15 @@ export default function ChatPanel({
                 <p className="text-xs mt-1.5" style={{ color: 'var(--tf-text-secondary)', lineHeight: 1.5 }}>
                   {planningPendingDecision.reason}
                 </p>
+                {planningPendingDecision.missingItems && planningPendingDecision.missingItems.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {planningPendingDecision.missingItems.map((item, idx) => (
+                      <li key={`${item}-${idx}`} className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+                        • {item}
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <div className="flex items-center gap-2 mt-3 flex-wrap">
                   <button
                     onClick={() => {
@@ -1746,6 +1907,11 @@ export default function ChatPanel({
                   {actionDetails.map((d, idx) => (
                     <div key={`${d.at}-${idx}`} style={{ borderBottom: '1px dashed var(--tf-border)', paddingBottom: '6px' }}>
                       <div className="text-xs font-medium" style={{ color: 'var(--tf-text-secondary)' }}>{d.label}</div>
+                      {(d.actor || d.target || d.flow) && (
+                        <div className="text-xs mt-0.5" style={{ color: 'var(--tf-text-muted)' }}>
+                          flow: {d.actor || 'system'} {d.flow === 'up' ? '→' : d.flow === 'down' ? '↘' : '→'} {d.target || 'workspace'}
+                        </div>
+                      )}
                       {d.command && <div className="text-xs mt-0.5" style={{ color: 'var(--tf-accent)' }}>cmd: {d.command}</div>}
                       {d.cwd && <div className="text-xs mt-0.5" style={{ color: 'var(--tf-text-muted)' }}>cwd: {d.cwd}</div>}
                       {(typeof d.exit_code === 'number' || typeof d.duration_ms === 'number') && (
