@@ -178,6 +178,31 @@ class TestCreateProjectEndpoint:
         response = client.post("/api/projects", json={"description": "No name"})
         assert response.status_code == 400
 
+    def test_rejects_github_mode_when_connector_not_verified(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({
+                "integrations": {
+                    "workspace_mode": "github",
+                    "github_token": "ghp_secret",
+                    "github_repo": "comp-a-a-s/compaas",
+                    "github_verified": False,
+                }
+            }, f)
+
+        response = client.post("/api/projects", json={
+            "name": "GitHub Build",
+            "description": "Test github guard",
+            "delivery_mode": "github",
+            "github_repo": "comp-a-a-s/compaas",
+        })
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert detail["code"] == "github_not_configured"
+        assert detail["settings_target"] == "github"
+
 
 # ---------------------------------------------------------------------------
 # GET /api/projects/{project_id}
@@ -679,8 +704,13 @@ class TestIntegrationSecurity:
                     "github_default_branch": "master",
                     "github_auto_push": True,
                     "github_auto_pr": False,
+                    "github_verified": True,
+                    "github_verified_at": "2026-02-23T10:00:00Z",
                     "vercel_token": "vercel_secret",
                     "vercel_project_name": "compaas-dashboard",
+                    "vercel_verified": True,
+                    "vercel_verified_at": "2026-02-23T10:01:00Z",
+                    "vercel_default_target": "production",
                 }
             }, f)
 
@@ -690,7 +720,133 @@ class TestIntegrationSecurity:
 
         assert data["workspace_mode"] == "github"
         assert data["github"]["configured"] is True
+        assert data["github"]["verified"] is True
+        assert data["github"]["verified_at"] == "2026-02-23T10:00:00Z"
         assert data["github"]["repo"] == "comp-a-a-s/compaas"
         assert "push_branch" in data["github"]["capabilities"]
         assert data["vercel"]["configured"] is True
+        assert data["vercel"]["verified"] is True
+        assert data["vercel"]["verified_at"] == "2026-02-23T10:01:00Z"
+        assert data["vercel"]["default_target"] == "production"
         assert "deploy_preview" in data["vercel"]["capabilities"]
+
+    def test_v1_github_verify_persists_verified_state(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "github_verify_connection",
+            lambda token, repo="": {
+                "status": "ok",
+                "ok": True,
+                "repo_ok": True,
+                "account": {"login": "idan"},
+                "message": f"Verified {repo}",
+            },
+        )
+
+        response = client.post("/api/v1/github/verify", json={
+            "token": "ghp_abc",
+            "repo": "comp-a-a-s/compaas",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["repo_ok"] is True
+        assert payload["account"]["login"] == "idan"
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations["github_token"] == "ghp_abc"
+        assert integrations["github_repo"] == "comp-a-a-s/compaas"
+        assert integrations["github_verified"] is True
+        assert integrations.get("github_verified_at")
+        assert integrations.get("github_last_error", "") == ""
+
+    def test_v1_vercel_verify_persists_verified_state(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "vercel_verify_connection",
+            lambda token, project_name="", team_id="": {
+                "status": "ok",
+                "ok": True,
+                "project_ok": True,
+                "account": {"username": "idan"},
+                "message": f"Verified {project_name}",
+            },
+        )
+
+        response = client.post("/api/v1/vercel/verify", json={
+            "token": "vercel_abc",
+            "project_name": "compaas-dashboard",
+            "team_id": "team_123",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["project_ok"] is True
+        assert payload["account"]["username"] == "idan"
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations["vercel_token"] == "vercel_abc"
+        assert integrations["vercel_project_name"] == "compaas-dashboard"
+        assert integrations["vercel_team_id"] == "team_123"
+        assert integrations["vercel_verified"] is True
+        assert integrations.get("vercel_verified_at")
+        assert integrations.get("vercel_last_error", "") == ""
+
+    def test_v1_project_vercel_deploy_uses_saved_integration(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        import src.web.routers.v1 as v1_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({
+                "integrations": {
+                    "vercel_token": "vercel_abc",
+                    "vercel_project_name": "compaas-dashboard",
+                    "vercel_verified": True,
+                    "vercel_default_target": "preview",
+                }
+            }, f)
+
+        project_id = "project_demo_123"
+        monkeypatch.setattr(
+            api_module.project_service.state_manager,
+            "get_project",
+            lambda pid: {"id": project_id, "name": "Demo App"} if pid == project_id else None,
+        )
+        monkeypatch.setattr(api_module.project_service, "get_metadata", lambda _pid: {"deployments": []})
+        updated_metadata: dict[str, dict] = {}
+        monkeypatch.setattr(
+            api_module.project_service,
+            "update_metadata",
+            lambda pid, updates: updated_metadata.setdefault(pid, updates),
+        )
+        monkeypatch.setattr(v1_module, "emit_activity", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "vercel_deploy_saved",
+            lambda _integrations, target="preview": {
+                "status": "ok",
+                "target": target,
+                "deployment_url": "https://demo-app-preview.vercel.app",
+                "deployment": {"id": "dep_1"},
+            },
+        )
+
+        response = client.post(f"/api/v1/projects/{project_id}/deploy/vercel", json={"target": "preview"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["target"] == "preview"
+        assert payload["deployment_url"] == "https://demo-app-preview.vercel.app"
+        assert project_id in updated_metadata
+        assert isinstance(updated_metadata[project_id].get("deployments"), list)

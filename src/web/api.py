@@ -339,12 +339,30 @@ def create_project(request: Request, body: dict | None = None) -> dict:
     workspace_path = str(payload.get("workspace_path", "") or "").strip()
     github_repo = str(payload.get("github_repo", "") or "").strip()
     github_branch = str(payload.get("github_branch", "") or "master").strip() or "master"
+    cfg = _load_config()
+    integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
     if requested_mode in {"local", "github"}:
         delivery_mode = requested_mode
     else:
-        cfg = _load_config()
-        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
         delivery_mode = "github" if str(integrations.get("workspace_mode", "local") or "local").strip().lower() == "github" else "local"
+
+    if not github_repo:
+        github_repo = str(integrations.get("github_repo", "") or "").strip()
+    if github_branch == "master" and "github_branch" not in payload:
+        github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
+
+    if delivery_mode == "github":
+        github_token = str(integrations.get("github_token", "") or "").strip()
+        github_verified = bool(integrations.get("github_verified"))
+        if not github_repo or not github_token or not github_verified:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "github_not_configured",
+                    "message": "GitHub mode requires a verified GitHub connector (token + repo access). Open Settings → Integrations.",
+                    "settings_target": "github",
+                },
+            )
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required.")
 
@@ -660,9 +678,16 @@ DEFAULT_CONFIG: dict = {
         "github_default_branch": "master",
         "github_auto_push": False,
         "github_auto_pr": False,
+        "github_verified": False,
+        "github_verified_at": "",
+        "github_last_error": "",
         "vercel_token": "",
         "vercel_team_id": "",
         "vercel_project_name": "",
+        "vercel_default_target": "preview",
+        "vercel_verified": False,
+        "vercel_verified_at": "",
+        "vercel_last_error": "",
         "slack_token": "",
         "webhook_url": "",
     },
@@ -1395,12 +1420,17 @@ def _resolve_chat_project(project_id: str, user_message: str, user_name: str) ->
         cfg = _load_config()
         integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
         delivery_mode = "github" if str(integrations.get("workspace_mode", "local") or "local").strip().lower() == "github" else "local"
+        github_repo = str(integrations.get("github_repo", "") or "").strip()
+        github_verified = bool(integrations.get("github_verified"))
+        github_token = bool(str(integrations.get("github_token", "") or "").strip())
+        if delivery_mode == "github" and not (github_token and github_repo and github_verified):
+            delivery_mode = "local"
         new_pid = state_manager.create_project(
             project_name,
             project_desc,
             "app",
             delivery_mode=delivery_mode,
-            github_repo=str(integrations.get("github_repo", "") or "").strip(),
+            github_repo=github_repo if delivery_mode == "github" else "",
             github_branch=str(integrations.get("github_default_branch", "master") or "master").strip() or "master",
         )
         try:
@@ -1844,6 +1874,44 @@ def _lightweight_ceo_response(
             "I can provide the next execution step as soon as you ask."
         )
     return None
+
+
+def _is_vercel_verified(config: dict) -> bool:
+    integrations = config.get("integrations", {}) if isinstance(config.get("integrations"), dict) else {}
+    token_set = bool(str(integrations.get("vercel_token", "") or "").strip())
+    project_name = str(integrations.get("vercel_project_name", "") or "").strip()
+    verified = bool(integrations.get("vercel_verified"))
+    return token_set and bool(project_name) and verified
+
+
+def _should_offer_vercel_deploy(
+    *,
+    user_message: str,
+    final_response: str,
+    intent: dict[str, Any],
+    config: dict,
+) -> bool:
+    if not _is_vercel_verified(config):
+        return False
+    if str(intent.get("intent", "")) != "execution":
+        return False
+
+    lower_user = (user_message or "").lower()
+    lower_final = (final_response or "").lower()
+    if "vercel.app" in lower_final:
+        return False
+    if "deploy" in lower_user and "vercel" in lower_user:
+        return True
+    completion_hints = (
+        "implemented",
+        "completed",
+        "finished",
+        "run it locally",
+        "activation",
+        "workspace",
+        "what's included",
+    )
+    return any(token in lower_final for token in completion_hints)
 
 
 def _build_micro_project_prompt(prompt: str, *, user_name: str, ceo_name: str) -> str:
@@ -4275,6 +4343,31 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     plan_packet_status = project_service.plan_packet_status(active_project_id)
                 except ValueError:
                     plan_packet_status = {"ready": False, "missing_items": ["Project metadata unavailable."], "summary": ""}
+            deploy_offer: dict[str, Any] | None = None
+            if (
+                active_project_id
+                and full_response
+                and bool(feature_flags.get("vercel_deploy_lifecycle", True))
+                and _should_offer_vercel_deploy(
+                    user_message=user_message,
+                    final_response=full_response,
+                    intent=intent,
+                    config=config,
+                )
+            ):
+                integrations_cfg = config.get("integrations", {}) if isinstance(config.get("integrations"), dict) else {}
+                default_target = str(integrations_cfg.get("vercel_default_target", "preview") or "preview").strip().lower()
+                if default_target not in {"preview", "production"}:
+                    default_target = "preview"
+                deploy_offer = {
+                    "project_id": active_project_id,
+                    "target": default_target,
+                    "project_name": str((active_project or {}).get("name", "") or ""),
+                }
+                await websocket.send_json({
+                    "type": "action_result",
+                    "content": "Build work looks complete. I can deploy this project to Vercel now if you approve.",
+                })
             done_payload: dict[str, Any] = {
                 "type": "done",
                 "content": full_response or "",
@@ -4285,6 +4378,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
             }
             if structured_enabled:
                 done_payload["structured"] = _structured_response_payload(full_response or "")
+            if deploy_offer:
+                done_payload["deploy_offer"] = deploy_offer
             await websocket.send_json(done_payload)
             inflight_run_id = ""
             inflight_project_id = ""
@@ -4546,6 +4641,12 @@ def save_integrations(request: Request, body: dict) -> dict:
     _require_integrations_write_auth(request)
     config = _load_config()
     integrations = config.get("integrations", {})
+    if not isinstance(integrations, dict):
+        integrations = {}
+    previous_github_token = str(integrations.get("github_token", "") or "").strip()
+    previous_github_repo = str(integrations.get("github_repo", "") or "").strip()
+    previous_vercel_token = str(integrations.get("vercel_token", "") or "").strip()
+    previous_vercel_project = str(integrations.get("vercel_project_name", "") or "").strip()
     sanitized = _sanitize_integration_payload(body)
     for key in (
         "workspace_mode",
@@ -4554,14 +4655,34 @@ def save_integrations(request: Request, body: dict) -> dict:
         "github_default_branch",
         "github_auto_push",
         "github_auto_pr",
+        "github_verified",
+        "github_verified_at",
+        "github_last_error",
         "vercel_token",
         "vercel_team_id",
         "vercel_project_name",
+        "vercel_default_target",
+        "vercel_verified",
+        "vercel_verified_at",
+        "vercel_last_error",
         "slack_token",
         "webhook_url",
     ):
         if key in sanitized:
             integrations[key] = sanitized[key]
+
+    github_token_changed = str(integrations.get("github_token", "") or "").strip() != previous_github_token
+    github_repo_changed = str(integrations.get("github_repo", "") or "").strip() != previous_github_repo
+    if github_token_changed or github_repo_changed:
+        integrations["github_verified"] = False
+        integrations["github_last_error"] = "GitHub configuration changed. Re-verify connector."
+
+    vercel_token_changed = str(integrations.get("vercel_token", "") or "").strip() != previous_vercel_token
+    vercel_project_changed = str(integrations.get("vercel_project_name", "") or "").strip() != previous_vercel_project
+    if vercel_token_changed or vercel_project_changed:
+        integrations["vercel_verified"] = False
+        integrations["vercel_last_error"] = "Vercel configuration changed. Re-verify connector."
+
     config["integrations"] = integrations
     _save_config(config)
     return {"status": "ok"}
@@ -4571,14 +4692,25 @@ def save_integrations(request: Request, body: dict) -> dict:
 def get_integration_capabilities() -> dict:
     """Return non-secret capability metadata for configured integrations."""
     integrations = _load_config().get("integrations", {})
+    if not isinstance(integrations, dict):
+        integrations = {}
 
     workspace_mode = integrations.get("workspace_mode", "local")
     github_token_set = bool(str(integrations.get("github_token", "") or "").strip())
     github_repo = str(integrations.get("github_repo", "") or "").strip()
     github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
+    github_verified = bool(integrations.get("github_verified"))
+    github_verified_at = str(integrations.get("github_verified_at", "") or "").strip()
+    github_last_error = str(integrations.get("github_last_error", "") or "").strip()
 
     vercel_token_set = bool(str(integrations.get("vercel_token", "") or "").strip())
     vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
+    vercel_verified = bool(integrations.get("vercel_verified"))
+    vercel_verified_at = str(integrations.get("vercel_verified_at", "") or "").strip()
+    vercel_last_error = str(integrations.get("vercel_last_error", "") or "").strip()
+    vercel_default_target = str(integrations.get("vercel_default_target", "preview") or "preview").strip().lower()
+    if vercel_default_target not in {"preview", "production"}:
+        vercel_default_target = "preview"
 
     github_capabilities = [
         "create_branch",
@@ -4599,19 +4731,26 @@ def get_integration_capabilities() -> dict:
         "workspace_mode": workspace_mode,
         "github": {
             "configured": github_token_set and bool(github_repo),
+            "verified": github_verified and github_token_set and bool(github_repo),
             "token_configured": github_token_set,
             "repo": github_repo,
             "default_branch": github_branch,
             "auto_push": bool(integrations.get("github_auto_push")),
             "auto_pr": bool(integrations.get("github_auto_pr")),
+            "verified_at": github_verified_at,
+            "last_error": github_last_error,
             "capabilities": github_capabilities,
             "webhook_endpoint": "/api/integrations/github/webhook",
         },
         "vercel": {
             "configured": vercel_token_set and bool(vercel_project_name),
+            "verified": vercel_verified and vercel_token_set and bool(vercel_project_name),
             "token_configured": vercel_token_set,
             "project_name": vercel_project_name,
             "team_id_set": bool(str(integrations.get("vercel_team_id", "") or "").strip()),
+            "default_target": vercel_default_target,
+            "verified_at": vercel_verified_at,
+            "last_error": vercel_last_error,
             "capabilities": vercel_capabilities,
         },
     }

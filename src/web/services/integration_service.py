@@ -71,6 +71,23 @@ class IntegrationService:
         except Exception as exc:
             return False, str(exc)
 
+    @staticmethod
+    def _humanize_external_error(message: str, *, provider: str) -> str:
+        raw = (message or "").strip()
+        if not raw:
+            return f"Could not reach {provider}. Check your internet connection and try again."
+        lowered = raw.lower()
+        if "certificate_verify_failed" in lowered or "ssl" in lowered:
+            return (
+                f"Could not establish a secure connection to {provider}. "
+                "Check system certificates/network trust settings and retry."
+            )
+        if "timed out" in lowered or "timeout" in lowered:
+            return f"{provider} did not respond in time. Check connectivity and retry."
+        if any(token in lowered for token in ("name or service not known", "temporary failure in name resolution", "nodename nor servname")):
+            return f"Could not resolve {provider} host. Check DNS/network and retry."
+        return raw
+
     def list_github_repos(self, token: str, per_page: int = 100) -> dict[str, Any]:
         status, body = self._github_request(token, "GET", f"/user/repos?per_page={per_page}&sort=updated")
         if status != 200:
@@ -108,6 +125,61 @@ class IntegrationService:
                 "html_url": body.get("html_url", ""),
                 "clone_url": body.get("clone_url", ""),
             },
+        }
+
+    def github_verify_connection(self, token: str, *, repo: str = "") -> dict[str, Any]:
+        token = (token or "").strip()
+        repo = (repo or "").strip()
+        if not token:
+            return {"status": "error", "ok": False, "repo_ok": False, "message": "GitHub token is required."}
+
+        status, body = self._github_request(token, "GET", "/user")
+        if status != 200:
+            message = self._humanize_external_error(
+                str(body.get("message", "Failed to verify GitHub token.") or ""),
+                provider="GitHub",
+            )
+            return {
+                "status": "error",
+                "ok": False,
+                "repo_ok": False if repo else None,
+                "http_status": status,
+                "message": message,
+            }
+
+        account = {
+            "login": body.get("login", ""),
+            "name": body.get("name", ""),
+            "html_url": body.get("html_url", ""),
+        }
+        repo_ok: bool | None = None
+        message = "GitHub token is valid."
+        if repo:
+            if "/" not in repo:
+                return {
+                    "status": "error",
+                    "ok": False,
+                    "repo_ok": False,
+                    "account": account,
+                    "message": "Repository must be in owner/repo format.",
+                }
+            repo_status, repo_body = self._github_request(token, "GET", f"/repos/{repo}")
+            if repo_status == 200:
+                repo_ok = True
+                message = f"GitHub token and repository access verified for {repo}."
+            else:
+                repo_ok = False
+                message = self._humanize_external_error(
+                    str(repo_body.get("message", f"Token verified, but repository access failed for {repo}.") or ""),
+                    provider="GitHub",
+                )
+
+        return {
+            "status": "ok",
+            "ok": True,
+            "account": account,
+            "repo_ok": repo_ok,
+            "message": message,
         }
 
     def create_branch(self, repo_path: str, *, base_branch: str, new_branch: str) -> dict[str, Any]:
@@ -253,6 +325,62 @@ class IntegrationService:
             return {"status": "error", "http_status": status, "message": body.get("error", {}).get("message") or body.get("message", "Failed to link project")}
         return {"status": "ok", "project": body}
 
+    def vercel_verify_connection(self, token: str, *, project_name: str = "", team_id: str = "") -> dict[str, Any]:
+        token = (token or "").strip()
+        project_name = (project_name or "").strip()
+        team_id = (team_id or "").strip()
+        if not token:
+            return {"status": "error", "ok": False, "project_ok": False, "message": "Vercel token is required."}
+
+        status, body = self._vercel_request(token, "GET", "/v2/user")
+        if status != 200:
+            raw_message = (
+                body.get("error", {}).get("message")
+                or body.get("message")
+                or "Failed to verify Vercel token."
+            )
+            message = self._humanize_external_error(str(raw_message or ""), provider="Vercel")
+            return {
+                "status": "error",
+                "ok": False,
+                "project_ok": False if project_name else None,
+                "http_status": status,
+                "message": message,
+            }
+
+        user_payload = body.get("user") if isinstance(body.get("user"), dict) else body
+        account = {
+            "id": user_payload.get("id", "") if isinstance(user_payload, dict) else "",
+            "username": user_payload.get("username", "") if isinstance(user_payload, dict) else "",
+            "email": user_payload.get("email", "") if isinstance(user_payload, dict) else "",
+            "name": user_payload.get("name", "") if isinstance(user_payload, dict) else "",
+        }
+
+        project_ok: bool | None = None
+        message = "Vercel token is valid."
+        if project_name:
+            query = f"?teamId={team_id}" if team_id else ""
+            project_status, project_body = self._vercel_request(token, "GET", f"/v9/projects/{project_name}{query}")
+            if project_status == 200:
+                project_ok = True
+                message = f"Vercel token and project access verified for {project_name}."
+            else:
+                project_ok = False
+                raw_message = (
+                    project_body.get("error", {}).get("message")
+                    or project_body.get("message")
+                    or f"Token verified, but project access failed for {project_name}."
+                )
+                message = self._humanize_external_error(str(raw_message or ""), provider="Vercel")
+
+        return {
+            "status": "ok",
+            "ok": True,
+            "account": account,
+            "project_ok": project_ok,
+            "message": message,
+        }
+
     def vercel_deploy(
         self,
         token: str,
@@ -315,3 +443,48 @@ class IntegrationService:
             return {"status": "error", "http_status": status, "message": body.get("error", {}).get("message") or body.get("message", "Failed to set environment variable")}
         return {"status": "ok", "result": body}
 
+    def vercel_deploy_saved(
+        self,
+        integrations: dict[str, Any],
+        *,
+        target: str = "preview",
+        git_source: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        token = str(integrations.get("vercel_token", "") or "").strip()
+        project_name = str(integrations.get("vercel_project_name", "") or "").strip()
+        team_id = str(integrations.get("vercel_team_id", "") or "").strip()
+        normalized_target = str(target or "preview").strip().lower()
+        if normalized_target not in {"preview", "production"}:
+            normalized_target = "preview"
+        if not token or not project_name:
+            return {
+                "status": "error",
+                "message": "Vercel is not fully configured. Add token and project name first.",
+            }
+        deployment = self.vercel_deploy(
+            token,
+            project_name=project_name,
+            team_id=team_id,
+            target=normalized_target,
+            git_source=git_source,
+        )
+        if deployment.get("status") != "ok":
+            return deployment
+
+        deployment_body = deployment.get("deployment", {})
+        deployment_url = ""
+        if isinstance(deployment_body, dict):
+            deployment_url = str(
+                deployment_body.get("url")
+                or deployment_body.get("inspectorUrl")
+                or ""
+            ).strip()
+        if deployment_url and not deployment_url.startswith(("http://", "https://")):
+            deployment_url = f"https://{deployment_url.lstrip('/')}"
+
+        return {
+            "status": "ok",
+            "target": normalized_target,
+            "deployment_url": deployment_url,
+            "deployment": deployment_body,
+        }

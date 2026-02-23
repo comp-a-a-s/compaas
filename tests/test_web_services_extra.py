@@ -410,6 +410,38 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
     repo_err = service.list_github_repos("bad-token")
     assert repo_err["status"] == "error"
 
+    # GitHub verify wrappers
+    def fake_github_verify(_token, _method, path, _payload=None):
+        if path == "/user":
+            return (200, {"login": "idan", "name": "Idan", "html_url": "https://github.com/idan"})
+        if path == "/repos/comp-a-a-s/compaas":
+            return (200, {"full_name": "comp-a-a-s/compaas"})
+        return (404, {"message": "Not Found"})
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_github_request",
+        staticmethod(fake_github_verify),
+    )
+    github_verified = service.github_verify_connection("token", repo="comp-a-a-s/compaas")
+    assert github_verified["status"] == "ok"
+    assert github_verified["ok"] is True
+    assert github_verified["repo_ok"] is True
+    assert github_verified["account"]["login"] == "idan"
+
+    github_missing_token = service.github_verify_connection("", repo="comp-a-a-s/compaas")
+    assert github_missing_token["status"] == "error"
+    assert github_missing_token["ok"] is False
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_github_request",
+        staticmethod(lambda *_args, **_kwargs: (0, {"message": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed>"})),
+    )
+    github_ssl = service.github_verify_connection("token", repo="comp-a-a-s/compaas")
+    assert github_ssl["status"] == "error"
+    assert "secure connection" in github_ssl["message"].lower()
+
     # Vercel API wrappers
     monkeypatch.setattr(
         IntegrationService,
@@ -427,3 +459,49 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
         staticmethod(lambda *_args, **_kwargs: (400, {"message": "Bad request"})),
     )
     assert service.vercel_link_project("token", name="my-app")["status"] == "error"
+
+    # Vercel verify + deploy-from-saved wrappers
+    def fake_vercel_verify(_token, _method, path, _payload=None):
+        if path == "/v2/user":
+            return (200, {"user": {"id": "usr_1", "username": "idan", "email": "idan@example.com"}})
+        if path == "/v9/projects/compaas?teamId=team_1":
+            return (200, {"id": "prj_1", "name": "compaas"})
+        if path.startswith("/v13/deployments"):
+            return (200, {"url": "compaas-preview.vercel.app", "id": "dep_1"})
+        return (404, {"error": {"message": "Not Found"}})
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_vercel_request",
+        staticmethod(fake_vercel_verify),
+    )
+    vercel_verified = service.vercel_verify_connection("token", project_name="compaas", team_id="team_1")
+    assert vercel_verified["status"] == "ok"
+    assert vercel_verified["ok"] is True
+    assert vercel_verified["project_ok"] is True
+    assert vercel_verified["account"]["username"] == "idan"
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_vercel_request",
+        staticmethod(lambda *_args, **_kwargs: (0, {"message": "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed>"})),
+    )
+    vercel_ssl = service.vercel_verify_connection("token", project_name="compaas", team_id="team_1")
+    assert vercel_ssl["status"] == "error"
+    assert "secure connection" in vercel_ssl["message"].lower()
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_vercel_request",
+        staticmethod(fake_vercel_verify),
+    )
+    deploy_saved = service.vercel_deploy_saved(
+        {
+            "vercel_token": "token",
+            "vercel_project_name": "compaas",
+            "vercel_team_id": "team_1",
+        },
+        target="preview",
+    )
+    assert deploy_saved["status"] == "ok"
+    assert deploy_saved["deployment_url"] == "https://compaas-preview.vercel.app"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -48,6 +49,11 @@ class GithubRepoCreateRequest(BaseModel):
     description: str = ""
 
 
+class GithubVerifyRequest(BaseModel):
+    token: str = ""
+    repo: str = ""
+
+
 class GithubBranchRequest(BaseModel):
     repo_path: str = Field(min_length=1)
     base_branch: str = Field(default="master")
@@ -67,6 +73,12 @@ class GithubRollbackRequest(BaseModel):
 class VercelLinkRequest(BaseModel):
     token: str = Field(min_length=8)
     project_name: str = Field(min_length=1)
+    team_id: str = ""
+
+
+class VercelVerifyRequest(BaseModel):
+    token: str = ""
+    project_name: str = ""
     team_id: str = ""
 
 
@@ -92,6 +104,10 @@ class VercelEnvRequest(BaseModel):
     value: str = Field(min_length=1)
     target: list[str] = Field(default_factory=lambda: ["preview", "production"])
     team_id: str = ""
+
+
+class ProjectVercelDeployRequest(BaseModel):
+    target: str = Field(default="preview")
 
 
 def _classify_intent(message: str) -> dict[str, Any]:
@@ -492,6 +508,36 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             raise HTTPException(status_code=400, detail="token is required")
         return ctx.integration_service.list_github_repos(token)
 
+    @router.post("/github/verify")
+    def v1_github_verify(body: GithubVerifyRequest) -> dict[str, Any]:
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token = body.token.strip() or str(integrations.get("github_token", "") or "").strip()
+        repo = body.repo.strip() or str(integrations.get("github_repo", "") or "").strip()
+        result = ctx.integration_service.github_verify_connection(token, repo=repo)
+
+        if token:
+            integrations["github_token"] = token
+        if repo:
+            integrations["github_repo"] = repo
+
+        verified = bool(result.get("ok")) and bool(result.get("repo_ok"))
+        integrations["github_verified"] = verified
+        integrations["github_last_error"] = "" if verified else str(result.get("message", "") or "GitHub verification failed.")
+        if verified:
+            integrations["github_verified_at"] = datetime.now(timezone.utc).isoformat()
+
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+
+        account = result.get("account", {})
+        return {
+            "ok": verified,
+            "account": account if isinstance(account, dict) else {},
+            "repo_ok": bool(result.get("repo_ok")),
+            "message": result.get("message", ""),
+        }
+
     @router.post("/github/repo/create")
     def v1_github_repo_create(body: GithubRepoCreateRequest) -> dict[str, Any]:
         return ctx.integration_service.create_github_repo(
@@ -565,6 +611,43 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
     def v1_vercel_link(body: VercelLinkRequest) -> dict[str, Any]:
         return ctx.integration_service.vercel_link_project(body.token, name=body.project_name, team_id=body.team_id)
 
+    @router.post("/vercel/verify")
+    def v1_vercel_verify(body: VercelVerifyRequest) -> dict[str, Any]:
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token = body.token.strip() or str(integrations.get("vercel_token", "") or "").strip()
+        project_name = body.project_name.strip() or str(integrations.get("vercel_project_name", "") or "").strip()
+        team_id = body.team_id.strip() or str(integrations.get("vercel_team_id", "") or "").strip()
+        result = ctx.integration_service.vercel_verify_connection(
+            token,
+            project_name=project_name,
+            team_id=team_id,
+        )
+
+        if token:
+            integrations["vercel_token"] = token
+        if team_id:
+            integrations["vercel_team_id"] = team_id
+        if project_name:
+            integrations["vercel_project_name"] = project_name
+
+        verified = bool(result.get("ok")) and bool(result.get("project_ok"))
+        integrations["vercel_verified"] = verified
+        integrations["vercel_last_error"] = "" if verified else str(result.get("message", "") or "Vercel verification failed.")
+        if verified:
+            integrations["vercel_verified_at"] = datetime.now(timezone.utc).isoformat()
+
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+
+        account = result.get("account", {})
+        return {
+            "ok": verified,
+            "account": account if isinstance(account, dict) else {},
+            "project_ok": bool(result.get("project_ok")),
+            "message": result.get("message", ""),
+        }
+
     @router.post("/vercel/deploy")
     def v1_vercel_deploy(body: VercelDeployRequest) -> dict[str, Any]:
         target = body.target.lower().strip() or "preview"
@@ -597,6 +680,83 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             target=body.target,
             team_id=body.team_id,
         )
+
+    @router.post("/projects/{project_id}/deploy/vercel")
+    def v1_project_vercel_deploy(project_id: str, body: ProjectVercelDeployRequest) -> dict[str, Any]:
+        project = ctx.project_service.state_manager.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        vercel_token = str(integrations.get("vercel_token", "") or "").strip()
+        vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
+        vercel_verified = bool(integrations.get("vercel_verified"))
+
+        if not vercel_token or not vercel_project_name:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "vercel_not_configured",
+                    "message": "Vercel is not configured yet. Open Settings → Integrations and connect Vercel.",
+                    "settings_target": "vercel",
+                },
+            )
+        if not vercel_verified:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "vercel_not_verified",
+                    "message": "Vercel is configured but not verified yet. Verify the connector in Settings.",
+                    "settings_target": "vercel",
+                },
+            )
+
+        target = (body.target or str(integrations.get("vercel_default_target", "preview") or "preview")).strip().lower()
+        if target not in {"preview", "production"}:
+            target = "preview"
+
+        deploy_result = ctx.integration_service.vercel_deploy_saved(integrations, target=target)
+        if deploy_result.get("status") != "ok":
+            raise HTTPException(
+                status_code=502,
+                detail=deploy_result.get("message", "Failed to deploy project to Vercel."),
+            )
+
+        deployment_url = str(deploy_result.get("deployment_url", "") or "").strip()
+        deployment_payload = deploy_result.get("deployment")
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "DEPLOY_PREVIEW" if target == "preview" else "DEPLOY_PRODUCTION",
+            f"Vercel deployment created for {project.get('name', project_id)}",
+            project_id=project_id,
+            metadata={
+                "target": target,
+                "deployment_url": deployment_url,
+                "deployment": deployment_payload if isinstance(deployment_payload, dict) else {},
+            },
+        )
+
+        metadata = ctx.project_service.get_metadata(project_id)
+        deployments = metadata.get("deployments", [])
+        if not isinstance(deployments, list):
+            deployments = []
+        deployments.append(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "target": target,
+                "url": deployment_url,
+                "provider": "vercel",
+            }
+        )
+        ctx.project_service.update_metadata(project_id, {"deployments": deployments[-50:]})
+
+        return {
+            "ok": True,
+            "target": target,
+            "deployment_url": deployment_url,
+        }
 
     @router.get("/deployment/live-feed")
     def v1_deployment_live_feed(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:

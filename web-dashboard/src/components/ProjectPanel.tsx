@@ -15,6 +15,8 @@ interface ProjectPanelProps {
   defaultWorkspaceMode?: 'local' | 'github';
   defaultGithubRepo?: string;
   defaultGithubBranch?: string;
+  githubConfigured?: boolean;
+  onGitHubSetupRequired?: () => void;
 }
 
 type ProjectTab = 'tasks' | 'plan' | 'milestones' | 'sprint' | 'discussions' | 'team' | 'info';
@@ -1372,6 +1374,8 @@ export default function ProjectPanel({
   defaultWorkspaceMode = 'local',
   defaultGithubRepo = '',
   defaultGithubBranch = 'master',
+  githubConfigured = false,
+  onGitHubSetupRequired,
 }: ProjectPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -1437,8 +1441,15 @@ export default function ProjectPanel({
       github_branch: newProjectMode === 'github' ? (newProjectBranch.trim() || 'master') : '',
     });
     setCreatingProject(false);
-    if (!created?.project?.id) {
-      setProjectError('Unable to create project. Try again.');
+    const createError = created.error;
+    if (created.status !== 'ok' || !created.project?.id) {
+      const settingsTarget = createError?.settings_target || '';
+      if (createError?.code === 'github_not_configured' || settingsTarget === 'github') {
+        setProjectError(createError?.message || 'GitHub connector is not configured. Open Settings → Integrations and verify GitHub.');
+        onGitHubSetupRequired?.();
+        return;
+      }
+      setProjectError(createError?.message || 'Unable to create project. Try again.');
       return;
     }
     setNewProjectName('');
@@ -1560,10 +1571,25 @@ export default function ProjectPanel({
               />
             </>
           )}
+          {newProjectMode === 'github' && !githubConfigured && (
+            <div
+              className="text-xs mb-2 rounded-lg px-2 py-1.5"
+              style={{ color: 'var(--tf-warning)', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}
+            >
+              GitHub connector is not verified yet.
+              <button
+                type="button"
+                onClick={() => onGitHubSetupRequired?.()}
+                style={{ marginLeft: '6px', border: 'none', background: 'transparent', color: 'var(--tf-accent-blue)', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                Open Settings
+              </button>
+            </div>
+          )}
           {projectError && <div className="text-xs mb-2" style={{ color: 'var(--tf-error)' }}>{projectError}</div>}
           <button
             onClick={handleCreateProject}
-            disabled={!newProjectName.trim() || creatingProject}
+            disabled={!newProjectName.trim() || creatingProject || (newProjectMode === 'github' && !githubConfigured)}
             className="text-xs px-4 py-2 rounded-lg transition-colors"
             style={{
               backgroundColor: creatingProject ? 'var(--tf-surface-raised)' : 'var(--tf-accent)',
@@ -1670,9 +1696,24 @@ export default function ProjectPanel({
               />
             </>
           )}
+          {newProjectMode === 'github' && !githubConfigured && (
+            <div
+              className="text-xs mb-2 rounded-lg px-2 py-1.5"
+              style={{ color: 'var(--tf-warning)', border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}
+            >
+              GitHub connector is not verified yet.
+              <button
+                type="button"
+                onClick={() => onGitHubSetupRequired?.()}
+                style={{ marginLeft: '6px', border: 'none', background: 'transparent', color: 'var(--tf-accent-blue)', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                Open Settings
+              </button>
+            </div>
+          )}
           <button
             onClick={handleCreateProject}
-            disabled={!newProjectName.trim() || creatingProject}
+            disabled={!newProjectName.trim() || creatingProject || (newProjectMode === 'github' && !githubConfigured)}
             className="text-xs px-3 py-1.5 rounded-lg transition-colors"
             style={{
               backgroundColor: creatingProject ? 'var(--tf-surface-raised)' : 'var(--tf-accent)',

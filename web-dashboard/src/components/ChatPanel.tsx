@@ -11,6 +11,7 @@ import {
   clearMemory,
   fetchMemoryPolicy,
   updateMemoryPolicy,
+  deployProjectToVercel,
 } from '../api/client';
 
 // ---- Helpers ----
@@ -714,6 +715,11 @@ interface WsMessage {
     risks?: string[];
     next_actions?: string[];
   };
+  deploy_offer?: {
+    project_id?: string;
+    project_name?: string;
+    target?: 'preview' | 'production';
+  };
 }
 function isWsMessage(data: unknown): data is WsMessage {
   return typeof data === 'object' && data !== null && typeof (data as Record<string, unknown>).type === 'string';
@@ -834,6 +840,8 @@ export default function ChatPanel({
   const [latestRunId, setLatestRunId] = useState('');
   const [planningPendingDecision, setPlanningPendingDecision] = useState<{ message: string; reason: string; missingItems?: string[] } | null>(null);
   const [dismissedProjectIds, setDismissedProjectIds] = useState<Set<string>>(new Set());
+  const [deployOffer, setDeployOffer] = useState<{ projectId: string; projectName: string; target: 'preview' | 'production' } | null>(null);
+  const [deployingVercel, setDeployingVercel] = useState(false);
 
   // Feature: Conversation search
   const [searchQuery, setSearchQuery] = useState('');
@@ -1165,6 +1173,19 @@ export default function ChatPanel({
               streamingAccumRef.current = '';
               if (data.run_id) setLatestRunId(data.run_id);
               const projectId = data.project_id || activeProjectIdRef.current;
+              const offer = data.deploy_offer;
+              if (offer && typeof offer === 'object') {
+                const offerProjectId = String(offer.project_id || projectId || '').trim();
+                if (offerProjectId) {
+                  setDeployOffer({
+                    projectId: offerProjectId,
+                    projectName: String(offer.project_name || projectsRef.current.find((project) => project.id === offerProjectId)?.name || 'Project'),
+                    target: offer.target === 'production' ? 'production' : 'preview',
+                  });
+                }
+              } else {
+                setDeployOffer(null);
+              }
               if (!turnErroredRef.current && finalContent.trim()) {
                 typewriteAndCommit(finalContent, projectId);
                 break;
@@ -1186,6 +1207,7 @@ export default function ChatPanel({
               setThinkingContent('');
               setActionLog([]);
               setIsWaiting(false);
+              setDeployOffer(null);
               break;
             case 'warning':
               setMessages((prev) => [...prev, {
@@ -1347,6 +1369,7 @@ export default function ChatPanel({
     turnErroredRef.current = false;
     setMicroPendingDecision(null);
     setPlanningPendingDecision(null);
+    setDeployOffer(null);
     lastOutboundMessageRef.current = text;
     const idempotencyKey = `chat-${activeProjectId || 'global'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const payload = JSON.stringify({
@@ -1401,6 +1424,7 @@ export default function ChatPanel({
     || showMicroApprovalCard
     || microPendingDecision
     || planningPendingDecision
+    || deployOffer
   );
 
   // ---- Shared header controls ----
@@ -1871,6 +1895,79 @@ export default function ChatPanel({
                     style={{ backgroundColor: 'transparent', color: 'var(--tf-text-muted)', border: '1px solid var(--tf-border)', cursor: 'pointer' }}
                   >
                     Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {deployOffer && (
+              <div
+                className="mb-3 rounded-xl px-4 py-3 animate-pop-in"
+                style={{
+                  backgroundColor: 'var(--tf-surface)',
+                  border: '1px solid var(--tf-accent-blue)',
+                }}
+              >
+                <p className="text-xs font-semibold" style={{ color: 'var(--tf-accent-blue)' }}>
+                  Deploy to Vercel?
+                </p>
+                <p className="text-xs mt-1.5" style={{ color: 'var(--tf-text-secondary)', lineHeight: 1.5 }}>
+                  {deployOffer.projectName} looks ready. Deploy a {deployOffer.target} build to Vercel now?
+                </p>
+                <div className="flex items-center gap-2 mt-3 flex-wrap">
+                  <button
+                    onClick={() => {
+                      const activeOffer = deployOffer;
+                      if (!activeOffer) return;
+                      setDeployingVercel(true);
+                      void deployProjectToVercel(activeOffer.projectId, activeOffer.target).then((result) => {
+                        setDeployingVercel(false);
+                        if (result.ok && result.deployment_url) {
+                          pushCeoMessage(
+                            `Deployment complete. ${activeOffer.target === 'production' ? 'Production' : 'Preview'} URL: ${result.deployment_url}`,
+                            activeOffer.projectId,
+                          );
+                          setDeployOffer(null);
+                          return;
+                        }
+                        const message = result.error?.message || 'Vercel deployment failed.';
+                        setMessages((prev) => [...prev, {
+                          role: 'ceo',
+                          content: `[Error] ${message}`,
+                          timestamp: new Date().toISOString(),
+                          project_id: activeOffer.projectId,
+                        }]);
+                        if (result.error?.settings_target === 'vercel') {
+                          setMessages((prev) => [...prev, {
+                            role: 'ceo',
+                            content: 'Open Settings → Integrations and verify the Vercel connector, then retry deployment.',
+                            timestamp: new Date().toISOString(),
+                            project_id: activeOffer.projectId,
+                          }]);
+                        }
+                      }).catch(() => {
+                        setDeployingVercel(false);
+                        setMessages((prev) => [...prev, {
+                          role: 'ceo',
+                          content: '[Error] Vercel deployment failed due to a network error.',
+                          timestamp: new Date().toISOString(),
+                          project_id: activeOffer.projectId,
+                        }]);
+                      });
+                    }}
+                    disabled={deployingVercel}
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                    style={{ backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)', border: 'none', cursor: deployingVercel ? 'wait' : 'pointer' }}
+                  >
+                    {deployingVercel ? 'Deploying…' : 'Yes, Deploy'}
+                  </button>
+                  <button
+                    onClick={() => setDeployOffer(null)}
+                    disabled={deployingVercel}
+                    className="text-xs px-3 py-1.5 rounded-lg"
+                    style={{ backgroundColor: 'transparent', color: 'var(--tf-text-muted)', border: '1px solid var(--tf-border)', cursor: deployingVercel ? 'default' : 'pointer' }}
+                  >
+                    No, Keep Local
                   </button>
                 </div>
               </div>

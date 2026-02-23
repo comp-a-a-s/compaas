@@ -246,10 +246,17 @@ export interface AppConfig {
     github_default_branch?: string;
     github_auto_push?: boolean;
     github_auto_pr?: boolean;
+    github_verified?: boolean;
+    github_verified_at?: string;
+    github_last_error?: string;
     workspace_mode?: 'local' | 'github';
     vercel_token?: string;
     vercel_team_id?: string;
     vercel_project_name?: string;
+    vercel_default_target?: 'preview' | 'production';
+    vercel_verified?: boolean;
+    vercel_verified_at?: string;
+    vercel_last_error?: string;
     slack_token?: string;
     webhook_url?: string;
   };

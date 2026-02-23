@@ -210,7 +210,17 @@ export async function createProject(data: {
   github_repo?: string;
   github_branch?: string;
   workspace_path?: string;
-}): Promise<{ status: string; project?: Project; plan_packet?: PlanningPacketStatus } | null> {
+}): Promise<{
+  status: 'ok' | 'error';
+  project?: Project;
+  plan_packet?: PlanningPacketStatus;
+  error?: {
+    status: number;
+    code?: string;
+    message: string;
+    settings_target?: string;
+  };
+}> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -220,10 +230,47 @@ export async function createProject(data: {
       body: JSON.stringify(data),
       signal: controller.signal,
     });
-    if (!res.ok) return null;
-    return res.json();
+    if (!res.ok) {
+      let detail: unknown = null;
+      try {
+        detail = await res.json();
+      } catch {
+        detail = null;
+      }
+      let message = `HTTP ${res.status}`;
+      let code = '';
+      let settingsTarget = '';
+      if (detail && typeof detail === 'object') {
+        const detailPayload = ('detail' in detail ? (detail as { detail?: unknown }).detail : detail);
+        if (typeof detailPayload === 'string') {
+          message = detailPayload;
+        } else if (detailPayload && typeof detailPayload === 'object') {
+          const d = detailPayload as { message?: unknown; code?: unknown; settings_target?: unknown };
+          if (typeof d.message === 'string' && d.message.trim()) message = d.message;
+          if (typeof d.code === 'string') code = d.code;
+          if (typeof d.settings_target === 'string') settingsTarget = d.settings_target;
+        }
+      }
+      return {
+        status: 'error',
+        error: {
+          status: res.status,
+          code: code || undefined,
+          message,
+          settings_target: settingsTarget || undefined,
+        },
+      };
+    }
+    const payload = await res.json();
+    return payload as { status: 'ok'; project?: Project; plan_packet?: PlanningPacketStatus };
   } catch {
-    return null;
+    return {
+      status: 'error',
+      error: {
+        status: 0,
+        message: 'Network error while creating project.',
+      },
+    };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -301,10 +348,17 @@ export async function saveIntegrations(data: {
   github_default_branch?: string;
   github_auto_push?: boolean;
   github_auto_pr?: boolean;
+  github_verified?: boolean;
+  github_verified_at?: string;
+  github_last_error?: string;
   workspace_mode?: 'local' | 'github';
   vercel_token?: string;
   vercel_team_id?: string;
   vercel_project_name?: string;
+  vercel_default_target?: 'preview' | 'production';
+  vercel_verified?: boolean;
+  vercel_verified_at?: string;
+  vercel_last_error?: string;
   slack_token?: string;
   webhook_url?: string;
 }): Promise<boolean> {
@@ -505,4 +559,100 @@ export async function vercelSetEnv(data: { token: string; project_name: string; 
     null,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
   );
+}
+
+export async function githubVerifyIntegration(data: { token?: string; repo?: string }): Promise<{
+  ok: boolean;
+  account?: Record<string, unknown>;
+  repo_ok?: boolean;
+  message: string;
+} | null> {
+  return safeFetch(
+    `${V1}/github/verify`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function vercelVerifyIntegration(data: { token?: string; project_name?: string; team_id?: string }): Promise<{
+  ok: boolean;
+  account?: Record<string, unknown>;
+  project_ok?: boolean;
+  message: string;
+} | null> {
+  return safeFetch(
+    `${V1}/vercel/verify`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function deployProjectToVercel(projectId: string, target: 'preview' | 'production' = 'preview'): Promise<{
+  ok: boolean;
+  deployment_url?: string;
+  target?: 'preview' | 'production';
+  error?: {
+    status: number;
+    code?: string;
+    message: string;
+    settings_target?: string;
+  };
+}> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS * 2);
+  try {
+    const res = await fetch(`${V1}/projects/${encodeURIComponent(projectId)}/deploy/vercel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      let detail: unknown = null;
+      try {
+        detail = await res.json();
+      } catch {
+        detail = null;
+      }
+      let message = `HTTP ${res.status}`;
+      let code = '';
+      let settingsTarget = '';
+      if (detail && typeof detail === 'object') {
+        const payload = ('detail' in detail ? (detail as { detail?: unknown }).detail : detail);
+        if (typeof payload === 'string') {
+          message = payload;
+        } else if (payload && typeof payload === 'object') {
+          const d = payload as { message?: unknown; code?: unknown; settings_target?: unknown };
+          if (typeof d.message === 'string' && d.message.trim()) message = d.message;
+          if (typeof d.code === 'string') code = d.code;
+          if (typeof d.settings_target === 'string') settingsTarget = d.settings_target;
+        }
+      }
+      return {
+        ok: false,
+        error: {
+          status: res.status,
+          code: code || undefined,
+          message,
+          settings_target: settingsTarget || undefined,
+        },
+      };
+    }
+    const payload = await res.json() as { ok?: boolean; deployment_url?: string; target?: 'preview' | 'production' };
+    return {
+      ok: Boolean(payload.ok),
+      deployment_url: payload.deployment_url,
+      target: payload.target,
+    };
+  } catch {
+    return {
+      ok: false,
+      error: {
+        status: 0,
+        message: 'Network error while deploying to Vercel.',
+      },
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }

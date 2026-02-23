@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { saveSetupConfig, testLlmConnection } from '../api/client';
+import { saveSetupConfig, testLlmConnection, githubVerifyIntegration, vercelVerifyIntegration } from '../api/client';
 import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
@@ -19,7 +19,7 @@ interface SetupWizardProps {
 
 // ---- Constants ----
 
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 8;
 const TELEGRAM_KEYS = {
   token: 'compaas_telegram_token',
   chatId: 'compaas_telegram_chatid',
@@ -121,6 +121,21 @@ const ICON_PATHS = {
   openai: 'M12 4l3 2 3 0 2 3-1 3 1 3-2 3-3 0-3 2-3-2-3 0-2-3 1-3-1-3 2-3 3 0 3-2z',
   local: 'M5 18h14M6 6h12l2 8H4l2-8z',
 } as const;
+
+function inputStyle(extra?: React.CSSProperties): React.CSSProperties {
+  return {
+    width: '100%',
+    padding: '8px 12px',
+    backgroundColor: C.surfaceRaised,
+    border: `1px solid ${C.border}`,
+    borderRadius: '6px',
+    color: C.textPrimary,
+    fontSize: '13px',
+    outline: 'none',
+    boxSizing: 'border-box',
+    ...extra,
+  };
+}
 
 // ---- Step indicator ----
 
@@ -1509,6 +1524,171 @@ function StepTelegram({
   );
 }
 
+function StepConnectors({
+  githubToken,
+  githubRepo,
+  githubBranch,
+  githubVerified,
+  githubStatus,
+  vercelToken,
+  vercelProjectName,
+  vercelTeamId,
+  vercelVerified,
+  vercelStatus,
+  busyConnector,
+  onGithubTokenChange,
+  onGithubRepoChange,
+  onGithubBranchChange,
+  onVercelTokenChange,
+  onVercelProjectNameChange,
+  onVercelTeamIdChange,
+  onVerifyGithub,
+  onVerifyVercel,
+}: {
+  githubToken: string;
+  githubRepo: string;
+  githubBranch: string;
+  githubVerified: boolean;
+  githubStatus: string;
+  vercelToken: string;
+  vercelProjectName: string;
+  vercelTeamId: string;
+  vercelVerified: boolean;
+  vercelStatus: string;
+  busyConnector: '' | 'github' | 'vercel';
+  onGithubTokenChange: (value: string) => void;
+  onGithubRepoChange: (value: string) => void;
+  onGithubBranchChange: (value: string) => void;
+  onVercelTokenChange: (value: string) => void;
+  onVercelProjectNameChange: (value: string) => void;
+  onVercelTeamIdChange: (value: string) => void;
+  onVerifyGithub: () => void;
+  onVerifyVercel: () => void;
+}) {
+  return (
+    <div style={{ display: 'grid', gap: '14px' }}>
+      <div>
+        <h2 style={{ fontSize: '18px', fontWeight: 600, color: C.textPrimary, marginBottom: '6px' }}>
+          Connectors (Optional)
+        </h2>
+        <p style={{ fontSize: '13px', color: C.textSecondary }}>
+          Connect GitHub and Vercel now for one-click project setup and deployment. You can skip and configure later in Settings.
+        </p>
+      </div>
+
+      <div style={{ backgroundColor: C.surfaceRaised, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <strong style={{ color: C.textPrimary, fontSize: '13px' }}>GitHub</strong>
+          <span style={{ fontSize: '11px', color: githubVerified ? C.success : C.textMuted }}>
+            {githubVerified ? 'Verified' : 'Not verified'}
+          </span>
+        </div>
+        <div style={{ display: 'grid', gap: '8px' }}>
+          <input
+            type="text"
+            value={githubRepo}
+            onChange={(e) => onGithubRepoChange(e.target.value)}
+            placeholder="owner/repo"
+            style={inputStyle({ maxWidth: '420px' })}
+          />
+          <input
+            type="text"
+            value={githubBranch}
+            onChange={(e) => onGithubBranchChange(e.target.value)}
+            placeholder="Default branch (master)"
+            style={inputStyle({ maxWidth: '260px' })}
+          />
+          <input
+            type="password"
+            value={githubToken}
+            onChange={(e) => onGithubTokenChange(e.target.value)}
+            placeholder="ghp_xxx"
+            style={inputStyle({ maxWidth: '420px' })}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={onVerifyGithub}
+              disabled={busyConnector.length > 0}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
+                border: `1px solid ${githubVerified ? C.success : C.accent}`,
+                backgroundColor: githubVerified ? 'rgba(63,185,80,0.12)' : C.accentDim,
+                color: githubVerified ? C.success : C.accent,
+                fontSize: '12px',
+                cursor: busyConnector.length > 0 ? 'wait' : 'pointer',
+              }}
+            >
+              {busyConnector === 'github' ? 'Verifying…' : githubVerified ? 'Verified' : 'Connect & Verify'}
+            </button>
+            {githubStatus && (
+              <span style={{ fontSize: '11px', color: githubVerified ? C.success : C.textMuted }}>{githubStatus}</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ backgroundColor: C.surfaceRaised, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <strong style={{ color: C.textPrimary, fontSize: '13px' }}>Vercel</strong>
+          <span style={{ fontSize: '11px', color: vercelVerified ? C.success : C.textMuted }}>
+            {vercelVerified ? 'Verified' : 'Not verified'}
+          </span>
+        </div>
+        <div style={{ display: 'grid', gap: '8px' }}>
+          <input
+            type="text"
+            value={vercelProjectName}
+            onChange={(e) => onVercelProjectNameChange(e.target.value)}
+            placeholder="Project name"
+            style={inputStyle({ maxWidth: '420px' })}
+          />
+          <input
+            type="text"
+            value={vercelTeamId}
+            onChange={(e) => onVercelTeamIdChange(e.target.value)}
+            placeholder="Team ID (optional)"
+            style={inputStyle({ maxWidth: '420px' })}
+          />
+          <input
+            type="password"
+            value={vercelToken}
+            onChange={(e) => onVercelTokenChange(e.target.value)}
+            placeholder="vercel_xxx"
+            style={inputStyle({ maxWidth: '420px' })}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={onVerifyVercel}
+              disabled={busyConnector.length > 0}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
+                border: `1px solid ${vercelVerified ? C.success : C.accent}`,
+                backgroundColor: vercelVerified ? 'rgba(63,185,80,0.12)' : C.accentDim,
+                color: vercelVerified ? C.success : C.accent,
+                fontSize: '12px',
+                cursor: busyConnector.length > 0 ? 'wait' : 'pointer',
+              }}
+            >
+              {busyConnector === 'vercel' ? 'Verifying…' : vercelVerified ? 'Verified' : 'Connect & Verify'}
+            </button>
+            {vercelStatus && (
+              <span style={{ fontSize: '11px', color: vercelVerified ? C.success : C.textMuted }}>{vercelStatus}</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <p style={{ fontSize: '11px', color: C.textMuted }}>
+        This step is skippable. If you skip now, you can configure both connectors later in Settings → Integrations.
+      </p>
+    </div>
+  );
+}
+
 function StepComplete({
   userName,
   agentNames,
@@ -1522,6 +1702,8 @@ function StepComplete({
   anthropicModelPreset,
   openaiMode,
   openaiModelPreset,
+  githubConfigured,
+  vercelConfigured,
 }: {
   userName: string;
   agentNames: Record<string, string>;
@@ -1536,6 +1718,8 @@ function StepComplete({
   anthropicModelPreset: string;
   openaiMode: OpenaiMode;
   openaiModelPreset: string;
+  githubConfigured: boolean;
+  vercelConfigured: boolean;
 }) {
   const { currentTheme } = useThemeSwitch();
   const pollLabel = POLL_INTERVAL_OPTIONS.find((o) => o.value === pollInterval)?.label ?? `${pollInterval}ms`;
@@ -1556,6 +1740,8 @@ function StepComplete({
     { label: 'Theme', value: currentTheme.charAt(0).toUpperCase() + currentTheme.slice(1) },
     { label: 'Auto-open browser', value: autoOpenBrowser ? 'Enabled' : 'Disabled' },
     { label: 'Poll interval', value: pollLabel },
+    { label: 'GitHub', value: githubConfigured ? 'Verified' : 'Not configured' },
+    { label: 'Vercel', value: vercelConfigured ? 'Verified' : 'Not configured' },
     { label: 'Telegram', value: telegramConfigured ? 'Configured' : 'Not configured' },
   ];
 
@@ -1593,7 +1779,12 @@ function StepComplete({
             <span style={{
               fontSize: '13px',
               fontWeight: 500,
-              color: row.label === 'Telegram' && !telegramConfigured ? C.textMuted : C.textPrimary,
+              color:
+                ((row.label === 'Telegram' && !telegramConfigured)
+                  || (row.label === 'GitHub' && !githubConfigured)
+                  || (row.label === 'Vercel' && !vercelConfigured))
+                  ? C.textMuted
+                  : C.textPrimary,
             }}>
               {row.value}
             </span>
@@ -1795,7 +1986,22 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [pollInterval, setPollInterval] = useState(5000);
   const [theme, setTheme] = useState('midnight');
 
-  // Step 6 — Telegram
+  // Step 6 — Connectors (optional)
+  const [githubToken, setGithubToken] = useState('');
+  const [githubRepo, setGithubRepo] = useState('');
+  const [githubBranch, setGithubBranch] = useState('master');
+  const [githubVerified, setGithubVerified] = useState(false);
+  const [githubVerifyStatus, setGithubVerifyStatus] = useState('');
+
+  const [vercelToken, setVercelToken] = useState('');
+  const [vercelProjectName, setVercelProjectName] = useState('');
+  const [vercelTeamId, setVercelTeamId] = useState('');
+  const [vercelVerified, setVercelVerified] = useState(false);
+  const [vercelVerifyStatus, setVercelVerifyStatus] = useState('');
+
+  const [connectorBusy, setConnectorBusy] = useState<'' | 'github' | 'vercel'>('');
+
+  // Step 7 — Telegram
   const [telegramBotToken, setTelegramBotToken] = useState('');
   const [telegramChatId, setTelegramChatId] = useState('');
 
@@ -1819,6 +2025,52 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
   const handleBack = () => {
     if (step > 1) setStep((s) => s - 1);
+  };
+
+  const handleVerifyGithub = async () => {
+    const token = githubToken.trim();
+    const repo = githubRepo.trim();
+    if (!token || !repo) {
+      setGithubVerified(false);
+      setGithubVerifyStatus('Add both token and owner/repo to verify GitHub.');
+      return;
+    }
+    setConnectorBusy('github');
+    const result = await githubVerifyIntegration({ token, repo });
+    if (!result) {
+      setGithubVerified(false);
+      setGithubVerifyStatus('GitHub verification failed (network error).');
+      setConnectorBusy('');
+      return;
+    }
+    setGithubVerified(Boolean(result.ok));
+    setGithubVerifyStatus(result.message || (result.ok ? 'GitHub verified.' : 'GitHub verification failed.'));
+    setConnectorBusy('');
+  };
+
+  const handleVerifyVercel = async () => {
+    const token = vercelToken.trim();
+    const projectName = vercelProjectName.trim();
+    if (!token || !projectName) {
+      setVercelVerified(false);
+      setVercelVerifyStatus('Add both token and project name to verify Vercel.');
+      return;
+    }
+    setConnectorBusy('vercel');
+    const result = await vercelVerifyIntegration({
+      token,
+      project_name: projectName,
+      team_id: vercelTeamId.trim(),
+    });
+    if (!result) {
+      setVercelVerified(false);
+      setVercelVerifyStatus('Vercel verification failed (network error).');
+      setConnectorBusy('');
+      return;
+    }
+    setVercelVerified(Boolean(result.ok));
+    setVercelVerifyStatus(result.message || (result.ok ? 'Vercel verified.' : 'Vercel verification failed.'));
+    setConnectorBusy('');
   };
 
   const handleLaunch = async () => {
@@ -1878,6 +2130,22 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         port: 0,
         auto_open_browser: autoOpenBrowser,
       },
+      integrations: {
+        workspace_mode: 'local',
+        github_token: githubToken.trim(),
+        github_repo: githubRepo.trim(),
+        github_default_branch: githubBranch.trim() || 'master',
+        github_verified: githubVerified,
+        github_verified_at: githubVerified ? new Date().toISOString() : '',
+        github_last_error: githubVerified ? '' : githubVerifyStatus,
+        vercel_token: vercelToken.trim(),
+        vercel_team_id: vercelTeamId.trim(),
+        vercel_project_name: vercelProjectName.trim(),
+        vercel_default_target: 'preview',
+        vercel_verified: vercelVerified,
+        vercel_verified_at: vercelVerified ? new Date().toISOString() : '',
+        vercel_last_error: vercelVerified ? '' : vercelVerifyStatus,
+      },
       llm: llmConfig,
     };
 
@@ -1891,7 +2159,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     }
   };
 
-  const stepLabels = ['Welcome', 'AI Provider', 'Your Name', 'Team Names', 'Preferences', 'Telegram', 'Complete'];
+  const stepLabels = ['Welcome', 'AI Provider', 'Your Name', 'Team Names', 'Preferences', 'Connectors', 'Telegram', 'Complete'];
 
   return (
     <div
@@ -2001,6 +2269,29 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               />
             )}
             {step === 6 && (
+              <StepConnectors
+                githubToken={githubToken}
+                githubRepo={githubRepo}
+                githubBranch={githubBranch}
+                githubVerified={githubVerified}
+                githubStatus={githubVerifyStatus}
+                vercelToken={vercelToken}
+                vercelProjectName={vercelProjectName}
+                vercelTeamId={vercelTeamId}
+                vercelVerified={vercelVerified}
+                vercelStatus={vercelVerifyStatus}
+                busyConnector={connectorBusy}
+                onGithubTokenChange={setGithubToken}
+                onGithubRepoChange={setGithubRepo}
+                onGithubBranchChange={setGithubBranch}
+                onVercelTokenChange={setVercelToken}
+                onVercelProjectNameChange={setVercelProjectName}
+                onVercelTeamIdChange={setVercelTeamId}
+                onVerifyGithub={() => { void handleVerifyGithub(); }}
+                onVerifyVercel={() => { void handleVerifyVercel(); }}
+              />
+            )}
+            {step === 7 && (
               <StepTelegram
                 telegramBotToken={telegramBotToken}
                 telegramChatId={telegramChatId}
@@ -2008,7 +2299,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 onChatIdChange={setTelegramChatId}
               />
             )}
-            {step === 7 && (
+            {step === 8 && (
               <StepComplete
                 userName={userName}
                 agentNames={agentNames}
@@ -2023,6 +2314,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 anthropicModelPreset={anthropicModelPreset}
                 openaiMode={openaiMode}
                 openaiModelPreset={openaiModelPreset}
+                githubConfigured={githubVerified}
+                vercelConfigured={vercelVerified}
               />
             )}
 
@@ -2116,9 +2409,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 onMouseLeave={(e) => {
                   if (canProceed()) e.currentTarget.style.opacity = '1';
                 }}
-                aria-label={step === 1 ? 'Get Started' : step === 6 ? 'Skip' : 'Go to next step'}
+                aria-label={step === 1 ? 'Get Started' : (step === 6 || step === 7) ? 'Skip' : 'Go to next step'}
               >
-                {step === 1 ? 'Get Started' : step === 6 ? 'Skip / Next' : 'Next'}
+                {step === 1 ? 'Get Started' : (step === 6 || step === 7) ? 'Skip / Next' : 'Next'}
               </button>
             ) : (
               <button

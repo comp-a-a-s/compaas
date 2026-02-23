@@ -232,6 +232,7 @@ export default function App() {
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
+  const [settingsConnectorFocus, setSettingsConnectorFocus] = useState<'github' | 'vercel' | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStep, setTourStep] = useState(0);
 
@@ -244,6 +245,12 @@ export default function App() {
 
   const handleActiveProjectChange = useCallback((projectId: string) => {
     setActiveProjectId(projectId);
+  }, []);
+
+  const openConnectorSetup = useCallback((connector: 'github' | 'vercel') => {
+    setSettingsConnectorFocus(connector);
+    setActiveTab('settings');
+    setChatOpen(false);
   }, []);
 
   const requestMicroToggle = useCallback(() => {
@@ -414,11 +421,21 @@ export default function App() {
       github_repo: githubRepo,
       github_branch: githubBranch,
     });
-    const nextProjectId = created?.project?.id;
-    if (!nextProjectId) return;
+    if (created.status !== 'ok' || !created.project?.id) {
+      if (created.error?.settings_target === 'github' || created.error?.code === 'github_not_configured') {
+        openConnectorSetup('github');
+        return;
+      }
+      if (created.error?.message) {
+        window.alert(created.error.message);
+      }
+      return;
+    }
+    const nextProjectId = created.project.id;
     setActiveProjectId(nextProjectId);
+    setSettingsConnectorFocus(null);
     await loadProjects(true);
-  }, [config?.integrations?.github_default_branch, config?.integrations?.github_repo, config?.integrations?.workspace_mode, config?.user?.name, loadProjects]);
+  }, [config?.integrations?.github_default_branch, config?.integrations?.github_repo, config?.integrations?.workspace_mode, config?.user?.name, loadProjects, openConnectorSetup]);
 
   const loadMetrics = useCallback(async () => {
     try {
@@ -747,11 +764,13 @@ export default function App() {
             defaultWorkspaceMode={config?.integrations?.workspace_mode === 'github' ? 'github' : 'local'}
             defaultGithubRepo={config?.integrations?.github_repo || ''}
             defaultGithubBranch={config?.integrations?.github_default_branch || 'master'}
+            githubConfigured={githubConfigured}
             onProjectCreated={(projectId) => {
               setActiveProjectId(projectId);
               setPendingProjectId(projectId);
               loadProjects(true);
             }}
+            onGitHubSetupRequired={() => openConnectorSetup('github')}
           />
         );
 
@@ -784,7 +803,13 @@ export default function App() {
         );
 
       case 'settings':
-        return <SettingsPanel onConfigUpdated={handleConfigUpdated} />;
+        return (
+          <SettingsPanel
+            onConfigUpdated={handleConfigUpdated}
+            initialTab={settingsConnectorFocus ? 'integrations' : 'general'}
+            focusConnector={settingsConnectorFocus}
+          />
+        );
 
       default:
         return (
@@ -805,6 +830,11 @@ export default function App() {
   const ceoName = config?.agents?.['ceo'] || 'CEO';
   const userName = config?.user?.name || 'You';
   const telegramConfigured = readTelegramSnapshot().configured;
+  const githubConfigured = Boolean(
+    config?.integrations?.github_token
+    && config?.integrations?.github_repo
+    && config?.integrations?.github_verified
+  );
   const currentTourStep = ONBOARDING_STEPS[Math.max(0, Math.min(tourStep, ONBOARDING_STEPS.length - 1))];
 
   const finishTour = () => {
@@ -820,7 +850,12 @@ export default function App() {
     <>
       <Layout
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(tab) => {
+          setActiveTab(tab);
+          if (tab !== 'settings') {
+            setSettingsConnectorFocus(null);
+          }
+        }}
         chatOpen={chatOpen}
         onChatToggle={() => {
           setChatOpen((prev) => {

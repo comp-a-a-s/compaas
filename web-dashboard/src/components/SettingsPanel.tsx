@@ -4,6 +4,8 @@ import {
   updateConfig,
   testLlmConnection,
   saveIntegrations,
+  githubVerifyIntegration,
+  vercelVerifyIntegration,
   fetchGithubRepos,
   createGithubRepo,
   githubSecretScan,
@@ -23,6 +25,8 @@ import type { ThemeName } from '../hooks/useTheme';
 
 interface SettingsPanelProps {
   onConfigUpdated?: () => void;
+  initialTab?: SettingsTab;
+  focusConnector?: 'github' | 'vercel' | null;
 }
 
 // ---- CSS variable colour references (no hard-coded hex) ----
@@ -93,9 +97,16 @@ interface IntegrationSettings {
   github_default_branch: string;
   github_auto_push: boolean;
   github_auto_pr: boolean;
+  github_verified: boolean;
+  github_verified_at: string;
+  github_last_error: string;
   vercel_token: string;
   vercel_team_id: string;
   vercel_project_name: string;
+  vercel_default_target: 'preview' | 'production';
+  vercel_verified: boolean;
+  vercel_verified_at: string;
+  vercel_last_error: string;
   slack_token: string;
   webhook_url: string;
 }
@@ -110,9 +121,16 @@ function integrationsFromConfig(config: AppConfig | null): IntegrationSettings {
     github_default_branch: config?.integrations?.github_default_branch ?? 'master',
     github_auto_push: Boolean(config?.integrations?.github_auto_push),
     github_auto_pr: Boolean(config?.integrations?.github_auto_pr),
+    github_verified: Boolean(config?.integrations?.github_verified),
+    github_verified_at: config?.integrations?.github_verified_at ?? '',
+    github_last_error: config?.integrations?.github_last_error ?? '',
     vercel_token: config?.integrations?.vercel_token ?? '',
     vercel_team_id: config?.integrations?.vercel_team_id ?? '',
     vercel_project_name: config?.integrations?.vercel_project_name ?? '',
+    vercel_default_target: config?.integrations?.vercel_default_target === 'production' ? 'production' : 'preview',
+    vercel_verified: Boolean(config?.integrations?.vercel_verified),
+    vercel_verified_at: config?.integrations?.vercel_verified_at ?? '',
+    vercel_last_error: config?.integrations?.vercel_last_error ?? '',
     slack_token: config?.integrations?.slack_token ?? '',
     webhook_url: config?.integrations?.webhook_url ?? '',
   };
@@ -1131,7 +1149,7 @@ function AiProviderSection({
   );
 }
 
-export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
+export default function SettingsPanel({ onConfigUpdated, initialTab = 'general', focusConnector = null }: SettingsPanelProps) {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -1164,15 +1182,28 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
   const [githubTokenMasked, setGithubTokenMasked] = useState(false);
   const [vercelTokenMasked, setVercelTokenMasked] = useState(false);
   const [slackTokenMasked, setSlackTokenMasked] = useState(false);
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [githubVerified, setGithubVerified] = useState(false);
+  const [githubVerifiedAt, setGithubVerifiedAt] = useState('');
+  const [githubLastError, setGithubLastError] = useState('');
+  const [vercelVerified, setVercelVerified] = useState(false);
+  const [vercelVerifiedAt, setVercelVerifiedAt] = useState('');
+  const [vercelLastError, setVercelLastError] = useState('');
+  const [vercelDefaultTarget, setVercelDefaultTarget] = useState<'preview' | 'production'>('preview');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [githubRepoOptions, setGithubRepoOptions] = useState<Array<{ full_name: string; default_branch: string }>>([]);
   const [integrationOpsStatus, setIntegrationOpsStatus] = useState('');
   const [integrationOpsBusy, setIntegrationOpsBusy] = useState(false);
+  const [quickVerifyBusy, setQuickVerifyBusy] = useState<'' | 'github' | 'vercel'>('');
+  const [showAdvancedIntegrationControls, setShowAdvancedIntegrationControls] = useState(false);
   const [repoPathForOps, setRepoPathForOps] = useState('');
   const [rollbackCommit, setRollbackCommit] = useState('');
   const [vercelDomain, setVercelDomain] = useState('');
   const [vercelEnvKey, setVercelEnvKey] = useState('');
   const [vercelEnvValue, setVercelEnvValue] = useState('');
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   const runIntegrationOp = async (label: string, fn: () => Promise<unknown>) => {
     setIntegrationOpsBusy(true);
@@ -1299,6 +1330,102 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
     );
   };
 
+  const handleQuickVerifyGithub = async () => {
+    const repo = githubRepo.trim();
+    const tokenForVerify = githubTokenMasked ? undefined : githubToken.trim();
+    if (!repo) {
+      setIntegrationOpsStatus('GitHub verification requires a repository in owner/repo format.');
+      return;
+    }
+    if (!tokenForVerify && !githubTokenMasked) {
+      setIntegrationOpsStatus('GitHub verification requires a token.');
+      return;
+    }
+    setQuickVerifyBusy('github');
+    setIntegrationOpsStatus('Saving GitHub connector settings...');
+    const saved = await saveIntegrations({
+      workspace_mode: workspaceMode,
+      github_token: githubTokenMasked ? REDACTED_SECRET : githubToken.trim(),
+      github_repo: repo,
+      github_default_branch: githubDefaultBranch.trim() || 'master',
+      github_auto_push: githubAutoPush,
+      github_auto_pr: githubAutoPr,
+    });
+    if (!saved) {
+      setQuickVerifyBusy('');
+      setGithubVerified(false);
+      setIntegrationOpsStatus('Failed to save GitHub settings before verification.');
+      return;
+    }
+
+    setIntegrationOpsStatus('Verifying GitHub connector...');
+    const result = await githubVerifyIntegration({ token: tokenForVerify, repo });
+    if (!result) {
+      setQuickVerifyBusy('');
+      setGithubVerified(false);
+      setGithubLastError('Network error during GitHub verification.');
+      setIntegrationOpsStatus('GitHub verification failed due to a network error.');
+      return;
+    }
+
+    const verified = Boolean(result.ok);
+    const verifiedAt = verified ? new Date().toISOString() : '';
+    setGithubVerified(verified);
+    setGithubVerifiedAt(verifiedAt);
+    setGithubLastError(verified ? '' : result.message || 'GitHub verification failed.');
+    setIntegrationOpsStatus(result.message || (verified ? 'GitHub connector verified.' : 'GitHub verification failed.'));
+    setQuickVerifyBusy('');
+  };
+
+  const handleQuickVerifyVercel = async () => {
+    const projectName = vercelProjectName.trim();
+    const tokenForVerify = vercelTokenMasked ? undefined : vercelToken.trim();
+    if (!projectName) {
+      setIntegrationOpsStatus('Vercel verification requires a project name.');
+      return;
+    }
+    if (!tokenForVerify && !vercelTokenMasked) {
+      setIntegrationOpsStatus('Vercel verification requires a token.');
+      return;
+    }
+    setQuickVerifyBusy('vercel');
+    setIntegrationOpsStatus('Saving Vercel connector settings...');
+    const saved = await saveIntegrations({
+      vercel_token: vercelTokenMasked ? REDACTED_SECRET : vercelToken.trim(),
+      vercel_team_id: vercelTeamId.trim(),
+      vercel_project_name: projectName,
+      vercel_default_target: vercelDefaultTarget,
+    });
+    if (!saved) {
+      setQuickVerifyBusy('');
+      setVercelVerified(false);
+      setIntegrationOpsStatus('Failed to save Vercel settings before verification.');
+      return;
+    }
+
+    setIntegrationOpsStatus('Verifying Vercel connector...');
+    const result = await vercelVerifyIntegration({
+      token: tokenForVerify,
+      project_name: projectName,
+      team_id: vercelTeamId.trim(),
+    });
+    if (!result) {
+      setQuickVerifyBusy('');
+      setVercelVerified(false);
+      setVercelLastError('Network error during Vercel verification.');
+      setIntegrationOpsStatus('Vercel verification failed due to a network error.');
+      return;
+    }
+
+    const verified = Boolean(result.ok);
+    const verifiedAt = verified ? new Date().toISOString() : '';
+    setVercelVerified(verified);
+    setVercelVerifiedAt(verifiedAt);
+    setVercelLastError(verified ? '' : result.message || 'Vercel verification failed.');
+    setIntegrationOpsStatus(result.message || (verified ? 'Vercel connector verified.' : 'Vercel verification failed.'));
+    setQuickVerifyBusy('');
+  };
+
   useEffect(() => {
     // Apply compact mode on mount
     document.body.classList.toggle('compact-mode', compactMode);
@@ -1324,6 +1451,9 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
         setGithubDefaultBranch(integrationCfg.github_default_branch || 'master');
         setGithubAutoPush(Boolean(integrationCfg.github_auto_push));
         setGithubAutoPr(Boolean(integrationCfg.github_auto_pr));
+        setGithubVerified(Boolean(integrationCfg.github_verified));
+        setGithubVerifiedAt(integrationCfg.github_verified_at || '');
+        setGithubLastError(integrationCfg.github_last_error || '');
         if (integrationCfg.vercel_token === REDACTED_SECRET) {
           setVercelToken('');
           setVercelTokenMasked(true);
@@ -1333,6 +1463,10 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
         }
         setVercelTeamId(integrationCfg.vercel_team_id);
         setVercelProjectName(integrationCfg.vercel_project_name);
+        setVercelDefaultTarget(integrationCfg.vercel_default_target === 'production' ? 'production' : 'preview');
+        setVercelVerified(Boolean(integrationCfg.vercel_verified));
+        setVercelVerifiedAt(integrationCfg.vercel_verified_at || '');
+        setVercelLastError(integrationCfg.vercel_last_error || '');
         if (integrationCfg.slack_token === REDACTED_SECRET) {
           setSlackToken('');
           setSlackTokenMasked(true);
@@ -1344,6 +1478,16 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (!focusConnector) return;
+    setActiveTab('integrations');
+    if (focusConnector === 'github') {
+      setIntegrationOpsStatus('GitHub setup is required before creating GitHub projects. Connect and verify below.');
+    } else if (focusConnector === 'vercel') {
+      setIntegrationOpsStatus('Vercel setup is required for deployments. Connect and verify below.');
+    }
+  }, [focusConnector]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -1370,13 +1514,36 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
         github_default_branch: githubDefaultBranch.trim() || 'master',
         github_auto_push: githubAutoPush,
         github_auto_pr: githubAutoPr,
+        github_verified: githubVerified,
+        github_verified_at: githubVerifiedAt,
+        github_last_error: githubLastError,
         vercel_token: vercelTokenMasked ? REDACTED_SECRET : vercelToken.trim(),
         vercel_team_id: vercelTeamId.trim(),
         vercel_project_name: vercelProjectName.trim(),
+        vercel_default_target: vercelDefaultTarget,
+        vercel_verified: vercelVerified,
+        vercel_verified_at: vercelVerifiedAt,
+        vercel_last_error: vercelLastError,
         slack_token: slackTokenMasked ? REDACTED_SECRET : slackToken.trim(),
         webhook_url: webhookUrl.trim(),
       };
       const currentIntegrations = integrationsFromConfig(config);
+      const githubConfigChanged =
+        nextIntegrations.github_repo !== currentIntegrations.github_repo
+        || nextIntegrations.github_token !== currentIntegrations.github_token;
+      const vercelConfigChanged =
+        nextIntegrations.vercel_project_name !== currentIntegrations.vercel_project_name
+        || nextIntegrations.vercel_token !== currentIntegrations.vercel_token;
+      if (githubConfigChanged) {
+        nextIntegrations.github_verified = false;
+        nextIntegrations.github_verified_at = '';
+        nextIntegrations.github_last_error = 'GitHub configuration changed. Re-verify connector.';
+      }
+      if (vercelConfigChanged) {
+        nextIntegrations.vercel_verified = false;
+        nextIntegrations.vercel_verified_at = '';
+        nextIntegrations.vercel_last_error = 'Vercel configuration changed. Re-verify connector.';
+      }
       const integrationsChanged = JSON.stringify(nextIntegrations) !== JSON.stringify(currentIntegrations);
 
       if (integrationsChanged) {
@@ -1392,6 +1559,12 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
         ...patch,
         integrations: nextIntegrations,
       }) : prev);
+      setGithubVerified(nextIntegrations.github_verified);
+      setGithubVerifiedAt(nextIntegrations.github_verified_at);
+      setGithubLastError(nextIntegrations.github_last_error);
+      setVercelVerified(nextIntegrations.vercel_verified);
+      setVercelVerifiedAt(nextIntegrations.vercel_verified_at);
+      setVercelLastError(nextIntegrations.vercel_last_error);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
       onConfigUpdated?.();
@@ -1613,7 +1786,205 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
             <TelegramSection />
           </Section>
 
-          <Section title="Integrations">
+          <Section title="Quick Connect (Recommended)">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Workspace Default</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>Default location for new projects</div>
+                  </div>
+                  <span style={{ fontSize: '11px', color: workspaceMode === 'github' ? C.accent : C.success }}>
+                    {workspaceMode === 'github' ? 'GitHub' : 'Local'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => setWorkspaceMode('local')}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '7px',
+                      border: `1px solid ${workspaceMode === 'local' ? C.accent : C.border}`,
+                      backgroundColor: workspaceMode === 'local' ? C.accentDim : C.surface,
+                      color: workspaceMode === 'local' ? C.accent : C.textSecondary,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Local
+                  </button>
+                  <button
+                    onClick={() => setWorkspaceMode('github')}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '7px',
+                      border: `1px solid ${workspaceMode === 'github' ? C.accent : C.border}`,
+                      backgroundColor: workspaceMode === 'github' ? C.accentDim : C.surface,
+                      color: workspaceMode === 'github' ? C.accent : C.textSecondary,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    GitHub
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>GitHub Connector</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>Token + repo + verify</div>
+                  </div>
+                  <span style={{ fontSize: '11px', color: githubVerified ? C.success : C.textMuted }}>
+                    {githubVerified ? 'Verified' : 'Not verified'}
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: '1fr' }}>
+                  <input
+                    type="text"
+                    value={githubRepo}
+                    onChange={(e) => setGithubRepo(e.target.value)}
+                    placeholder="owner/repo"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                  />
+                  <input
+                    type="text"
+                    value={githubDefaultBranch}
+                    onChange={(e) => setGithubDefaultBranch(e.target.value)}
+                    placeholder="default branch (master)"
+                    style={{ ...inputStyle({ maxWidth: '240px', fontSize: '12px' }) }}
+                  />
+                  <input
+                    type="password"
+                    value={githubToken}
+                    onChange={(e) => { setGithubToken(e.target.value); }}
+                    placeholder={githubTokenMasked ? 'Saved (hidden). Type to replace.' : 'ghp_xxx'}
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onInput={() => { setGithubTokenMasked(false); }}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => { void handleQuickVerifyGithub(); }}
+                      disabled={quickVerifyBusy.length > 0}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '7px',
+                        border: `1px solid ${githubVerified ? C.success : C.accent}`,
+                        backgroundColor: githubVerified ? 'rgba(63,185,80,0.12)' : C.accentDim,
+                        color: githubVerified ? C.success : C.accent,
+                        fontSize: '12px',
+                        cursor: quickVerifyBusy.length > 0 ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {quickVerifyBusy === 'github' ? 'Verifying…' : githubVerified ? 'Verified' : 'Connect & Verify'}
+                    </button>
+                    {githubVerifiedAt && (
+                      <span style={{ fontSize: '11px', color: C.textMuted }}>
+                        Verified {new Date(githubVerifiedAt).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                  {!githubVerified && githubLastError && (
+                    <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>{githubLastError}</p>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Vercel Connector</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>Token + project + verify</div>
+                  </div>
+                  <span style={{ fontSize: '11px', color: vercelVerified ? C.success : C.textMuted }}>
+                    {vercelVerified ? 'Verified' : 'Not verified'}
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: '1fr' }}>
+                  <input
+                    type="text"
+                    value={vercelProjectName}
+                    onChange={(e) => setVercelProjectName(e.target.value)}
+                    placeholder="Vercel project name"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                  />
+                  <input
+                    type="text"
+                    value={vercelTeamId}
+                    onChange={(e) => setVercelTeamId(e.target.value)}
+                    placeholder="Team ID (optional)"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                  />
+                  <input
+                    type="password"
+                    value={vercelToken}
+                    onChange={(e) => { setVercelToken(e.target.value); }}
+                    placeholder={vercelTokenMasked ? 'Saved (hidden). Type to replace.' : 'vercel_xxx'}
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onInput={() => { setVercelTokenMasked(false); }}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <label style={{ fontSize: '11px', color: C.textSecondary }}>Default deploy target</label>
+                    <select
+                      value={vercelDefaultTarget}
+                      onChange={(e) => setVercelDefaultTarget(e.target.value === 'production' ? 'production' : 'preview')}
+                      style={{ ...inputStyle({ maxWidth: '150px', fontSize: '11px', padding: '5px 8px' }) }}
+                    >
+                      <option value="preview">Preview</option>
+                      <option value="production">Production</option>
+                    </select>
+                    <button
+                      onClick={() => { void handleQuickVerifyVercel(); }}
+                      disabled={quickVerifyBusy.length > 0}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '7px',
+                        border: `1px solid ${vercelVerified ? C.success : C.accent}`,
+                        backgroundColor: vercelVerified ? 'rgba(63,185,80,0.12)' : C.accentDim,
+                        color: vercelVerified ? C.success : C.accent,
+                        fontSize: '12px',
+                        cursor: quickVerifyBusy.length > 0 ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {quickVerifyBusy === 'vercel' ? 'Verifying…' : vercelVerified ? 'Verified' : 'Connect & Verify'}
+                    </button>
+                    {vercelVerifiedAt && (
+                      <span style={{ fontSize: '11px', color: C.textMuted }}>
+                        Verified {new Date(vercelVerifiedAt).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                  {!vercelVerified && vercelLastError && (
+                    <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>{vercelLastError}</p>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                <p style={{ margin: 0, fontSize: '11px', color: C.textMuted }}>
+                  Use advanced controls only for diagnostics, drift checks, and manual deploy operations.
+                </p>
+                <button
+                  onClick={() => setShowAdvancedIntegrationControls((prev) => !prev)}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: '7px',
+                    border: `1px solid ${C.border}`,
+                    backgroundColor: C.surface,
+                    color: C.textSecondary,
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {showAdvancedIntegrationControls ? 'Hide Advanced Controls' : 'Show Advanced Controls'}
+                </button>
+              </div>
+            </div>
+          </Section>
+
+          {showAdvancedIntegrationControls && (
+          <Section title="Advanced Controls">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
@@ -1935,6 +2306,7 @@ export default function SettingsPanel({ onConfigUpdated }: SettingsPanelProps) {
               </div>
             )}
           </Section>
+          )}
         </>
       )}
 
