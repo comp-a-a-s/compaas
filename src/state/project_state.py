@@ -119,14 +119,21 @@ class ProjectStateManager:
         description: str,
         project_type: str = "general",
         workspace_path: str = "",
+        delivery_mode: str = "local",
+        github_repo: str = "",
+        github_branch: str = "master",
     ) -> str:
         project_id = str(uuid.uuid4())[:8]
         project_path = self._ensure_dirs(project_id)
         now = datetime.now(timezone.utc).isoformat()
         workspace_slug = self._slugify_project_name(name)
-        resolved_workspace = os.path.abspath(
+        candidate_workspace = os.path.abspath(
             workspace_path or os.path.join(self.workspace_root, f"{workspace_slug}-{project_id}")
         )
+        root_prefix = self.workspace_root.rstrip(os.sep) + os.sep
+        if candidate_workspace != self.workspace_root and not candidate_workspace.startswith(root_prefix):
+            candidate_workspace = os.path.join(self.workspace_root, f"{workspace_slug}-{project_id}")
+        resolved_workspace = os.path.abspath(candidate_workspace)
         os.makedirs(resolved_workspace, exist_ok=True)
 
         project_data = {
@@ -140,6 +147,9 @@ class ProjectStateManager:
             "phases": [],
             "team": [],
             "workspace_path": resolved_workspace,
+            "delivery_mode": "github" if str(delivery_mode).strip().lower() == "github" else "local",
+            "github_repo": str(github_repo or "").strip(),
+            "github_branch": str(github_branch or "master").strip() or "master",
         }
 
         atomic_yaml_write(os.path.join(project_path, "project.yaml"), project_data)
@@ -208,6 +218,9 @@ class ProjectStateManager:
                     "phases": data.get("phases", []) or [],
                     "team": data.get("team", []) or [],
                     "workspace_path": data.get("workspace_path", ""),
+                    "delivery_mode": data.get("delivery_mode", "local"),
+                    "github_repo": data.get("github_repo", ""),
+                    "github_branch": data.get("github_branch", "master"),
                 })
             except (yaml.YAMLError, KeyError, OSError):
                 continue

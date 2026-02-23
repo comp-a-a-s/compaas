@@ -31,6 +31,8 @@ def client(temp_data_dir, monkeypatch):
     monkeypatch.setattr(api_module, "DATA_DIR", temp_data_dir)
     monkeypatch.setattr(api_module, "state_manager", ProjectStateManager(temp_data_dir))
     monkeypatch.setattr(api_module, "task_board", TaskBoard(temp_data_dir))
+    monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+    monkeypatch.setattr(api_module, "MEMORY_PATH", os.path.join(temp_data_dir, "ceo_memory.md"))
 
     with TestClient(app) as c:
         yield c
