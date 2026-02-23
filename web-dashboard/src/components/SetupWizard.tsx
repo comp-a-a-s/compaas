@@ -1565,6 +1565,22 @@ function StepConnectors({
   onVerifyGithub: () => void;
   onVerifyVercel: () => void;
 }) {
+  const guideCardStyle: React.CSSProperties = {
+    marginTop: '10px',
+    padding: '10px 11px',
+    borderRadius: '8px',
+    border: `1px solid ${C.border}`,
+    backgroundColor: C.surface,
+  };
+
+  const guideListStyle: React.CSSProperties = {
+    margin: '8px 0 0 16px',
+    padding: 0,
+    fontSize: '11px',
+    color: C.textSecondary,
+    lineHeight: 1.55,
+  };
+
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
       <div>
@@ -1626,6 +1642,63 @@ function StepConnectors({
               <span style={{ fontSize: '11px', color: githubVerified ? C.success : C.textMuted }}>{githubStatus}</span>
             )}
           </div>
+          <details style={guideCardStyle}>
+            <summary style={{ cursor: 'pointer', fontSize: '11px', fontWeight: 600, color: C.accent }}>
+              Full GitHub setup guide
+            </summary>
+            <ol style={guideListStyle}>
+              <li style={{ marginBottom: '4px' }}>
+                Open GitHub token settings:
+                {' '}
+                <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" style={guideLink}>
+                  github.com/settings/tokens
+                </a>
+                .
+              </li>
+              <li style={{ marginBottom: '4px' }}>
+                Create a token:
+                {' '}
+                <strong>Fine-grained (recommended)</strong>
+                {' '}
+                with repository access to your target repo,
+                or
+                {' '}
+                <strong>Classic</strong>
+                {' '}
+                with
+                {' '}
+                <Code>repo</Code>
+                {' '}
+                scope.
+              </li>
+              <li style={{ marginBottom: '4px' }}>
+                Paste your token in the field above and set repository as
+                {' '}
+                <Code>owner/repo</Code>
+                {' '}
+                (example:
+                {' '}
+                <Code>comp-a-a-s/compaas</Code>
+                ).
+              </li>
+              <li style={{ marginBottom: '4px' }}>
+                Set the default branch (usually
+                {' '}
+                <Code>master</Code>
+                {' '}
+                or
+                {' '}
+                <Code>main</Code>
+                ) and click
+                {' '}
+                <strong>Connect &amp; Verify</strong>
+                .
+              </li>
+              <li>
+                After verification succeeds, GitHub project mode can create and operate projects without re-entering credentials.
+              </li>
+            </ol>
+          </details>
         </div>
       </div>
 
@@ -1679,6 +1752,37 @@ function StepConnectors({
               <span style={{ fontSize: '11px', color: vercelVerified ? C.success : C.textMuted }}>{vercelStatus}</span>
             )}
           </div>
+          <details style={guideCardStyle}>
+            <summary style={{ cursor: 'pointer', fontSize: '11px', fontWeight: 600, color: C.accent }}>
+              Full Vercel setup guide
+            </summary>
+            <ol style={guideListStyle}>
+              <li style={{ marginBottom: '4px' }}>
+                Open Vercel token settings:
+                {' '}
+                <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" style={guideLink}>
+                  vercel.com/account/tokens
+                </a>
+                , create a token, and copy it.
+              </li>
+              <li style={{ marginBottom: '4px' }}>
+                In Vercel, create/import your project first. Use that exact project name above.
+              </li>
+              <li style={{ marginBottom: '4px' }}>
+                Team ID is optional. Fill it only if the project belongs to a team (not personal scope).
+              </li>
+              <li style={{ marginBottom: '4px' }}>
+                Click
+                {' '}
+                <strong>Connect &amp; Verify</strong>
+                {' '}
+                to validate both token and project access.
+              </li>
+              <li>
+                After verification, COMPaaS can offer one-click preview deploy from CEO chat after project completion.
+              </li>
+            </ol>
+          </details>
         </div>
       </div>
 

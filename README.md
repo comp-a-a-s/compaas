@@ -298,6 +298,68 @@ Troubleshooting:
 - Empty `getUpdates` response usually means no recent message was sent to the bot yet.
 - If mirroring fails, re-save token/chat ID in Settings and toggle Telegram off/on in CEO Chat.
 
+### GitHub Integration (Full Guide)
+
+GitHub integration allows COMPaaS to create and update projects directly in repositories when project location is set to `GitHub`.
+
+1. Prepare repository access:
+   - Decide the target repo in `owner/repo` format (example: `comp-a-a-s/compaas`).
+   - Confirm the default branch (`master` or `main`).
+2. Create a GitHub token:
+   - Open [GitHub token settings](https://github.com/settings/tokens).
+   - Preferred: create a **fine-grained token** scoped to the target repo.
+   - Alternative: classic token with `repo` scope.
+3. Configure in COMPaaS:
+   - Open **Settings → Integrations → Quick Connect → GitHub Connector**.
+   - Fill:
+     - `owner/repo`
+     - default branch
+     - token
+   - Click **Connect & Verify**.
+4. Confirm verification:
+   - Status should change to **Verified**.
+   - If not verified, read the connector status/error and fix token/repo permissions.
+5. Use GitHub mode in projects:
+   - In new project creation, choose location `GitHub`.
+   - If GitHub is not verified, COMPaaS will block creation and route you back to setup.
+6. Optional advanced behavior:
+   - In **Settings → Integrations → Advanced Controls**, enable auto-push/auto-PR when desired.
+
+Troubleshooting:
+- `Not authorized` or verification failure usually means token lacks access to the selected repo.
+- Verify repo spelling and case (`owner/repo` must match exactly).
+- If token was rotated, paste the new token and verify again.
+
+### Vercel Integration (Full Guide)
+
+Vercel integration enables post-project deploy from CEO chat and deployment tooling in Integrations.
+
+1. Create/import your Vercel project first:
+   - Open [Vercel Dashboard](https://vercel.com/dashboard).
+   - Create or import the app.
+   - Copy the exact project name.
+2. Create a Vercel token:
+   - Open [Vercel token settings](https://vercel.com/account/tokens).
+   - Create and copy a token.
+3. Configure in COMPaaS:
+   - Open **Settings → Integrations → Quick Connect → Vercel Connector**.
+   - Fill:
+     - project name
+     - team ID (only for team-owned projects; leave empty for personal)
+     - token
+     - default target (`Preview` recommended)
+   - Click **Connect & Verify**.
+4. Confirm verification:
+   - Status should change to **Verified**.
+5. Deploy from CEO flow:
+   - After project completion, CEO can offer deployment to Vercel.
+   - Confirm deploy and receive deployment URL in chat.
+
+Troubleshooting:
+- `Not authorized` usually means invalid token or wrong scope/team context.
+- `Project not found` means project name or team scope does not match.
+- Re-verify after changing token, project name, or team ID.
+
 ### Themes
 
 Choose from 4 built-in themes in Settings or during the Setup Wizard:
