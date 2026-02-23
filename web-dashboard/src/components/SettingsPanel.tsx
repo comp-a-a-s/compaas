@@ -183,6 +183,44 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function IntegrationGuide({
+  title,
+  steps,
+  note,
+}: {
+  title: string;
+  steps: React.ReactNode[];
+  note?: React.ReactNode;
+}) {
+  return (
+    <details
+      style={{
+        marginTop: '10px',
+        padding: '10px 12px',
+        borderRadius: '8px',
+        border: `1px solid ${C.border}`,
+        backgroundColor: C.surface,
+      }}
+    >
+      <summary style={{ cursor: 'pointer', fontSize: '11px', fontWeight: 600, color: C.accent }}>
+        {title}
+      </summary>
+      <ol style={{ margin: '8px 0 0 16px', padding: 0, color: C.textSecondary, fontSize: '11px', lineHeight: 1.55 }}>
+        {steps.map((step, idx) => (
+          <li key={`guide-step-${idx}`} style={{ marginBottom: idx < steps.length - 1 ? '5px' : 0 }}>
+            {step}
+          </li>
+        ))}
+      </ol>
+      {note && (
+        <p style={{ marginTop: '8px', marginBottom: 0, fontSize: '11px', color: C.textMuted, lineHeight: 1.5 }}>
+          {note}
+        </p>
+      )}
+    </details>
+  );
+}
+
 // ---- Toggle switch ----
 
 function Toggle({
@@ -1888,6 +1926,62 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                   {!githubVerified && githubLastError && (
                     <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>{githubLastError}</p>
                   )}
+                  <IntegrationGuide
+                    title="Full GitHub setup guide"
+                    steps={[
+                      <>
+                        Open token settings at
+                        {' '}
+                        <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" style={{ color: C.accent }}>
+                          github.com/settings/tokens
+                        </a>
+                        {' '}
+                        and create a token.
+                      </>,
+                      <>
+                        Use a
+                        {' '}
+                        <strong>fine-grained token</strong>
+                        {' '}
+                        with repo access (recommended), or a classic token with
+                        {' '}
+                        <code>repo</code>
+                        {' '}
+                        scope.
+                      </>,
+                      <>
+                        Enter repository in
+                        {' '}
+                        <code>owner/repo</code>
+                        {' '}
+                        format and default branch (
+                        <code>master</code>
+                        {' '}
+                        or
+                        {' '}
+                        <code>main</code>
+                        ).
+                      </>,
+                      <>
+                        Click
+                        {' '}
+                        <strong>Connect &amp; Verify</strong>
+                        {' '}
+                        and wait for Verified status.
+                      </>,
+                      <>
+                        Optional: enable auto-push and auto-PR in Advanced Controls after verification.
+                      </>,
+                    ]}
+                    note={
+                      <>
+                        If verification fails with
+                        {' '}
+                        <code>Not authorized</code>
+                        , regenerate the token and ensure the selected repo is included in token permissions.
+                      </>
+                    }
+                  />
                 </div>
               </div>
 
@@ -1958,6 +2052,48 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                   {!vercelVerified && vercelLastError && (
                     <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>{vercelLastError}</p>
                   )}
+                  <IntegrationGuide
+                    title="Full Vercel setup guide"
+                    steps={[
+                      <>
+                        Open token settings at
+                        {' '}
+                        <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" style={{ color: C.accent }}>
+                          vercel.com/account/tokens
+                        </a>
+                        {' '}
+                        and create a token.
+                      </>,
+                      <>
+                        Create or import your project in Vercel first, then copy the exact project name.
+                      </>,
+                      <>
+                        Fill Team ID only for organization-owned projects (leave empty for personal scope).
+                      </>,
+                      <>
+                        Set default deploy target to
+                        {' '}
+                        <strong>Preview</strong>
+                        {' '}
+                        for safe iteration (recommended).
+                      </>,
+                      <>
+                        Click
+                        {' '}
+                        <strong>Connect &amp; Verify</strong>
+                        {' '}
+                        and confirm Verified status before attempting deploy from CEO chat.
+                      </>,
+                    ]}
+                    note={
+                      <>
+                        If verification returns
+                        {' '}
+                        <code>Not authorized</code>
+                        , the token is invalid or lacks access to that project scope.
+                      </>
+                    }
+                  />
                 </div>
               </div>
 
