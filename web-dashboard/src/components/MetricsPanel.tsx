@@ -1,474 +1,709 @@
-import type { TokenReport, Budget, Project, Task } from '../types';
+import { useState, useMemo, useCallback } from 'react';
+import type { ActivityEvent } from '../types';
+import FloatingSelect from './ui/FloatingSelect';
 
-interface MetricsPanelProps {
-  tokenReport: TokenReport | null;
-  budgets: Budget[];
-  loading: boolean;
-  projects?: Project[];
-  tasksByProject?: Record<string, Task[]>;
+interface EventLogPanelProps {
+  events: ActivityEvent[];
 }
 
 // ---- Helpers ----
-function modelColor(model: string): string {
-  const m = (model || '').toLowerCase();
-  if (m.includes('opus')) return 'var(--tf-accent)';
-  if (m.includes('sonnet')) return 'var(--tf-accent-blue)';
-  if (m.includes('haiku')) return 'var(--tf-success)';
-  return 'var(--tf-text-secondary)';
-}
 
-function modelBadge(model: string): { bg: string; text: string } {
-  const m = (model || '').toLowerCase();
-  if (m.includes('opus')) return { bg: '#1c2233', text: 'var(--tf-accent)' };
-  if (m.includes('sonnet')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
-  if (m.includes('haiku')) return { bg: '#1a2e25', text: 'var(--tf-success)' };
+function actionBadgeStyle(action: string): { bg: string; text: string } {
+  const a = (action || '').toUpperCase();
+  if (a.includes('DELEGATED') || a.includes('DELEGATE')) return { bg: '#1c2233', text: 'var(--tf-accent)' };
+  if (a.includes('STARTED') || a.includes('START')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
+  if (a.includes('COMPLETED') || a.includes('DONE') || a.includes('FINISH')) return { bg: '#1a2e25', text: 'var(--tf-success)' };
+  if (a.includes('BLOCKED') || a.includes('ERROR') || a.includes('FAIL')) return { bg: '#2d1519', text: 'var(--tf-error)' };
+  if (a.includes('WARNING') || a.includes('WARN')) return { bg: '#2d2213', text: 'var(--tf-warning)' };
+  if (a.includes('ASSIGNED') || a.includes('ASSIGN')) return { bg: '#1c2233', text: 'var(--tf-accent)' };
+  if (a.includes('UPDATED') || a.includes('UPDATE')) return { bg: '#2d2213', text: 'var(--tf-warning)' };
+  if (a.includes('CREATED') || a.includes('CREATE')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
+  if (a.includes('MESSAGE')) return { bg: '#1f2f3f', text: 'var(--tf-accent)' };
   return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)' };
 }
 
-// Cost estimate: very rough approximation
-const MODEL_COST_PER_TOKEN: Record<string, number> = {
-  opus: 0.000015,
-  sonnet: 0.000003,
-  haiku: 0.00000025,
-};
+/** Derive the primary display agent from delegation metadata.
+ *  When the CEO delegates, we want to show the WORKING agent, not just "ceo". */
+function deriveDisplayAgent(event: ActivityEvent): {
+  displayName: string;
+  delegationTag: string;
+} {
+  const metadata = event.metadata || {};
+  const source = typeof metadata.source_agent === 'string' ? metadata.source_agent.trim() : '';
+  const target = typeof metadata.target_agent === 'string' ? metadata.target_agent.trim() : '';
+  const flow = typeof metadata.flow === 'string' ? metadata.flow.trim().toLowerCase() : '';
+  const action = (event.action || '').toUpperCase();
 
-function estimateCost(model: string, tokens: number): number {
-  const m = (model || '').toLowerCase();
-  for (const [key, rate] of Object.entries(MODEL_COST_PER_TOKEN)) {
-    if (m.includes(key)) return tokens * rate;
+  // Delegation down: CEO -> agent. Show the target agent as primary.
+  if (flow === 'down' && target && target !== 'ceo' && (action.includes('DELEGATED') || action.includes('STARTED'))) {
+    return { displayName: target, delegationTag: 'delegated by CEO' };
   }
-  return tokens * 0.000003; // default sonnet rate
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toString();
-}
-
-function formatCost(usd: number): string {
-  if (usd < 0.01) return `< $0.01`;
-  return `$${usd.toFixed(2)}`;
-}
-
-// ---- Skeleton ----
-function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={`skeleton rounded ${className}`} />;
-}
-
-// ---- Summary card ----
-interface SummaryCardProps {
-  label: string;
-  value: string;
-  sub?: string;
-  color: string;
-}
-function SummaryCard({ label, value, sub, color }: SummaryCardProps) {
-  return (
-    <div
-      className="rounded-xl p-4 flex flex-col gap-1 animate-slide-up"
-      style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
-    >
-      <p className="text-xs uppercase tracking-widest" style={{ color: 'var(--tf-text-muted)' }}>
-        {label}
-      </p>
-      <p className="text-2xl font-bold" style={{ color }}>
-        {value}
-      </p>
-      {sub && (
-        <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-          {sub}
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ---- Horizontal bar chart for agents ----
-interface AgentBarChartProps {
-  byAgent: Record<string, { model: string; total_tokens: number; task_count: number }>;
-}
-function AgentBarChart({ byAgent }: AgentBarChartProps) {
-  const entries = Object.entries(byAgent).sort((a, b) => b[1].total_tokens - a[1].total_tokens);
-  if (entries.length === 0) {
-    return (
-      <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>
-        No token data available
-      </p>
-    );
+  // Result flowing up: agent -> CEO. Show the source agent as primary.
+  if (flow === 'up' && source && source !== 'ceo' && (action.includes('COMPLETED') || action.includes('UPDATED'))) {
+    return { displayName: source, delegationTag: 'reported to CEO' };
   }
-
-  const maxTokens = Math.max(...entries.map(([, v]) => v.total_tokens));
-
-  return (
-    <div className="space-y-3">
-      {entries.map(([agentName, data]) => {
-        const pct = maxTokens > 0 ? (data.total_tokens / maxTokens) * 100 : 0;
-        const color = modelColor(data.model);
-        const cost = estimateCost(data.model, data.total_tokens);
-
-        return (
-          <div key={agentName} className="flex flex-col gap-1">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 min-w-0" style={{ flex: '0 0 180px' }}>
-                <div
-                  className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                  style={{ backgroundColor: color, color: 'var(--tf-bg)' }}
-                >
-                  {agentName.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-xs font-medium truncate" style={{ color: 'var(--tf-text)' }}>
-                  {agentName}
-                </span>
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="h-5 rounded-md overflow-hidden" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
-                  <div
-                    className="h-full rounded-md transition-all duration-700"
-                    style={{ width: `${pct}%`, backgroundColor: color, opacity: 0.8 }}
-                  />
-                </div>
-              </div>
-
-              <div
-                className="text-right flex-shrink-0"
-                style={{ flex: '0 0 120px' }}
-              >
-                <span className="text-xs font-medium" style={{ color }}>
-                  {formatTokens(data.total_tokens)}
-                </span>
-                <span className="text-xs ml-2" style={{ color: 'var(--tf-text-muted)' }}>
-                  {formatCost(cost)}
-                </span>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ---- Model breakdown table ----
-interface ModelTableProps {
-  byModel: Record<string, { total_tokens: number; task_count: number }>;
-}
-function ModelTable({ byModel }: ModelTableProps) {
-  const entries = Object.entries(byModel).sort((a, b) => b[1].total_tokens - a[1].total_tokens);
-
-  if (entries.length === 0) {
-    return (
-      <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>
-        No model data available
-      </p>
-    );
+  // Agent doing their own work
+  if (event.agent && event.agent !== 'ceo' && event.agent !== 'system') {
+    return { displayName: event.agent, delegationTag: '' };
   }
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}>
-            {['Model', 'Tokens', 'Tasks', 'Est. Cost'].map((col) => (
-              <th
-                key={col}
-                className="text-left py-2 pr-4 font-semibold uppercase tracking-widest"
-                style={{ color: 'var(--tf-text-muted)' }}
-              >
-                {col}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map(([model, data]) => {
-            const badge = modelBadge(model);
-            const cost = estimateCost(model, data.total_tokens);
-            return (
-              <tr key={model} style={{ borderBottom: '1px solid var(--tf-bg)' }}>
-                <td className="py-2.5 pr-4">
-                  <span
-                    className="px-2 py-0.5 rounded-full font-medium"
-                    style={{ backgroundColor: badge.bg, color: badge.text }}
-                  >
-                    {model}
-                  </span>
-                </td>
-                <td className="py-2.5 pr-4 font-medium" style={{ color: 'var(--tf-text)' }}>
-                  {formatTokens(data.total_tokens)}
-                </td>
-                <td className="py-2.5 pr-4" style={{ color: 'var(--tf-text-secondary)' }}>
-                  {data.task_count}
-                </td>
-                <td className="py-2.5" style={{ color: 'var(--tf-success)' }}>
-                  {formatCost(cost)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
+  return { displayName: event.agent || 'System', delegationTag: '' };
 }
 
-// ---- Budget card ----
-interface BudgetCardProps {
-  budget: Budget;
-}
-function BudgetCard({ budget }: BudgetCardProps) {
-  const pct = Math.min(budget.usage_percent, 100);
-  const isOver = budget.usage_percent > 100;
-  const isWarning = budget.usage_percent > 80;
-
-  const barColor = isOver ? 'var(--tf-error)' : isWarning ? 'var(--tf-warning)' : 'var(--tf-success)';
-  const statusText = isOver ? 'OVER BUDGET' : isWarning ? 'WARNING' : 'OK';
-  const statusColor = isOver ? 'var(--tf-error)' : isWarning ? 'var(--tf-warning)' : 'var(--tf-success)';
-  const statusBg = isOver ? '#2d1519' : isWarning ? '#2d2213' : '#1a2e25';
-
-  return (
-    <div
-      className="rounded-xl p-4 flex flex-col gap-3"
-      style={{
-        backgroundColor: 'var(--tf-surface)',
-        border: `1px solid ${isOver ? 'var(--tf-error)' : isWarning ? 'var(--tf-warning)' : 'var(--tf-border)'}`,
-      }}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>
-            {budget.agent_name}
-          </p>
-          <p className="text-xs mt-0.5" style={{ color: 'var(--tf-text-muted)' }}>
-            Project: {budget.project_id}
-          </p>
-        </div>
-        <span
-          className="text-xs px-2 py-0.5 rounded-full font-semibold flex-shrink-0"
-          style={{ backgroundColor: statusBg, color: statusColor }}
-        >
-          {statusText}
-        </span>
-      </div>
-
-      {/* Progress bar */}
-      <div>
-        <div className="flex justify-between text-xs mb-1">
-          <span style={{ color: 'var(--tf-text-muted)' }}>
-            {formatTokens(budget.used)} / {formatTokens(budget.token_limit)}
-          </span>
-          <span style={{ color: barColor }}>
-            {budget.usage_percent.toFixed(1)}%
-          </span>
-        </div>
-        <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
-          <div
-            className="h-full rounded-full transition-all duration-500"
-            style={{ width: `${pct}%`, backgroundColor: barColor }}
-          />
-        </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-          {formatTokens(budget.remaining)} remaining
-        </p>
-      </div>
-    </div>
-  );
-}
-
-// ---- Main MetricsPanel ----
-export default function MetricsPanel({ tokenReport, budgets, loading, projects = [], tasksByProject = {} }: MetricsPanelProps) {
-  if (loading) {
-    return (
-      <div className="space-y-6 animate-fade-in">
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => (
-            <div
-              key={i}
-              className="rounded-xl p-4"
-              style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
-            >
-              <Skeleton className="h-3 w-20 mb-2" />
-              <Skeleton className="h-8 w-16" />
-            </div>
-          ))}
-        </div>
-        <div
-          className="rounded-xl p-5"
-          style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
-        >
-          <Skeleton className="h-4 w-32 mb-4" />
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} className="h-6 w-full" />
-            ))}
-          </div>
-        </div>
-      </div>
-    );
+function formatTimestamp(ts: string): string {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const time = d.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    return `${date} ${time}`;
+  } catch {
+    return ts;
   }
+}
 
-  // Compute totals from report
-  const totalTokens = tokenReport?.grand_total_tokens ?? 0;
-  const totalTasks = tokenReport?.total_records ?? 0;
-  const byAgent = tokenReport?.by_agent ?? {};
-  const byModel = tokenReport?.by_model ?? {};
+const ACTION_TYPES = [
+  'ALL',
+  'DELEGATED',
+  'STARTED',
+  'COMPLETED',
+  'BLOCKED',
+  'ASSIGNED',
+  'UPDATED',
+  'CREATED',
+  'MESSAGE',
+  'WARNING',
+  'ERROR',
+];
 
-  // Compute estimated total cost across all agents
-  const totalCost = Object.values(byAgent).reduce((sum, data) => {
-    return sum + estimateCost(data.model, data.total_tokens);
-  }, 0);
+function escapeCSVField(value: string): string {
+  const s = String(value ?? '');
+  if (s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r')) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
 
-  const activeBudgets = budgets.filter((b) => b.status === 'OK' || b.usage_percent < 100);
-  const projectAnalytics = projects.map((project) => {
-    const tasks = tasksByProject[project.id] || [];
-    const done = tasks.filter((t) => (t.status || '').toLowerCase() === 'done').length;
-    const total = tasks.length;
-    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-    return { project, total, done, pct };
+function exportToCSV(events: ActivityEvent[]): void {
+  const headers = [
+    'Timestamp',
+    'Agent',
+    'Display Agent',
+    'Action',
+    'Detail',
+    'Project',
+    'Source Agent',
+    'Target Agent',
+    'Flow',
+    'Event Kind',
+    'State',
+    'Task',
+    'Command',
+    'File Path',
+  ];
+
+  const rows = events.map((e) => {
+    const { displayName } = deriveDisplayAgent(e);
+    const meta = e.metadata || {};
+    return [
+      formatTimestamp(e.timestamp),
+      e.agent || '',
+      displayName,
+      e.action || '',
+      e.detail || '',
+      e.project_id || '',
+      typeof meta.source_agent === 'string' ? meta.source_agent : '',
+      typeof meta.target_agent === 'string' ? meta.target_agent : '',
+      typeof meta.flow === 'string' ? meta.flow : '',
+      typeof meta.event_kind === 'string' ? meta.event_kind : '',
+      typeof meta.state === 'string' ? meta.state : '',
+      typeof meta.task === 'string' ? meta.task : '',
+      typeof meta.command === 'string' ? meta.command : '',
+      typeof meta.file_path === 'string' ? meta.file_path : '',
+    ].map(escapeCSVField);
   });
 
+  const csvContent = [headers.map(escapeCSVField).join(','), ...rows.map((r) => r.join(','))].join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `event-log-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---- Column widths ----
+const COL_WIDTHS = {
+  timestamp: '160px',
+  agent: '130px',
+  action: '110px',
+  detail: 'auto',
+  project: '110px',
+};
+
+// ---- Table row ----
+interface EventRowProps {
+  event: ActivityEvent;
+  index: number;
+}
+
+function EventRow({ event, index }: EventRowProps) {
+  const badge = actionBadgeStyle(event.action);
+  const { displayName, delegationTag } = deriveDisplayAgent(event);
+
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Summary cards */}
-      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard
-          label="Total Tokens"
-          value={formatTokens(totalTokens)}
-          sub={`${totalTokens.toLocaleString()} tokens`}
-          color="var(--tf-accent-blue)"
-        />
-        <SummaryCard
-          label="Total Tasks"
-          value={totalTasks.toString()}
-          sub="tasks tracked"
-          color="var(--tf-accent)"
-        />
-        <SummaryCard
-          label="Est. Cost"
-          value={formatCost(totalCost)}
-          sub="approximate USD"
-          color="var(--tf-success)"
-        />
-        <SummaryCard
-          label="Active Budgets"
-          value={budgets.length.toString()}
-          sub={`${budgets.filter((b) => b.usage_percent > 80).length} warnings`}
-          color="var(--tf-warning)"
-        />
-      </div>
-
-      {/* Token usage by agent */}
-      <div
-        className="rounded-xl p-5"
-        style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
+    <tr
+      style={{
+        borderBottom: '1px solid var(--tf-surface-raised)',
+        backgroundColor: index % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)',
+        fontFamily: 'ui-monospace, "Cascadia Code", "Source Code Pro", monospace',
+      }}
+    >
+      {/* Timestamp */}
+      <td
+        style={{
+          padding: '8px 10px',
+          fontSize: '11px',
+          color: 'var(--tf-text-muted)',
+          whiteSpace: 'nowrap',
+          verticalAlign: 'middle',
+          width: COL_WIDTHS.timestamp,
+          minWidth: COL_WIDTHS.timestamp,
+        }}
       >
-        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
-          Token Usage by Agent
-        </h3>
-        {Object.keys(byAgent).length === 0 ? (
-          <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>
-            No token usage data available. Check backend connection.
-          </p>
-        ) : (
-          <AgentBarChart byAgent={byAgent} />
-        )}
-      </div>
+        {formatTimestamp(event.timestamp)}
+      </td>
 
-      {/* Model breakdown table */}
-      <div
-        className="rounded-xl p-5"
-        style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
+      {/* Agent */}
+      <td
+        style={{
+          padding: '8px 10px',
+          fontSize: '11px',
+          verticalAlign: 'middle',
+          width: COL_WIDTHS.agent,
+          minWidth: COL_WIDTHS.agent,
+        }}
       >
-        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
-          Model Breakdown
-        </h3>
-        <ModelTable byModel={byModel} />
-      </div>
-
-      {/* Budget status */}
-      <div
-        className="rounded-xl p-5"
-        style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
-      >
-        <h3 className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--tf-text-muted)' }}>
-          Project Delivery Analytics
-        </h3>
-        {projectAnalytics.length === 0 ? (
-          <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>
-            No projects available yet.
-          </p>
-        ) : (
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-            {projectAnalytics.map(({ project, total, done, pct }) => (
-              <div key={project.id} className="rounded-lg p-3" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}>
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <div className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>{project.name}</div>
-                  <div className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>{project.status}</div>
-                </div>
-                <div className="text-xs mb-1" style={{ color: 'var(--tf-text-secondary)' }}>
-                  {done}/{total} tasks done ({pct}%)
-                </div>
-                <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--tf-surface)' }}>
-                  <div style={{ width: `${pct}%`, height: '100%', backgroundColor: pct >= 75 ? 'var(--tf-success)' : pct >= 40 ? 'var(--tf-warning)' : 'var(--tf-error)' }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Budget status */}
-      <div>
-        <h3 className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--tf-text-muted)' }}>
-          Budget Status ({budgets.length})
-        </h3>
-        {budgets.length === 0 ? (
-          <div
-            className="rounded-xl p-5 text-center"
-            style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
+        <span style={{ color: 'var(--tf-accent)', fontWeight: 600 }}>{displayName}</span>
+        {delegationTag && (
+          <span
+            style={{
+              display: 'block',
+              fontSize: '10px',
+              color: 'var(--tf-success)',
+              marginTop: '2px',
+              fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+            }}
           >
-            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-              No budget data available
-            </p>
-          </div>
-        ) : (
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-            {budgets.map((budget, i) => (
-              <BudgetCard key={`${budget.project_id}-${budget.agent_name}-${i}`} budget={budget} />
-            ))}
-          </div>
+            {delegationTag}
+          </span>
         )}
-      </div>
+      </td>
 
-      {/* Over-budget warnings */}
-      {activeBudgets.filter((b) => b.usage_percent > 80).length > 0 && (
-        <div
-          className="rounded-xl p-4 flex items-start gap-3"
-          style={{ backgroundColor: '#2d1519', border: '1px solid var(--tf-error)' }}
-          role="alert"
+      {/* Action */}
+      <td
+        style={{
+          padding: '8px 10px',
+          verticalAlign: 'middle',
+          width: COL_WIDTHS.action,
+          minWidth: COL_WIDTHS.action,
+        }}
+      >
+        <span
+          style={{
+            display: 'inline-block',
+            fontSize: '10px',
+            fontWeight: 700,
+            padding: '2px 7px',
+            borderRadius: '4px',
+            backgroundColor: badge.bg,
+            color: badge.text,
+            whiteSpace: 'nowrap',
+            fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+          }}
+          role="status"
+        >
+          {event.action}
+        </span>
+      </td>
+
+      {/* Detail */}
+      <td
+        style={{
+          padding: '8px 10px',
+          fontSize: '11px',
+          color: 'var(--tf-text-secondary)',
+          verticalAlign: 'middle',
+          maxWidth: '0',
+          width: COL_WIDTHS.detail,
+        }}
+      >
+        <span
+          style={{
+            display: 'block',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={event.detail || ''}
+        >
+          {event.detail || <span style={{ color: 'var(--tf-text-muted)', fontStyle: 'italic' }}>(no detail)</span>}
+        </span>
+      </td>
+
+      {/* Project */}
+      <td
+        style={{
+          padding: '8px 10px',
+          verticalAlign: 'middle',
+          width: COL_WIDTHS.project,
+          minWidth: COL_WIDTHS.project,
+        }}
+      >
+        {event.project_id ? (
+          <span
+            style={{
+              display: 'inline-block',
+              fontSize: '10px',
+              padding: '2px 7px',
+              borderRadius: '4px',
+              backgroundColor: 'var(--tf-surface)',
+              color: 'var(--tf-accent-blue)',
+              border: '1px solid var(--tf-border)',
+              fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              maxWidth: '100px',
+            }}
+            title={event.project_id}
+          >
+            {event.project_id}
+          </span>
+        ) : (
+          <span style={{ fontSize: '11px', color: 'var(--tf-surface-raised)' }}>—</span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+// ---- Empty state ----
+function EmptyState() {
+  return (
+    <tr>
+      <td
+        colSpan={5}
+        style={{ padding: '48px 24px', textAlign: 'center' }}
+      >
+        <p style={{ fontSize: '13px', color: 'var(--tf-text-muted)', margin: 0 }}>
+          No events match the current filters.
+        </p>
+        <p style={{ fontSize: '11px', color: 'var(--tf-border)', margin: '6px 0 0' }}>
+          Try adjusting the search or filter criteria.
+        </p>
+      </td>
+    </tr>
+  );
+}
+
+// ---- Main EventLogPanel ----
+export default function EventLogPanel({ events }: EventLogPanelProps) {
+  const [search, setSearch] = useState('');
+  const [agentFilter, setAgentFilter] = useState('');
+  const [actionFilter, setActionFilter] = useState('ALL');
+
+  // Build unique agent list — include delegation metadata agents
+  const agentNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const e of events) {
+      if (e.agent) names.add(e.agent);
+      const meta = e.metadata || {};
+      if (typeof meta.source_agent === 'string' && meta.source_agent) names.add(meta.source_agent);
+      if (typeof meta.target_agent === 'string' && meta.target_agent) names.add(meta.target_agent);
+    }
+    return Array.from(names).sort();
+  }, [events]);
+
+  const agentOptions = useMemo(
+    () => [
+      { value: '', label: 'All Agents', description: 'Show events from all agents.' },
+      ...agentNames.map((name) => ({ value: name, label: name })),
+    ],
+    [agentNames],
+  );
+
+  // Filtered + sorted events (newest first)
+  const filteredEvents = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return [...events]
+      .reverse()
+      .filter((e) => {
+        // Agent filter — match event agent or delegation metadata agents
+        if (agentFilter) {
+          const meta = e.metadata || {};
+          const agentMatch =
+            e.agent === agentFilter ||
+            meta.source_agent === agentFilter ||
+            meta.target_agent === agentFilter;
+          if (!agentMatch) return false;
+        }
+
+        // Action type filter
+        if (actionFilter !== 'ALL') {
+          if (!(e.action || '').toUpperCase().includes(actionFilter)) return false;
+        }
+
+        // Text search across all visible fields + metadata
+        if (q) {
+          const haystack = [
+            e.timestamp,
+            e.agent,
+            e.action,
+            e.detail,
+            e.project_id || '',
+            JSON.stringify(e.metadata || {}),
+          ]
+            .join(' ')
+            .toLowerCase();
+          if (!haystack.includes(q)) return false;
+        }
+
+        return true;
+      });
+  }, [events, search, agentFilter, actionFilter]);
+
+  const handleExport = useCallback(() => {
+    exportToCSV(filteredEvents);
+  }, [filteredEvents]);
+
+  return (
+    <section
+      className="animate-fade-in"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
+      }}
+      aria-label="Event log"
+    >
+      {/* ---- Header bar ---- */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          marginBottom: '12px',
+          flexShrink: 0,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <h2
+            style={{
+              fontSize: '13px',
+              fontWeight: 700,
+              color: 'var(--tf-text)',
+              margin: 0,
+              letterSpacing: '0.02em',
+            }}
+          >
+            Event Log
+          </h2>
+          <span
+            style={{
+              fontSize: '11px',
+              padding: '2px 8px',
+              borderRadius: '99px',
+              backgroundColor: 'var(--tf-surface-raised)',
+              color: 'var(--tf-text-muted)',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {filteredEvents.length}
+            {filteredEvents.length !== events.length && (
+              <> of {events.length}</>
+            )}
+            {' '}
+            {filteredEvents.length === 1 ? 'event' : 'events'}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleExport}
+          disabled={filteredEvents.length === 0}
+          style={{
+            fontSize: '11px',
+            padding: '4px 12px',
+            borderRadius: '99px',
+            border: '1px solid var(--tf-border)',
+            backgroundColor: 'var(--tf-surface)',
+            color: filteredEvents.length === 0 ? 'var(--tf-text-muted)' : 'var(--tf-text)',
+            cursor: filteredEvents.length === 0 ? 'not-allowed' : 'pointer',
+            fontWeight: 500,
+            transition: 'background-color 150ms, color 150ms',
+            opacity: filteredEvents.length === 0 ? 0.5 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+          }}
+          aria-label={`Export ${filteredEvents.length} filtered events as CSV`}
         >
           <svg
-            className="w-4 h-4 flex-shrink-0 mt-0.5"
-            style={{ color: 'var(--tf-error)' }}
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
             strokeWidth={2}
-            viewBox="0 0 24 24"
+            strokeLinecap="round"
+            strokeLinejoin="round"
             aria-hidden="true"
           >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
           </svg>
-          <div>
-            <p className="text-xs font-semibold" style={{ color: 'var(--tf-error)' }}>
-              Budget Warning
-            </p>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--tf-warning)' }}>
-              {budgets.filter((b) => b.usage_percent > 80).length} budget(s) at over 80% usage. Review token allocations.
-            </p>
+          Export CSV
+        </button>
+      </div>
+
+      {/* ---- Filter bar ---- */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          marginBottom: '12px',
+          flexShrink: 0,
+          flexWrap: 'wrap',
+        }}
+      >
+        {/* Text search */}
+        <div
+          role="search"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '5px 10px',
+            borderRadius: '8px',
+            backgroundColor: 'var(--tf-surface)',
+            border: '1px solid var(--tf-border)',
+            flex: '1 1 200px',
+            minWidth: '160px',
+            maxWidth: '320px',
+          }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ color: 'var(--tf-text-muted)', flexShrink: 0 }}
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <label htmlFor="event-log-search" className="sr-only">
+            Search events
+          </label>
+          <input
+            id="event-log-search"
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search events..."
+            style={{
+              flex: 1,
+              background: 'none',
+              border: 'none',
+              outline: 'none',
+              fontSize: '12px',
+              color: 'var(--tf-text)',
+            }}
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--tf-text-muted)',
+                fontSize: '11px',
+                padding: '0',
+                lineHeight: 1,
+              }}
+              aria-label="Clear search"
+            >
+              &times;
+            </button>
+          )}
+        </div>
+
+        {/* Agent dropdown */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <label
+            htmlFor="agent-filter-trigger"
+            style={{ fontSize: '11px', color: 'var(--tf-text-muted)', fontWeight: 500, whiteSpace: 'nowrap' }}
+          >
+            Agent
+          </label>
+          <FloatingSelect
+            value={agentFilter}
+            options={agentOptions}
+            onChange={setAgentFilter}
+            searchable
+            ariaLabel="Filter by agent"
+            size="sm"
+            variant="input"
+            style={{ width: '190px' }}
+          />
+        </div>
+
+        {/* Action type pills */}
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}
+          role="group"
+          aria-label="Filter by action type"
+        >
+          <span style={{ fontSize: '11px', color: 'var(--tf-text-muted)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+            Action
+          </span>
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {ACTION_TYPES.map((type) => {
+              const active = actionFilter === type;
+              const badge = type !== 'ALL' ? actionBadgeStyle(type) : null;
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setActionFilter(type)}
+                  aria-pressed={active}
+                  style={{
+                    fontSize: '10px',
+                    padding: '3px 9px',
+                    borderRadius: '99px',
+                    border: active
+                      ? `1px solid ${badge ? badge.text : 'var(--tf-text)'}`
+                      : '1px solid var(--tf-border)',
+                    backgroundColor: active
+                      ? badge ? badge.bg : 'var(--tf-surface-raised)'
+                      : 'var(--tf-bg)',
+                    color: active
+                      ? badge ? badge.text : 'var(--tf-text)'
+                      : 'var(--tf-text-muted)',
+                    cursor: 'pointer',
+                    fontWeight: active ? 700 : 500,
+                    transition: 'background-color 150ms, color 150ms, border-color 150ms',
+                    outline: 'none',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {type}
+                </button>
+              );
+            })}
           </div>
         </div>
-      )}
-    </div>
+      </div>
+
+      {/* ---- Table ---- */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'auto',
+          borderRadius: '12px',
+          border: '1px solid var(--tf-border)',
+          backgroundColor: 'var(--tf-surface)',
+        }}
+      >
+        <table
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            tableLayout: 'fixed',
+          }}
+          aria-label="Event log table"
+        >
+          <colgroup>
+            <col style={{ width: COL_WIDTHS.timestamp }} />
+            <col style={{ width: COL_WIDTHS.agent }} />
+            <col style={{ width: COL_WIDTHS.action }} />
+            <col />
+            <col style={{ width: COL_WIDTHS.project }} />
+          </colgroup>
+
+          {/* Sticky header */}
+          <thead>
+            <tr
+              style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 2,
+                backgroundColor: 'var(--tf-surface)',
+                borderBottom: '1px solid var(--tf-border)',
+              }}
+            >
+              {[
+                { key: 'timestamp', label: 'Timestamp', width: COL_WIDTHS.timestamp },
+                { key: 'agent', label: 'Agent', width: COL_WIDTHS.agent },
+                { key: 'action', label: 'Action', width: COL_WIDTHS.action },
+                { key: 'detail', label: 'Detail', width: COL_WIDTHS.detail },
+                { key: 'project', label: 'Project', width: COL_WIDTHS.project },
+              ].map(({ key, label }) => (
+                <th
+                  key={key}
+                  scope="col"
+                  style={{
+                    padding: '9px 10px',
+                    textAlign: 'left',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'var(--tf-text-muted)',
+                    fontFamily: 'ui-monospace, "Cascadia Code", "Source Code Pro", monospace',
+                    whiteSpace: 'nowrap',
+                    userSelect: 'none',
+                  }}
+                >
+                  {label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+
+          <tbody>
+            {filteredEvents.length === 0 ? (
+              <EmptyState />
+            ) : (
+              filteredEvents.map((event, i) => (
+                <EventRow
+                  key={`${event.timestamp}-${event.agent}-${i}`}
+                  event={event}
+                  index={i}
+                />
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }

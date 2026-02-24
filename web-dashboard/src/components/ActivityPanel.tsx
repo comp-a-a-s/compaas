@@ -9,6 +9,7 @@ interface ActivityPanelProps {
 // ---- Helpers ----
 function actionBadgeStyle(action: string): { bg: string; text: string } {
   const a = (action || '').toUpperCase();
+  if (a.includes('DELEGATED') || a.includes('DELEGATE')) return { bg: '#1c2233', text: 'var(--tf-accent)' };
   if (a.includes('STARTED') || a.includes('START')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
   if (a.includes('COMPLETED') || a.includes('DONE') || a.includes('FINISH')) return { bg: '#1a2e25', text: 'var(--tf-success)' };
   if (a.includes('BLOCKED') || a.includes('ERROR') || a.includes('FAIL')) return { bg: '#2d1519', text: 'var(--tf-error)' };
@@ -20,7 +21,7 @@ function actionBadgeStyle(action: string): { bg: string; text: string } {
   return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)' };
 }
 
-const ACTION_TYPES = ['ALL', 'STARTED', 'COMPLETED', 'BLOCKED', 'ASSIGNED', 'UPDATED', 'CREATED', 'MESSAGE', 'WARNING', 'ERROR'];
+const ACTION_TYPES = ['ALL', 'DELEGATED', 'STARTED', 'COMPLETED', 'BLOCKED', 'ASSIGNED', 'UPDATED', 'CREATED', 'MESSAGE', 'WARNING', 'ERROR'];
 
 function agentAvatarColor(name: string): string {
   const colors = [
@@ -290,11 +291,14 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
     }
   }, [events.length]);
 
-  // Build unique agent list for filter
+  // Build unique agent list for filter — include delegation metadata agents
   const agentNames = useMemo(() => {
     const names = new Set<string>();
     for (const e of events) {
       if (e.agent) names.add(e.agent);
+      const meta = e.metadata || {};
+      if (typeof meta.source_agent === 'string' && meta.source_agent) names.add(meta.source_agent);
+      if (typeof meta.target_agent === 'string' && meta.target_agent) names.add(meta.target_agent);
     }
     return Array.from(names).sort();
   }, [events]);
@@ -307,10 +311,17 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
     [agentNames],
   );
 
-  // Filter events
+  // Filter events — also match delegation metadata agents
   const filteredEvents = useMemo(() => {
     return events.filter((e) => {
-      const agentMatch = !agentFilter || e.agent === agentFilter;
+      let agentMatch = !agentFilter;
+      if (agentFilter) {
+        const meta = e.metadata || {};
+        agentMatch =
+          e.agent === agentFilter ||
+          meta.source_agent === agentFilter ||
+          meta.target_agent === agentFilter;
+      }
       const actionMatch =
         actionFilter === 'ALL' ||
         (e.action || '').toUpperCase().includes(actionFilter);

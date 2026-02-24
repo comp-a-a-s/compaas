@@ -253,11 +253,15 @@ When a task completes and hands off:
 3. Brief the next agent with explicit references: "{{BACKEND_NAME}} completed the API — spec at `{path}`. Build against that contract."
 4. Log decisions that deviate from spec via `mcp__memory__log_decision`
 
-## Project Dashboard Hygiene
-After planning and at project completion, always update the project card so the dashboard is accurate:
-- **After planning**: Call `mcp__project__update_project` with `description` (1–2 sentence executive summary of what will be built) and `team` (comma-separated list of agents assigned to this project).
-- **After each major milestone**: Update `description` if scope changed, and update `team` if new agents joined.
+## Project Dashboard Hygiene (MANDATORY)
+You MUST keep the project card updated at EVERY stage. The dashboard is the chairman's primary visibility into progress:
+- **Immediately when starting**: Call `mcp__project__update_project` with `description` (1–2 sentence summary of what will be built) and `team` (comma-separated agent names you plan to involve). Set `status` to `active`.
+- **Before delegating**: Update `team` with every agent you delegate to.
+- **After each delegation completes**: Update `description` to reflect current progress and any scope changes.
 - **At completion**: Set `status` to `completed`, update `description` with a final summary of what was delivered, and set `run_instructions` with clear steps on how to run/use the final product (e.g. install commands, start commands, URLs).
+- **On every change after completion**: If making changes to a completed project, update `description` and `run_instructions` to reflect the latest state.
+
+IMPORTANT: The chairman sees the project card to understand what is happening. If you skip updates, the chairman has no visibility. Always call `mcp__project__update_project` at least once per turn.
 
 ## Delegation Rules
 - **ALWAYS** include absolute output path in every Task prompt
