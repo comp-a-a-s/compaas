@@ -6,7 +6,8 @@ import Overview from './components/Overview';
 import AgentPanel from './components/AgentPanel';
 import ProjectPanel from './components/ProjectPanel';
 import ActivityPanel from './components/ActivityPanel';
-import MetricsPanel from './components/MetricsPanel';
+import EventLogPanel from './components/MetricsPanel';
+import Walkthrough from './components/Walkthrough';
 import ChatPanel from './components/ChatPanel';
 import SetupWizard from './components/SetupWizard';
 import SettingsPanel from './components/SettingsPanel';
@@ -19,15 +20,13 @@ import {
   fetchAgents,
   fetchProjects,
   fetchProjectDetail,
-  fetchTokenReport,
-  fetchBudgets,
   fetchRecentActivity,
   createActivityStream,
   fetchConfig,
   createProject,
 } from './api/client';
 
-import type { Agent, Project, Task, ActivityEvent, TokenReport, Budget, AppConfig } from './types';
+import type { Agent, Project, Task, ActivityEvent, AppConfig } from './types';
 
 const MAX_EVENTS = 200;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
@@ -57,10 +56,11 @@ function readTelegramSnapshot(): { configured: boolean; mirrorEnabled: boolean }
 }
 
 const ONBOARDING_STEPS: Array<{ tab: string; title: string; body: string }> = [
-  { tab: 'overview', title: 'Overview', body: 'Track team health, org activity, and project progress in one place.' },
-  { tab: 'projects', title: 'Projects', body: 'Create, switch, and manage projects with artifacts, milestones, and plans.' },
-  { tab: 'activity', title: 'Activity', body: 'Inspect live execution events and deployment/build traces.' },
-  { tab: 'settings', title: 'Settings', body: 'Configure AI vendors, workspace mode, GitHub, and Vercel connectors.' },
+  { tab: 'overview', title: 'Overview', body: 'Your command center. See team status, active agents, and project health at a glance.' },
+  { tab: 'projects', title: 'Projects', body: 'Create and manage projects here. Each project gets its own task board, plan, and team.' },
+  { tab: 'overview', title: 'CEO Chat', body: 'Talk to your AI CEO to delegate work. Ask it to build features, fix bugs, or plan projects.' },
+  { tab: 'events', title: 'Event Log', body: 'Track everything happening under the hood. All agent actions, delegations, and results flow here.' },
+  { tab: 'settings', title: 'Settings', body: 'Configure your AI providers, connect GitHub, and customize your workspace.' },
 ];
 
 // Agent slug/name → display name for activity tagging (Map for O(1) exact lookups)
@@ -300,15 +300,14 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasksByProject, setTasksByProject] = useState<Record<string, Task[]>>({});
   const [allTasks, setAllTasks] = useState<Task[]>([]);
-  const [tokenReport, setTokenReport] = useState<TokenReport | null>(null);
-  const [budgets, setBudgets] = useState<Budget[]>([]);
+  // Project-selection required modal for CEO chat
+  const [showProjectRequired, setShowProjectRequired] = useState(false);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
 
   // Loading states
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingTasks, setLoadingTasks] = useState(true);
-  const [loadingMetrics, setLoadingMetrics] = useState(true);
   const previousTabRef = useRef<string>('overview');
 
   // ---- Config check ----
@@ -440,20 +439,8 @@ export default function App() {
     await loadProjects(true);
   }, [newProjectName, newProjectMode, newProjectRepo, newProjectBranch, creatingProject, config?.user?.name, loadProjects, openConnectorSetup]);
 
-  const loadMetrics = useCallback(async () => {
-    try {
-      const [report, budgetList] = await Promise.allSettled([
-        fetchTokenReport(),
-        fetchBudgets(),
-      ]);
-      if (report.status === 'fulfilled') setTokenReport(report.value);
-      if (budgetList.status === 'fulfilled') setBudgets(budgetList.value);
-    } catch {
-      // endpoint may not exist
-    } finally {
-      setLoadingMetrics(false);
-    }
-  }, []);
+  // Metrics loading removed — replaced by Event Log panel that uses activityEvents directly
+  const loadMetrics = useCallback(async () => { /* no-op */ }, []);
 
   // ---- Initial load ----
   useEffect(() => {
@@ -484,7 +471,7 @@ export default function App() {
     if (showWizard) return;
 
     const shouldRefreshAgents = activeTab === 'overview' || activeTab === 'agents';
-    const shouldRefreshMetrics = activeTab === 'overview' || activeTab === 'metrics';
+    const shouldRefreshMetrics = false; // metrics polling removed
     const shouldRefreshProjectSummaries =
       chatOpen || activeTab === 'overview' || activeTab === 'projects' || activeTab === 'activity';
 
@@ -509,9 +496,7 @@ export default function App() {
       if (chatOpen || activeTab === 'overview' || activeTab === 'projects' || activeTab === 'activity') {
         loadProjects(false);
       }
-      if (activeTab === 'overview' || activeTab === 'metrics') {
-        loadMetrics();
-      }
+      // metrics polling removed
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -570,7 +555,7 @@ export default function App() {
     '2': () => setActiveTab('agents'),
     '3': () => setActiveTab('projects'),
     '4': () => setActiveTab('activity'),
-    '5': () => setActiveTab('metrics'),
+    '5': () => setActiveTab('events'),
     '6': () => setActiveTab('settings'),
     'c': () => setChatOpen((prev) => {
       const next = !prev;
@@ -795,14 +780,10 @@ export default function App() {
           />
         );
 
-      case 'metrics':
+      case 'events':
         return (
-          <MetricsPanel
-            tokenReport={tokenReport}
-            budgets={budgets}
-            loading={loadingMetrics}
-            projects={filteredProjects}
-            tasksByProject={filteredTasksByProject}
+          <EventLogPanel
+            events={filteredActivityEvents}
           />
         );
 
@@ -863,6 +844,11 @@ export default function App() {
         }}
         chatOpen={chatOpen}
         onChatToggle={() => {
+          if (!chatOpen && !activeProjectId && projects.length > 0) {
+            // Require project selection before opening CEO chat
+            setShowProjectRequired(true);
+            return;
+          }
           setChatOpen((prev) => {
             const next = !prev;
             if (next) setChatHasUnread(false);
@@ -1040,68 +1026,95 @@ export default function App() {
       )}
 
       {tourOpen && (
+        <Walkthrough
+          step={tourStep}
+          totalSteps={ONBOARDING_STEPS.length}
+          title={currentTourStep.title}
+          body={currentTourStep.body}
+          onNext={() => {
+            const nextIndex = tourStep + 1;
+            setTourStep(nextIndex);
+            setActiveTab(ONBOARDING_STEPS[nextIndex].tab);
+          }}
+          onSkip={finishTour}
+          onFinish={finishTour}
+        />
+      )}
+
+      {/* Project selection required modal */}
+      {showProjectRequired && (
         <div
           style={{
-            position: 'fixed',
-            right: chatOpen ? 'auto' : '18px',
-            left: chatOpen ? '18px' : 'auto',
-            bottom: '18px',
-            zIndex: 80,
-            width: 'min(360px, calc(100vw - 36px))',
-            borderRadius: '12px',
-            border: '1px solid var(--tf-border)',
-            backgroundColor: 'var(--tf-surface)',
-            boxShadow: '0 20px 45px rgba(0,0,0,0.35)',
-            padding: '14px',
+            position: 'fixed', inset: 0, zIndex: 200,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backgroundColor: 'rgba(0,0,0,0.5)',
           }}
+          onClick={() => setShowProjectRequired(false)}
         >
-          <div style={{ fontSize: '11px', color: 'var(--tf-text-muted)', marginBottom: '6px' }}>
-            Guided onboarding {tourStep + 1}/{ONBOARDING_STEPS.length}
-          </div>
-          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--tf-text)', marginBottom: '6px' }}>
-            {currentTourStep.title}
-          </div>
-          <p style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', lineHeight: 1.5, marginBottom: '12px' }}>
-            {currentTourStep.body}
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-            <button
-              onClick={finishTour}
-              style={{
-                border: '1px solid var(--tf-border)',
-                backgroundColor: 'transparent',
-                color: 'var(--tf-text-muted)',
-                borderRadius: '7px',
-                padding: '6px 10px',
-                cursor: 'pointer',
-                fontSize: '12px',
-              }}
-            >
-              Skip
-            </button>
-            <button
-              onClick={() => {
-                if (tourStep >= ONBOARDING_STEPS.length - 1) {
-                  finishTour();
-                  return;
-                }
-                const nextIndex = tourStep + 1;
-                setTourStep(nextIndex);
-                setActiveTab(ONBOARDING_STEPS[nextIndex].tab);
-              }}
-              style={{
-                border: 'none',
-                backgroundColor: 'var(--tf-accent-blue)',
-                color: 'var(--tf-bg)',
-                borderRadius: '7px',
-                padding: '6px 10px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                fontWeight: 600,
-              }}
-            >
-              {tourStep >= ONBOARDING_STEPS.length - 1 ? 'Finish' : 'Next'}
-            </button>
+          <div
+            style={{
+              width: 'min(380px, 90vw)',
+              borderRadius: '12px',
+              border: '1px solid var(--tf-border)',
+              backgroundColor: 'var(--tf-surface)',
+              boxShadow: '0 20px 45px rgba(0,0,0,0.4)',
+              padding: '20px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--tf-text)', marginBottom: '8px' }}>
+              Select a Project First
+            </h3>
+            <p style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', lineHeight: 1.5, marginBottom: '16px' }}>
+              Choose an existing project or create a new one to start chatting with the CEO.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '16px' }}>
+              {projects.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    setActiveProjectId(p.id);
+                    setShowProjectRequired(false);
+                    setChatOpen(true);
+                    setChatHasUnread(false);
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    padding: '10px 12px', borderRadius: '8px', cursor: 'pointer',
+                    border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)',
+                    color: 'var(--tf-text)', fontSize: '13px', fontWeight: 500, textAlign: 'left',
+                  }}
+                >
+                  <span style={{ flex: 1 }}>{p.name}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>{p.status}</span>
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowProjectRequired(false)}
+                style={{
+                  padding: '7px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer',
+                  border: '1px solid var(--tf-border)', backgroundColor: 'transparent',
+                  color: 'var(--tf-text-muted)',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowProjectRequired(false);
+                  handleCreateProjectFromHeader();
+                }}
+                style={{
+                  padding: '7px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer',
+                  border: '1px solid var(--tf-accent)', backgroundColor: 'var(--tf-accent)',
+                  color: 'var(--tf-bg)', fontWeight: 600,
+                }}
+              >
+                Create New Project
+              </button>
+            </div>
           </div>
         </div>
       )}

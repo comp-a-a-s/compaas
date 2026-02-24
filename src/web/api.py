@@ -1790,17 +1790,15 @@ def _classify_execution_intent(user_message: str) -> dict[str, Any]:
     if execution_hits > 0:
         needs_planning = complex_hits > 0 or planning_hits > 0 or (len(text.split()) > 45)
         confidence = min(0.98, 0.64 + execution_hits * 0.07)
-        delegate_allowed = needs_planning or execution_hits > 1 or _contains_keyword(
-            text,
-            ("frontend", "backend", "api", "ux", "database", "auth", "deploy", "security"),
-        )
+        # Always allow delegation for execution intents — the CEO template
+        # decides whether delegation is appropriate based on complexity tiers.
         return {
             "intent": "execution",
             "class": "execution",
             "confidence": round(confidence, 2),
             "needs_planning": needs_planning,
             "actionable": True,
-            "delegate_allowed": bool(delegate_allowed),
+            "delegate_allowed": True,
         }
     if review_hits > 0:
         return {
@@ -1818,15 +1816,16 @@ def _classify_execution_intent(user_message: str) -> dict[str, Any]:
             "confidence": 0.6,
             "needs_planning": False,
             "actionable": False,
-            "delegate_allowed": False,
+            "delegate_allowed": True,
         }
+    # Default: allow delegation so the CEO can decide based on context
     return {
         "intent": "qa",
-        "class": "clarification",
+        "class": "general",
         "confidence": 0.52,
         "needs_planning": False,
-        "actionable": False,
-        "delegate_allowed": False,
+        "actionable": True,
+        "delegate_allowed": True,
     }
 
 
@@ -4139,7 +4138,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             planning_approved_flag = bool(data.get("planning_approved", False))
             if micro_project_mode:
                 no_delegation_mode = True
-            if intent_class in {"greeting", "clarification", "status"}:
+            if intent_class in {"greeting", "status"}:
                 no_delegation_mode = True
             support_agents = [] if micro_project_mode else _infer_support_agents(user_message, intent=intent)
             is_execution_turn = str(intent.get("intent", "")) == "execution" and bool(intent.get("actionable"))
