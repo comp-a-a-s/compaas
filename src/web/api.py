@@ -2242,10 +2242,11 @@ def _seed_project_execution_scaffold(
     existing_tasks = task_board.get_board(normalized_project_id)
     if len(existing_tasks) == 0:
         seeded_tasks = True
+        _msg_trimmed = re.sub(r'\s+', ' ', (user_message or '').strip())[:140]
         task_templates: list[tuple[str, str, str, str]] = [
             (
                 "Kickoff scope and acceptance criteria",
-                f"Capture goals and acceptance criteria for: {re.sub(r'\\s+', ' ', (user_message or '').strip())[:140]}",
+                f"Capture goals and acceptance criteria for: {_msg_trimmed}",
                 _configured_agent_name("ceo", config),
                 "p1",
             ),
