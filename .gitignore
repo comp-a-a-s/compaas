@@ -4,6 +4,7 @@ company_data/
 __pycache__/
 *.pyc
 .DS_Store
+.claude/agents/*.md
 .claude/agent-memory/
 .claude/agent-memory-local/
 .claude/settings.local.json
