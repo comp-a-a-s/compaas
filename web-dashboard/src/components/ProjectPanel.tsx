@@ -20,7 +20,7 @@ interface ProjectPanelProps {
   onGitHubSetupRequired?: () => void;
 }
 
-type ProjectTab = 'tasks' | 'plan' | 'milestones' | 'sprint' | 'discussions' | 'team' | 'info';
+type ProjectTab = 'overview' | 'tasks' | 'plan' | 'discussions';
 
 // ---- Helpers ----
 function statusBadge(status: string): { bg: string; text: string } {
@@ -33,7 +33,7 @@ function statusBadge(status: string): { bg: string; text: string } {
   return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)' };
 }
 
-function typeBadge(type: string): { bg: string; text: string } {
+function _typeBadge(type: string): { bg: string; text: string } {
   const t = type.toLowerCase();
   if (t.includes('feature') || t.includes('infra')) return { bg: '#1c2940', text: 'var(--tf-accent-blue)' };
   if (t.includes('design')) return { bg: '#2d1519', text: 'var(--tf-accent)' };
@@ -41,6 +41,7 @@ function typeBadge(type: string): { bg: string; text: string } {
   if (t.includes('bug') || t.includes('fix')) return { bg: '#2d1519', text: 'var(--tf-error)' };
   return { bg: 'var(--tf-surface-raised)', text: 'var(--tf-text-secondary)' };
 }
+void _typeBadge; // kept for potential future use
 
 function taskColColor(col: string): string {
   const c = col.toLowerCase();
@@ -66,7 +67,7 @@ function priorityBadge(priority: string): PriorityInfo {
 // ---- Health Score ----
 interface HealthInfo { score: number; label: string; color: string; bg: string }
 
-function computeHealth(tasks: Task[]): HealthInfo {
+function _computeHealth(tasks: Task[]): HealthInfo {
   const total = tasks.length;
   if (total === 0) return { score: 0, label: 'No Data', color: 'var(--tf-text-muted)', bg: 'var(--tf-surface-raised)' };
   const done     = tasks.filter((t) => t.status.toLowerCase() === 'done').length;
@@ -79,6 +80,7 @@ function computeHealth(tasks: Task[]): HealthInfo {
   if (score >= 40) return { score, label: 'At Risk',  color: 'var(--tf-warning)',        bg: '#2d2213' };
   return             { score, label: 'Critical', color: 'var(--tf-error)',         bg: '#2d1519' };
 }
+void _computeHealth; // kept for potential future use
 
 // ---- Task templates ----
 const TASK_TEMPLATES = [
@@ -106,17 +108,27 @@ function Skeleton({ className = '' }: { className?: string }) {
 // ---- Project list card ----
 interface ProjectListCardProps {
   project: Project;
+  tasks: Task[];
   selected: boolean;
   onSelect: () => void;
 }
-function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) {
+function ProjectListCard({ project, tasks, selected, onSelect }: ProjectListCardProps) {
   const sbadge = statusBadge(project.status);
-  const tbadge = project.type ? typeBadge(project.type) : null;
 
   const counts = project.task_counts ?? {};
   const done = counts['done'] ?? 0;
   const total = project.total_tasks ?? Object.values(counts).reduce((s, v) => s + v, 0);
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  // Derive assigned team from project.team or task assignees
+  const team = useMemo(() => {
+    if (project.team && project.team.length > 0) return project.team;
+    const assignees = new Set<string>();
+    for (const t of tasks) {
+      if (t.assigned_to) assignees.add(t.assigned_to);
+    }
+    return Array.from(assignees);
+  }, [project.team, tasks]);
 
   return (
     <button
@@ -155,24 +167,32 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
         </p>
       )}
 
-      <div className="flex items-center gap-2 flex-wrap">
-        {tbadge && (
-          <span
-            className="text-xs px-2 py-0.5 rounded-full"
-            style={{ backgroundColor: tbadge.bg, color: tbadge.text }}
-          >
-            {project.type}
-          </span>
-        )}
-        <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-          {total} tasks
-        </span>
-      </div>
+      {/* Assigned team */}
+      {team.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>Team:</span>
+          <div className="flex -space-x-1.5">
+            {team.slice(0, 6).map((member, i) => (
+              <div
+                key={member}
+                title={member}
+                className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
+                style={{ backgroundColor: avatarBg(member, i), color: 'var(--tf-bg)', outline: '2px solid var(--tf-surface)', zIndex: team.length - i }}
+              >
+                {avatarInitial(member)}
+              </div>
+            ))}
+          </div>
+          {team.length > 6 && (
+            <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>+{team.length - 6}</span>
+          )}
+        </div>
+      )}
 
       {/* Progress bar */}
       <div>
         <div className="flex justify-between text-xs mb-1">
-          <span style={{ color: 'var(--tf-text-muted)' }}>Progress</span>
+          <span style={{ color: 'var(--tf-text-muted)' }}>{total} tasks</span>
           <span style={{ color: 'var(--tf-success)' }}>{pct}%</span>
         </div>
         <div className="h-1.5 rounded-full" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
@@ -782,12 +802,172 @@ function DiscussionsTab({ projectId }: DiscussionsTabProps) {
   );
 }
 
-// ---- Milestones tab ----
+// ---- Overview tab (executive summary + team + plan steps) ----
+interface OverviewTabProps {
+  project: Project;
+  tasks: Task[];
+}
+function OverviewTab({ project, tasks }: OverviewTabProps) {
+  // Derive team from project.team or task assignees
+  const team = useMemo(() => {
+    if (project.team && project.team.length > 0) return project.team;
+    const assignees = new Set<string>();
+    for (const t of tasks) {
+      if (t.assigned_to) assignees.add(t.assigned_to);
+    }
+    return Array.from(assignees);
+  }, [project.team, tasks]);
+
+  // Task stats
+  const counts = project.task_counts ?? {};
+  const done = counts['done'] ?? 0;
+  const total = project.total_tasks ?? Object.values(counts).reduce((s, v) => s + v, 0);
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const inProgress = counts['in_progress'] ?? 0;
+  const blocked = counts['blocked'] ?? 0;
+
+  // Derive plan steps from tasks ordered by priority then creation
+  const planSteps = useMemo(() => {
+    const priOrder: Record<string, number> = { P0: 0, p0: 0, P1: 1, p1: 1, P2: 2, p2: 2, P3: 3, p3: 3 };
+    return [...tasks].sort((a, b) => {
+      const pa = priOrder[a.priority] ?? 4;
+      const pb = priOrder[b.priority] ?? 4;
+      if (pa !== pb) return pa - pb;
+      return (a.created_at ?? '').localeCompare(b.created_at ?? '');
+    });
+  }, [tasks]);
+
+  return (
+    <div className="space-y-5">
+      {/* Executive Summary */}
+      {project.description && (
+        <div>
+          <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+            Executive Summary
+          </p>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+            {project.description}
+          </p>
+        </div>
+      )}
+
+      {/* Progress summary */}
+      {total > 0 && (
+        <div className="rounded-xl p-4" style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}>
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>Progress</span>
+            <span className="text-xs font-bold" style={{ color: 'var(--tf-success)' }}>{pct}%</span>
+          </div>
+          <div className="h-2 rounded-full overflow-hidden mb-3" style={{ backgroundColor: 'var(--tf-surface)' }}>
+            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, backgroundColor: 'var(--tf-success)' }} />
+          </div>
+          <div className="flex gap-4 text-xs">
+            <span style={{ color: 'var(--tf-success)' }}>{done} done</span>
+            <span style={{ color: 'var(--tf-accent-blue)' }}>{inProgress} in progress</span>
+            {blocked > 0 && <span style={{ color: 'var(--tf-error)' }}>{blocked} blocked</span>}
+            <span style={{ color: 'var(--tf-text-muted)' }}>{total} total</span>
+          </div>
+        </div>
+      )}
+
+      {/* Assigned Team */}
+      <div>
+        <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+          Assigned Team
+        </p>
+        {team.length === 0 ? (
+          <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>No team members assigned yet.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {team.map((member, i) => (
+              <div
+                key={member}
+                className="flex items-center gap-2 rounded-lg px-3 py-2"
+                style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
+              >
+                <div
+                  className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+                  style={{ backgroundColor: avatarBg(member, i), color: 'var(--tf-bg)' }}
+                >
+                  {avatarInitial(member)}
+                </div>
+                <span className="text-xs font-medium" style={{ color: 'var(--tf-text)' }}>
+                  {member}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Plan Steps */}
+      <div>
+        <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+          Plan Steps
+        </p>
+        {planSteps.length === 0 ? (
+          <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+            No tasks created yet. Ask the CEO to plan this project.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {planSteps.map((task, i) => {
+              const isDone = task.status.toLowerCase() === 'done';
+              const isBlocked = task.status.toLowerCase() === 'blocked';
+              const isActive = task.status.toLowerCase().includes('progress');
+              const stepColor = isDone
+                ? 'var(--tf-success)'
+                : isBlocked
+                ? 'var(--tf-error)'
+                : isActive
+                ? 'var(--tf-accent-blue)'
+                : 'var(--tf-text-muted)';
+
+              return (
+                <div
+                  key={task.id}
+                  className="flex items-start gap-3 rounded-lg px-3 py-2.5"
+                  style={{
+                    backgroundColor: isActive ? 'rgba(88,166,255,0.06)' : 'var(--tf-surface)',
+                    border: `1px solid ${isActive ? 'rgba(88,166,255,0.2)' : 'var(--tf-border)'}`,
+                    opacity: isDone ? 0.6 : 1,
+                  }}
+                >
+                  <span className="text-xs font-bold mt-0.5 flex-shrink-0" style={{ color: stepColor, minWidth: '18px' }}>
+                    {isDone ? '✓' : isBlocked ? '!' : `${i + 1}.`}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium" style={{ color: isDone ? 'var(--tf-text-muted)' : 'var(--tf-text)', textDecoration: isDone ? 'line-through' : 'none' }}>
+                      {task.title}
+                    </p>
+                    {task.assigned_to && (
+                      <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+                        {task.assigned_to}
+                      </span>
+                    )}
+                  </div>
+                  <span
+                    className="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: stepColor === 'var(--tf-text-muted)' ? 'var(--tf-surface-raised)' : `${stepColor}15`, color: stepColor }}
+                  >
+                    {task.status.replace(/_/g, ' ')}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- Milestones tab (available for future use) ----
 interface MilestonesTabProps {
   project: Project;
   tasks: Task[];
 }
-function MilestonesTab({ project, tasks }: MilestonesTabProps) {
+export function MilestonesTab({ project, tasks }: MilestonesTabProps) {
   const done   = tasks.filter((t) => t.status.toLowerCase() === 'done').length;
   const total  = tasks.length;
 
@@ -859,11 +1039,11 @@ function MilestonesTab({ project, tasks }: MilestonesTabProps) {
   );
 }
 
-// ---- Burndown chart ----
+// ---- Burndown chart (available for future use) ----
 interface BurndownChartProps {
   tasks: Task[];
 }
-function BurndownChart({ tasks }: BurndownChartProps) {
+export function BurndownChart({ tasks }: BurndownChartProps) {
   const DAYS = 14;
   const W = 480; const H = 120;
 
@@ -961,11 +1141,11 @@ function BurndownChart({ tasks }: BurndownChartProps) {
   );
 }
 
-// ---- Sprint planning tab ----
+// ---- Sprint planning tab (available for future use) ----
 interface SprintTabProps {
   tasks: Task[];
 }
-function SprintTab({ tasks }: SprintTabProps) {
+export function SprintTab({ tasks }: SprintTabProps) {
   const SPRINT_SIZE = 8;
   const sprints = useMemo(() => {
     // Group tasks into sprints by creation order / priority
@@ -1055,11 +1235,11 @@ function SprintTab({ tasks }: SprintTabProps) {
   );
 }
 
-// ---- Team tab ----
+// ---- Team tab (available for future use) ----
 interface TeamTabProps {
   team: string[];
 }
-function TeamTab({ team }: TeamTabProps) {
+export function TeamTab({ team }: TeamTabProps) {
   if (team.length === 0) {
     return (
       <p className="text-xs py-4" style={{ color: 'var(--tf-text-muted)' }}>
@@ -1091,11 +1271,11 @@ function TeamTab({ team }: TeamTabProps) {
   );
 }
 
-// ---- Info tab ----
+// ---- Info tab (available for future use) ----
 interface InfoTabProps {
   project: Project;
 }
-function InfoTab({ project }: InfoTabProps) {
+export function InfoTab({ project }: InfoTabProps) {
   const sbadge = statusBadge(project.status);
 
   return (
@@ -1221,10 +1401,9 @@ interface ProjectDetailProps {
   onApproved?: () => void;
 }
 function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: ProjectDetailProps) {
-  const [activeTab, setActiveTab] = useState<ProjectTab>(initialTab ?? 'tasks');
+  const [activeTab, setActiveTab] = useState<ProjectTab>(initialTab ?? 'overview');
   const [localProject, setLocalProject] = useState(project);
   const sbadge = statusBadge(localProject.status);
-  const health = computeHealth(tasks);
 
   useEffect(() => {
     setLocalProject(project);
@@ -1235,16 +1414,11 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
   }, [initialTab]);
 
   const tabs: { id: ProjectTab; label: string }[] = [
+    { id: 'overview',    label: 'Overview' },
     { id: 'tasks',       label: 'Tasks' },
-    { id: 'milestones',  label: 'Milestones' },
-    { id: 'sprint',      label: 'Sprint' },
     { id: 'plan',        label: 'Plan' },
     { id: 'discussions', label: 'Discussions' },
-    { id: 'team',        label: 'Team' },
-    { id: 'info',        label: 'Info' },
   ];
-
-  const team = project.team ?? [];
 
   return (
     <div
@@ -1267,16 +1441,6 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
             >
               {project.status}
             </span>
-            {/* Health score badge */}
-            {tasks.length > 0 && (
-              <span
-                className="text-xs px-2 py-0.5 rounded-full font-semibold"
-                title={`Health: ${health.score}/100`}
-                style={{ backgroundColor: health.bg, color: health.color }}
-              >
-                {health.label} {health.score}%
-              </span>
-            )}
             {project.type && (
               <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
                 {project.type}
@@ -1335,14 +1499,8 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto p-4" role="tabpanel">
-        {activeTab === 'tasks'      && <KanbanBoard tasks={tasks} />}
-        {activeTab === 'milestones' && <MilestonesTab project={localProject} tasks={tasks} />}
-        {activeTab === 'sprint'     && (
-          <div className="space-y-6">
-            <SprintTab tasks={tasks} />
-            <BurndownChart tasks={tasks} />
-          </div>
-        )}
+        {activeTab === 'overview' && <OverviewTab project={localProject} tasks={tasks} />}
+        {activeTab === 'tasks'    && <KanbanBoard tasks={tasks} />}
         {activeTab === 'plan' && (
           <PlanTab
             key={localProject.id}
@@ -1354,8 +1512,6 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
           />
         )}
         {activeTab === 'discussions' && <DiscussionsTab projectId={project.id} />}
-        {activeTab === 'team'        && <TeamTab team={team} />}
-        {activeTab === 'info'        && <InfoTab project={localProject} />}
       </div>
     </div>
   );
@@ -1744,6 +1900,7 @@ export default function ProjectPanel({
           <ProjectListCard
             key={project.id}
             project={project}
+            tasks={tasksByProject[project.id] ?? []}
             selected={effectiveSelectedId === project.id}
             onSelect={() => handleSelect(project.id)}
           />
@@ -1760,7 +1917,7 @@ export default function ProjectPanel({
               setSelectedId(null);
               onSelectProject?.('');
             }}
-            initialTab={initialProjectId ? 'plan' : undefined}
+            initialTab={initialProjectId ? 'overview' : undefined}
           />
         </div>
       )}

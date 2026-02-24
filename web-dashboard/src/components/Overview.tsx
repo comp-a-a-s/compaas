@@ -77,7 +77,15 @@ function isAgentRecentlyActive(agentId: string, agentName: string, events: Activ
     const evtTime = new Date(evt.timestamp).getTime();
     if (now - evtTime > WINDOW_MS) return false;
     const evtAgent = (evt.agent ?? '').toLowerCase();
-    return evtAgent === idLower || evtAgent === nameLower || evtAgent.includes(nameLower);
+    // Check direct agent match
+    if (evtAgent === idLower || evtAgent === nameLower || evtAgent.includes(nameLower)) return true;
+    // Also check delegation metadata — agents appear as target/source in delegation events
+    const meta = evt.metadata || {};
+    const target = String(meta.target_agent ?? '').toLowerCase();
+    const source = String(meta.source_agent ?? '').toLowerCase();
+    if (target === idLower || target === nameLower) return true;
+    if (source === idLower || source === nameLower) return true;
+    return false;
   });
 }
 
@@ -913,22 +921,59 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     { title: 'Specialists', ids: ['security-engineer', 'data-engineer'] },
   ] as const;
 
+  const activeAgentCount = activeIds.size;
+
   return (
     <div ref={chartContainerRef} style={{ maxWidth: '100%', overflow: 'hidden' }}>
-      {/* Chart label */}
-      <p
+      {/* Chart label with active agent count */}
+      <div
         style={{
-          fontSize: '10px',
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '0.1em',
-          color: 'var(--tf-text-muted)',
-          textAlign: 'center',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px',
           marginBottom: '20px',
         }}
       >
-        Organization Chart
-      </p>
+        <p
+          style={{
+            fontSize: '10px',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.1em',
+            color: 'var(--tf-text-muted)',
+          }}
+        >
+          Organization Chart
+        </p>
+        {activeAgentCount > 0 && (
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '2px 8px',
+              borderRadius: '999px',
+              fontSize: '10px',
+              fontWeight: 600,
+              backgroundColor: activeAgentCount > 1 ? 'rgba(63,185,80,0.12)' : 'rgba(63,185,80,0.08)',
+              color: 'var(--tf-success)',
+              border: '1px solid rgba(63,185,80,0.25)',
+            }}
+          >
+            <span
+              style={{
+                width: '5px',
+                height: '5px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--tf-success)',
+                animation: 'pulse-ring 1.8s ease-out infinite',
+              }}
+            />
+            {activeAgentCount} active{activeAgentCount > 1 ? ' — collaborating' : ''}
+          </span>
+        )}
+      </div>
       {activeProjectId && (
         <p
           style={{
