@@ -455,42 +455,65 @@ export default function Layout({
           </div>
 
           <div className="header-controls flex items-center gap-2">
-            <Tooltip content={chatOpen ? 'Close CEO chat' : 'Open CEO chat'} position="bottom">
+            <Tooltip content={chatOpen ? 'Close CEO chat (C)' : 'Open CEO chat (C)'} position="bottom">
               <button
                 onClick={onChatToggle}
-                className="relative rounded-lg cursor-pointer transition-all duration-200"
+                className="relative cursor-pointer transition-all duration-200"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '7px',
-                  padding: isMobileViewport ? '6px 8px' : '6px 10px',
-                  backgroundColor: chatOpen ? 'color-mix(in srgb, var(--tf-accent-blue) 18%, transparent)' : 'transparent',
-                  color: chatOpen ? 'var(--tf-accent-blue)' : 'var(--tf-text-secondary)',
-                  border: `1px solid ${chatOpen ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+                  gap: '8px',
+                  padding: isMobileViewport ? '7px 10px' : '7px 14px',
+                  borderRadius: '999px',
+                  backgroundColor: chatOpen
+                    ? 'var(--tf-accent)'
+                    : 'var(--tf-surface)',
+                  color: chatOpen
+                    ? 'var(--tf-bg)'
+                    : 'var(--tf-text)',
+                  border: chatOpen
+                    ? '1px solid var(--tf-accent)'
+                    : '1px solid var(--tf-border)',
+                  boxShadow: chatOpen
+                    ? '0 0 12px rgba(168,131,255,0.25)'
+                    : chatHasUnread
+                      ? '0 0 10px rgba(234,114,103,0.3)'
+                      : '0 1px 3px rgba(0,0,0,0.15)',
                 }}
                 aria-label={chatOpen ? 'Close CEO chat' : 'Open CEO chat'}
                 onMouseEnter={(e) => {
                   if (!chatOpen) {
                     (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
+                    (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-accent)';
+                    (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 10px rgba(168,131,255,0.2)';
                   }
                 }}
                 onMouseLeave={(e) => {
                   if (!chatOpen) {
-                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface)';
+                    (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
+                    (e.currentTarget as HTMLButtonElement).style.boxShadow = chatHasUnread
+                      ? '0 0 10px rgba(234,114,103,0.3)'
+                      : '0 1px 3px rgba(0,0,0,0.15)';
                   }
                 }}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill={chatOpen ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={chatOpen ? 0 : 1.8}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.4-4 8-9 8a9.9 9.9 0 01-4.3-.9L3 20l1.4-3.7C3.5 15 3 13.6 3 12c0-4.4 4-8 9-8s9 3.6 9 8z" />
                 </svg>
-                {!isMobileViewport && <span className="text-xs font-semibold">CEO Chat</span>}
+                {!isMobileViewport && (
+                  <span style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '0.01em' }}>
+                    {chatOpen ? 'Close Chat' : 'CEO Chat'}
+                  </span>
+                )}
                 {microProjectMode && !isMobileViewport && (
                   <span
-                    className="text-[10px] font-semibold"
                     style={{
-                      color: 'var(--tf-warning)',
-                      border: '1px solid rgba(240,170,74,0.45)',
-                      backgroundColor: 'rgba(240,170,74,0.1)',
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      color: chatOpen ? 'var(--tf-bg)' : 'var(--tf-warning)',
+                      border: chatOpen ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(240,170,74,0.45)',
+                      backgroundColor: chatOpen ? 'rgba(255,255,255,0.15)' : 'rgba(240,170,74,0.1)',
                       borderRadius: '999px',
                       padding: '1px 5px',
                       lineHeight: 1.2,
@@ -501,15 +524,16 @@ export default function Layout({
                 )}
                 {chatHasUnread && !chatOpen && (
                   <span
+                    className="animate-pulse-dot"
                     style={{
                       position: 'absolute',
-                      top: '-3px',
-                      right: '-3px',
+                      top: '-2px',
+                      right: '-2px',
                       width: '10px',
                       height: '10px',
                       borderRadius: '50%',
                       backgroundColor: 'var(--tf-error)',
-                      border: '1px solid var(--tf-bg)',
+                      border: '1.5px solid var(--tf-bg)',
                     }}
                     aria-label="Unread messages"
                   />

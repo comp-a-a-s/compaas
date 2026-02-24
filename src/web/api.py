@@ -2922,12 +2922,14 @@ async def _handle_ceo_claude(
                                 **activity_metadata,
                             },
                         })
+                        is_delegation = False
                         if tool_name == "Task":
                             delegated_agent = str(tool_input.get("subagent_type", "") or "").strip().lower()
                             delegated_task = str(
                                 tool_input.get("description") or tool_input.get("prompt") or ""
                             ).strip()
                             if delegated_agent:
+                                is_delegation = True
                                 pending_delegate_agents.append(delegated_agent)
                                 delegation_metadata = {
                                     "source_agent": "ceo",
@@ -2951,13 +2953,16 @@ async def _handle_ceo_claude(
                                     project_id=project_id,
                                     metadata=delegation_metadata,
                                 )
-                        _emit_chat_activity(
-                            "ceo",
-                            "STARTED",
-                            action_label,
-                            project_id=project_id,
-                            metadata=activity_metadata,
-                        )
+                        # Skip redundant CEO "STARTED" when work was delegated
+                        # to avoid the activity stream showing CEO doing everything
+                        if not is_delegation:
+                            _emit_chat_activity(
+                                "ceo",
+                                "STARTED",
+                                action_label,
+                                project_id=project_id,
+                                metadata=activity_metadata,
+                            )
 
             elif event_type == "user":
                 for block in event.get("message", {}).get("content", []):
@@ -3009,13 +3014,16 @@ async def _handle_ceo_claude(
                                     project_id=project_id,
                                     metadata=result_metadata,
                                 )
-                            _emit_chat_activity(
-                                "ceo",
-                                "COMPLETED",
-                                preview,
-                                project_id=project_id,
-                                metadata=result_metadata,
-                            )
+                            else:
+                                # Only emit generic CEO COMPLETED when no agent
+                                # handled the work — avoids duplicating agent events
+                                _emit_chat_activity(
+                                    "ceo",
+                                    "COMPLETED",
+                                    preview,
+                                    project_id=project_id,
+                                    metadata=result_metadata,
+                                )
 
             elif event_type == "result":
                 # Final result — use this as the canonical response

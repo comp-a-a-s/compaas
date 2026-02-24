@@ -88,14 +88,6 @@ function taskLabel(event: ActivityEvent): string {
   return detail.slice(0, 140);
 }
 
-function actorSummary(event: ActivityEvent): string {
-  const metadata = event.metadata || {};
-  const source = typeof metadata.source_agent === 'string' ? metadata.source_agent.trim() : '';
-  const target = typeof metadata.target_agent === 'string' ? metadata.target_agent.trim() : '';
-  if (source && target) return `${source} -> ${target}`;
-  return event.agent || 'System';
-}
-
 function extraSummaryRows(event: ActivityEvent): string[] {
   const metadata = event.metadata || {};
   const rows: string[] = [];
@@ -148,12 +140,38 @@ interface EventBubbleProps {
   event: ActivityEvent;
   index: number;
 }
+/** Derive the primary display agent from delegation metadata.
+ *  When the CEO delegates, we want to show the WORKING agent, not just "ceo". */
+function deriveDisplayAgent(event: ActivityEvent): {
+  displayName: string;
+  delegationTag: string;
+} {
+  const metadata = event.metadata || {};
+  const source = typeof metadata.source_agent === 'string' ? metadata.source_agent.trim() : '';
+  const target = typeof metadata.target_agent === 'string' ? metadata.target_agent.trim() : '';
+  const flow = typeof metadata.flow === 'string' ? metadata.flow.trim().toLowerCase() : '';
+  const action = (event.action || '').toUpperCase();
+
+  // Delegation down: CEO -> agent. Show the target agent as primary.
+  if (flow === 'down' && target && target !== 'ceo' && (action.includes('DELEGATED') || action.includes('STARTED'))) {
+    return { displayName: target, delegationTag: 'delegated by CEO' };
+  }
+  // Result flowing up: agent -> CEO. Show the source agent as primary.
+  if (flow === 'up' && source && source !== 'ceo' && (action.includes('COMPLETED') || action.includes('UPDATED'))) {
+    return { displayName: source, delegationTag: 'reported to CEO' };
+  }
+  // Agent doing their own work
+  if (event.agent && event.agent !== 'ceo' && event.agent !== 'system') {
+    return { displayName: event.agent, delegationTag: '' };
+  }
+  return { displayName: event.agent || 'System', delegationTag: '' };
+}
+
 function EventBubble({ event, index }: EventBubbleProps) {
   const badge = actionBadgeStyle(event.action);
-  const agentName = event.agent || 'System';
-  const initial = agentName.charAt(0).toUpperCase();
-  const color = agentAvatarColor(agentName);
-  const actor = actorSummary(event);
+  const { displayName, delegationTag } = deriveDisplayAgent(event);
+  const initial = displayName.charAt(0).toUpperCase();
+  const color = agentAvatarColor(displayName);
   const task = taskLabel(event);
   const extraRows = extraSummaryRows(event);
 
@@ -178,8 +196,16 @@ function EventBubble({ event, index }: EventBubbleProps) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap mb-1">
           <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>
-            {agentName}
+            {displayName}
           </span>
+          {delegationTag && (
+            <span
+              className="text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0"
+              style={{ backgroundColor: 'rgba(63,185,80,0.1)', color: 'var(--tf-success)', fontSize: '10px' }}
+            >
+              {delegationTag}
+            </span>
+          )}
           {event.project_id && (
             <span
               className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0"
@@ -208,9 +234,6 @@ function EventBubble({ event, index }: EventBubbleProps) {
             {task || '(no detail)'}
           </p>
           <div className="space-y-1">
-            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-              <strong style={{ color: 'var(--tf-text-secondary)' }}>Who:</strong> {actor}
-            </p>
             {extraRows.map((row) => (
               <p key={row} className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
                 {row}
@@ -226,6 +249,7 @@ function EventBubble({ event, index }: EventBubbleProps) {
 // ---- Audit log entry ----
 function AuditEntry({ event, index }: { event: ActivityEvent; index: number }) {
   const badge = actionBadgeStyle(event.action);
+  const { displayName } = deriveDisplayAgent(event);
   return (
     <div
       className="flex items-center gap-3 py-2 text-xs animate-slide-up"
@@ -239,7 +263,7 @@ function AuditEntry({ event, index }: { event: ActivityEvent; index: number }) {
       >
         {event.action}
       </span>
-      <span style={{ color: 'var(--tf-accent)', flexShrink: 0, width: '90px' }}>{event.agent}</span>
+      <span style={{ color: 'var(--tf-accent)', flexShrink: 0, width: '90px' }}>{displayName}</span>
       <span style={{ color: 'var(--tf-text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {event.project_id ? `[${event.project_id}] ` : ''}{eventDetailText(event)}
       </span>
