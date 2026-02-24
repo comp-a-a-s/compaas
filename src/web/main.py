@@ -35,6 +35,17 @@ def _ensure_frontend_built() -> None:
         print(f"[COMPaaS] Warning: Frontend build failed (exit code {exc.returncode}).", file=sys.stderr)
 
 
+def _render_agent_templates() -> None:
+    """Render agent templates with dynamic names from config."""
+    try:
+        from scripts.render_agents import render_templates
+        count = render_templates()
+        if count:
+            print(f"[COMPaaS] Rendered {count} agent template(s).")
+    except Exception as exc:
+        print(f"[COMPaaS] Warning: Agent template rendering failed: {exc}", file=sys.stderr)
+
+
 def main():
     host = os.environ.get("COMPAAS_API_HOST", "127.0.0.1")
     port = int(os.environ.get("COMPAAS_API_PORT", "8420"))
@@ -42,6 +53,9 @@ def main():
 
     # Build frontend if dist is missing
     _ensure_frontend_built()
+
+    # Render agent templates with current config values
+    _render_agent_templates()
 
     # Auto-open browser after a short delay (set COMPAAS_NO_BROWSER=true to disable)
     if os.environ.get("COMPAAS_NO_BROWSER", "").lower() != "true":

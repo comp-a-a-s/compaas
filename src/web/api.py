@@ -718,10 +718,16 @@ def _load_config() -> dict:
 
 
 def _save_config(config: dict) -> None:
-    """Persist config to disk."""
+    """Persist config to disk and re-render agent templates."""
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    # Re-render agent templates with updated config values
+    try:
+        from scripts.render_agents import render_templates
+        render_templates()
+    except Exception:
+        logger.warning("Failed to re-render agent templates after config save", exc_info=True)
 
 
 def _get_agent_name(agent_id: str, default: str) -> str:
