@@ -43,8 +43,8 @@ def register_project_tools(mcp: FastMCP, data_dir: str) -> None:
         return yaml.dump(project, default_flow_style=False)
 
     @mcp.tool
-    def update_project(project_id: str, status: str = "", team: str = "", phase: str = "", description: str = "") -> str:
-        """Update project fields. Provide status, team (comma-separated agent names), phase to add, or description (executive summary)."""
+    def update_project(project_id: str, status: str = "", team: str = "", phase: str = "", description: str = "", run_instructions: str = "") -> str:
+        """Update project fields. Provide status, team (comma-separated agent names), phase to add, description (executive summary), or run_instructions (how to run the final product)."""
         updates = {}
         if status:
             updates["status"] = status
@@ -58,8 +58,10 @@ def register_project_tools(mcp: FastMCP, data_dir: str) -> None:
                 updates["phases"] = phases
         if description:
             updates["description"] = description
+        if run_instructions:
+            updates["run_instructions"] = run_instructions
         if not updates:
-            return "Error: No updates provided. Specify status, team, phase, or description."
+            return "Error: No updates provided. Specify status, team, phase, description, or run_instructions."
         ok = state.update_project(project_id, updates)
         if ok:
             changed = ", ".join(updates.keys())

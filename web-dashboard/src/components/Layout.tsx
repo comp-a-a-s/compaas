@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Tooltip from './Tooltip';
 import CompassRoseLogo from './CompassRoseLogo';
 import FloatingSelect from './ui/FloatingSelect';
@@ -84,6 +84,201 @@ function CeoBadge({ ceoName }: { ceoName: string }) {
   );
 }
 
+// ---- Header Controls (Search, Project Selector, CEO Chat) ----
+const HEADER_H = '34px';
+
+function HeaderControls({
+  searchExpanded, setSearchExpanded, globalSearchQuery, onGlobalSearchQueryChange,
+  activeProjectId, projectSelectOptions, handleProjectSelection, projects,
+  chatOpen, chatHasUnread, onChatToggle, microProjectMode, isMobileViewport,
+}: {
+  searchExpanded: boolean;
+  setSearchExpanded: (v: boolean) => void;
+  globalSearchQuery: string;
+  onGlobalSearchQueryChange?: (v: string) => void;
+  activeProjectId: string;
+  projectSelectOptions: { value: string; label: string; description?: string; keywords?: string[] }[];
+  handleProjectSelection: (id: string) => void;
+  projects: Project[];
+  chatOpen: boolean;
+  chatHasUnread: boolean;
+  onChatToggle: () => void;
+  microProjectMode: boolean;
+  isMobileViewport: boolean;
+}) {
+  const searchRef = useRef<HTMLInputElement>(null);
+  const pillBase: React.CSSProperties = {
+    height: HEADER_H,
+    display: 'flex',
+    alignItems: 'center',
+    borderRadius: '999px',
+    border: '1px solid var(--tf-border)',
+    backgroundColor: 'var(--tf-surface)',
+    transition: 'all 0.2s',
+  };
+
+  // Determine active project's delivery mode for the icon
+  const activeProject = projects.find((p) => p.id === activeProjectId);
+  const isGithub = activeProject?.delivery_mode === 'github' || (activeProject?.github_repo && activeProject.github_repo.length > 0);
+
+  return (
+    <div className="header-controls flex items-center gap-2">
+      {/* 1. Search — collapsed icon, expands on click */}
+      <div
+        style={{
+          ...pillBase,
+          width: searchExpanded ? (isMobileViewport ? '180px' : '220px') : HEADER_H,
+          padding: searchExpanded ? '0 10px' : '0',
+          justifyContent: searchExpanded ? 'flex-start' : 'center',
+          gap: '6px',
+          cursor: searchExpanded ? 'text' : 'pointer',
+          overflow: 'hidden',
+        }}
+        onClick={() => {
+          if (!searchExpanded) {
+            setSearchExpanded(true);
+            setTimeout(() => searchRef.current?.focus(), 60);
+          }
+        }}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: 'var(--tf-text-muted)', flexShrink: 0 }}>
+          <circle cx="11" cy="11" r="7" />
+          <path d="M20 20l-3.5-3.5" />
+        </svg>
+        {searchExpanded && (
+          <input
+            ref={searchRef}
+            value={globalSearchQuery}
+            onChange={(e) => onGlobalSearchQueryChange?.(e.target.value)}
+            onBlur={() => { if (!globalSearchQuery) setSearchExpanded(false); }}
+            onKeyDown={(e) => { if (e.key === 'Escape') { onGlobalSearchQueryChange?.(''); setSearchExpanded(false); } }}
+            placeholder="Search..."
+            style={{
+              flex: 1,
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              color: 'var(--tf-text)',
+              fontSize: '12px',
+              minWidth: 0,
+            }}
+            aria-label="Global search"
+          />
+        )}
+      </div>
+
+      {/* 2. Project selector — pill with location icon */}
+      <div
+        className="header-project-context"
+        style={{
+          ...pillBase,
+          gap: '6px',
+          padding: '0 10px',
+          minWidth: isMobileViewport ? '140px' : '200px',
+          maxWidth: isMobileViewport ? 'min(48vw, 240px)' : '300px',
+        }}
+      >
+        {/* Location icon: folder for local, GitHub mark for github */}
+        {isGithub ? (
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" style={{ color: 'var(--tf-text-muted)', flexShrink: 0 }}>
+            <path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+        ) : (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: 'var(--tf-text-muted)', flexShrink: 0 }}>
+            <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+        )}
+        <FloatingSelect
+          value={activeProjectId || ''}
+          options={projectSelectOptions}
+          onChange={handleProjectSelection}
+          searchable
+          size="sm"
+          variant="pill"
+          style={{ width: '100%', minWidth: 0 }}
+          ariaLabel="Global project selector"
+          placeholder={projects.length > 0 ? 'Select project...' : 'No projects yet'}
+        />
+      </div>
+
+      {/* 3. CEO Chat — rightmost, pill button */}
+      <Tooltip content={chatOpen ? 'Close CEO chat (C)' : 'Open CEO chat (C)'} position="bottom">
+        <button
+          onClick={onChatToggle}
+          className="relative cursor-pointer transition-all duration-200"
+          style={{
+            ...pillBase,
+            gap: '7px',
+            padding: isMobileViewport ? '0 10px' : '0 14px',
+            backgroundColor: chatOpen ? 'var(--tf-accent)' : 'var(--tf-surface)',
+            color: chatOpen ? 'var(--tf-bg)' : 'var(--tf-text)',
+            borderColor: chatOpen ? 'var(--tf-accent)' : 'var(--tf-border)',
+            boxShadow: chatOpen
+              ? '0 0 12px rgba(168,131,255,0.25)'
+              : chatHasUnread
+                ? '0 0 10px rgba(234,114,103,0.3)'
+                : 'none',
+          }}
+          aria-label={chatOpen ? 'Close CEO chat' : 'Open CEO chat'}
+          onMouseEnter={(e) => {
+            if (!chatOpen) {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
+              (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-accent)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!chatOpen) {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface)';
+              (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
+            }
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill={chatOpen ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={chatOpen ? 0 : 1.8}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.4-4 8-9 8a9.9 9.9 0 01-4.3-.9L3 20l1.4-3.7C3.5 15 3 13.6 3 12c0-4.4 4-8 9-8s9 3.6 9 8z" />
+          </svg>
+          {!isMobileViewport && (
+            <span style={{ fontSize: '12px', fontWeight: 600 }}>
+              {chatOpen ? 'Close' : 'CEO Chat'}
+            </span>
+          )}
+          {microProjectMode && !isMobileViewport && (
+            <span
+              style={{
+                fontSize: '9px',
+                fontWeight: 700,
+                color: chatOpen ? 'var(--tf-bg)' : 'var(--tf-warning)',
+                border: chatOpen ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(240,170,74,0.45)',
+                backgroundColor: chatOpen ? 'rgba(255,255,255,0.15)' : 'rgba(240,170,74,0.1)',
+                borderRadius: '999px',
+                padding: '1px 5px',
+                lineHeight: 1.2,
+              }}
+            >
+              MICRO
+            </span>
+          )}
+          {chatHasUnread && !chatOpen && (
+            <span
+              className="animate-pulse-dot"
+              style={{
+                position: 'absolute',
+                top: '-2px',
+                right: '-2px',
+                width: '9px',
+                height: '9px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--tf-error)',
+                border: '1.5px solid var(--tf-bg)',
+              }}
+              aria-label="Unread messages"
+            />
+          )}
+        </button>
+      </Tooltip>
+    </div>
+  );
+}
+
 export default function Layout({
   activeTab,
   onTabChange,
@@ -115,6 +310,7 @@ export default function Layout({
     return Number.isFinite(parsed) ? Math.max(300, Math.min(760, parsed)) : 420;
   });
   const [draggingSplit, setDraggingSplit] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState(false);
 
   useEffect(() => {
     const onResize = () => {
@@ -454,155 +650,21 @@ export default function Layout({
             </div>
           </div>
 
-          <div className="header-controls flex items-center gap-2">
-            <Tooltip content={chatOpen ? 'Close CEO chat (C)' : 'Open CEO chat (C)'} position="bottom">
-              <button
-                onClick={onChatToggle}
-                className="relative cursor-pointer transition-all duration-200"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: isMobileViewport ? '7px 10px' : '7px 14px',
-                  borderRadius: '999px',
-                  backgroundColor: chatOpen
-                    ? 'var(--tf-accent)'
-                    : 'var(--tf-surface)',
-                  color: chatOpen
-                    ? 'var(--tf-bg)'
-                    : 'var(--tf-text)',
-                  border: chatOpen
-                    ? '1px solid var(--tf-accent)'
-                    : '1px solid var(--tf-border)',
-                  boxShadow: chatOpen
-                    ? '0 0 12px rgba(168,131,255,0.25)'
-                    : chatHasUnread
-                      ? '0 0 10px rgba(234,114,103,0.3)'
-                      : '0 1px 3px rgba(0,0,0,0.15)',
-                }}
-                aria-label={chatOpen ? 'Close CEO chat' : 'Open CEO chat'}
-                onMouseEnter={(e) => {
-                  if (!chatOpen) {
-                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-accent)';
-                    (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 10px rgba(168,131,255,0.2)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!chatOpen) {
-                    (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface)';
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
-                    (e.currentTarget as HTMLButtonElement).style.boxShadow = chatHasUnread
-                      ? '0 0 10px rgba(234,114,103,0.3)'
-                      : '0 1px 3px rgba(0,0,0,0.15)';
-                  }
-                }}
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill={chatOpen ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={chatOpen ? 0 : 1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.4-4 8-9 8a9.9 9.9 0 01-4.3-.9L3 20l1.4-3.7C3.5 15 3 13.6 3 12c0-4.4 4-8 9-8s9 3.6 9 8z" />
-                </svg>
-                {!isMobileViewport && (
-                  <span style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '0.01em' }}>
-                    {chatOpen ? 'Close Chat' : 'CEO Chat'}
-                  </span>
-                )}
-                {microProjectMode && !isMobileViewport && (
-                  <span
-                    style={{
-                      fontSize: '10px',
-                      fontWeight: 600,
-                      color: chatOpen ? 'var(--tf-bg)' : 'var(--tf-warning)',
-                      border: chatOpen ? '1px solid rgba(255,255,255,0.3)' : '1px solid rgba(240,170,74,0.45)',
-                      backgroundColor: chatOpen ? 'rgba(255,255,255,0.15)' : 'rgba(240,170,74,0.1)',
-                      borderRadius: '999px',
-                      padding: '1px 5px',
-                      lineHeight: 1.2,
-                    }}
-                  >
-                    MICRO
-                  </span>
-                )}
-                {chatHasUnread && !chatOpen && (
-                  <span
-                    className="animate-pulse-dot"
-                    style={{
-                      position: 'absolute',
-                      top: '-2px',
-                      right: '-2px',
-                      width: '10px',
-                      height: '10px',
-                      borderRadius: '50%',
-                      backgroundColor: 'var(--tf-error)',
-                      border: '1.5px solid var(--tf-bg)',
-                    }}
-                    aria-label="Unread messages"
-                  />
-                )}
-              </button>
-            </Tooltip>
-
-            <div
-              className="header-project-context"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '6px 8px',
-                borderRadius: '999px',
-                border: '1px solid var(--tf-border)',
-                backgroundColor: 'var(--tf-surface)',
-                minWidth: '240px',
-                maxWidth: isMobileViewport ? 'min(56vw, 280px)' : '320px',
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: 'var(--tf-text-muted)', flexShrink: 0 }}>
-                <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-              <FloatingSelect
-                value={activeProjectId || ''}
-                options={projectSelectOptions}
-                onChange={handleProjectSelection}
-                searchable
-                size="sm"
-                variant="pill"
-                style={{ width: '100%', minWidth: 0 }}
-                ariaLabel="Global project selector"
-                placeholder={projects.length > 0 ? 'Select project...' : 'No projects yet'}
-              />
-            </div>
-            <div
-              className="header-global-search"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '6px 8px',
-                borderRadius: '999px',
-                border: '1px solid var(--tf-border)',
-                backgroundColor: 'var(--tf-surface)',
-                minWidth: '210px',
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: 'var(--tf-text-muted)', flexShrink: 0 }}>
-                <circle cx="11" cy="11" r="7" />
-                <path d="M20 20l-3.5-3.5" />
-              </svg>
-              <input
-                value={globalSearchQuery}
-                onChange={(e) => onGlobalSearchQueryChange?.(e.target.value)}
-                placeholder="Search projects, tasks, activity..."
-                style={{
-                  width: '100%',
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  color: 'var(--tf-text)',
-                  fontSize: '12px',
-                }}
-                aria-label="Global search"
-              />
-            </div>
-          </div>
+          <HeaderControls
+            searchExpanded={searchExpanded}
+            setSearchExpanded={setSearchExpanded}
+            globalSearchQuery={globalSearchQuery ?? ''}
+            onGlobalSearchQueryChange={onGlobalSearchQueryChange}
+            activeProjectId={activeProjectId ?? ''}
+            projectSelectOptions={projectSelectOptions}
+            handleProjectSelection={handleProjectSelection}
+            projects={projects}
+            chatOpen={chatOpen}
+            chatHasUnread={chatHasUnread ?? false}
+            onChatToggle={onChatToggle}
+            microProjectMode={microProjectMode ?? false}
+            isMobileViewport={isMobileViewport}
+          />
         </header>
 
         {isMobileViewport ? (
