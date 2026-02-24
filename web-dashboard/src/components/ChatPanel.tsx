@@ -68,24 +68,36 @@ function summarizeActionPayload(payload: {
 }): string {
   const actorRaw = String(payload.actor || payload.source_agent || 'CEO');
   const targetRaw = String(payload.target || payload.target_agent || '');
-  const actor = prettyAgentName(actorRaw);
   const target = targetRaw ? prettyAgentName(targetRaw) : '';
   const task = String(payload.task || '').trim();
   const flow = String(payload.flow || '').toLowerCase();
   const tool = String(payload.tool || '').toLowerCase();
   const command = String(payload.command || '').trim();
 
-  if (flow === 'down' && target) return `${actor} delegated work to ${target}`;
-  if (flow === 'up' && target) return `${actor} delivered results to ${target}`;
-  if (flow === 'blocked') return `${actor} hit a blocker and is requesting guidance`;
-  if (task && actor) return `${actor} is handling: ${task.slice(0, 92)}`;
-  if (command) return `${actor} is ${summarizeCommand(command).toLowerCase()}`;
-  if (tool.includes('websearch')) return `${actor} is researching references`;
-  if (tool.includes('webfetch')) return `${actor} is collecting source content`;
-  if (tool.includes('grep') || tool.includes('glob') || tool.includes('read')) return `${actor} is inspecting the codebase`;
-  if (tool.includes('write') || tool.includes('edit') || tool.includes('multiedit')) return `${actor} is updating project files`;
-  if (tool.includes('bash') || tool.includes('command_execution')) return `${actor} is running implementation steps`;
-  return payload.label ? String(payload.label) : `${actor} is executing a task`;
+  // Delegation: show the delegated agent prominently
+  if (flow === 'down' && target && target.toLowerCase() !== 'ceo') {
+    return task ? `${target} is working on: ${task.slice(0, 92)}` : `Delegated to ${target}`;
+  }
+  // Result: show which agent completed
+  if (flow === 'up' && actorRaw) {
+    const source = prettyAgentName(actorRaw);
+    if (source.toLowerCase() !== 'ceo') {
+      return `${source} delivered results`;
+    }
+  }
+  if (flow === 'blocked') {
+    const source = prettyAgentName(actorRaw);
+    return `${source} hit a blocker and is requesting guidance`;
+  }
+  // Internal CEO work — describe the action without "Ceo is..." prefix
+  if (task) return task.slice(0, 100);
+  if (command) return summarizeCommand(command);
+  if (tool.includes('websearch')) return 'Researching references';
+  if (tool.includes('webfetch')) return 'Collecting source content';
+  if (tool.includes('grep') || tool.includes('glob') || tool.includes('read')) return 'Inspecting the codebase';
+  if (tool.includes('write') || tool.includes('edit') || tool.includes('multiedit')) return 'Updating project files';
+  if (tool.includes('bash') || tool.includes('command_execution')) return 'Running implementation steps';
+  return payload.label ? String(payload.label) : 'Executing a task';
 }
 
 function enrichActionText(
@@ -558,6 +570,9 @@ function ActionLog({ entries, ceoName }: { entries: ActionEntry[]; ceoName: stri
   if (entries.length === 0) return null;
   const running = entries.filter((e) => e.status === 'running').length;
   const done = entries.filter((e) => e.status === 'done').length;
+  // Detect if any delegation happened — if so, say "Team" not just CEO
+  const hasDelegation = entries.some((e) => /delegat|is working on:/i.test(e.text));
+  const headerLabel = hasDelegation ? 'Team' : ceoName;
   return (
     <div className="mx-1 mb-3 rounded-lg overflow-hidden" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-bg)' }}>
       <button onClick={() => setCollapsed((c) => !c)} className="w-full flex items-center gap-2 px-3 py-1.5 cursor-pointer text-left"
@@ -566,7 +581,7 @@ function ActionLog({ entries, ceoName }: { entries: ActionEntry[]; ceoName: stri
           ? <span className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse-dot" style={{ backgroundColor: 'var(--tf-accent)' }} />
           : <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: 'var(--tf-success)' }} />}
         <span className="text-xs font-medium flex-1" style={{ color: 'var(--tf-text-secondary)' }}>
-          {running > 0 ? `${ceoName} is working` : `${ceoName} completed ${done} action${done !== 1 ? 's' : ''}`}
+          {running > 0 ? `${headerLabel} is working` : `${headerLabel} completed ${done} action${done !== 1 ? 's' : ''}`}
         </span>
         <span className="text-xs" style={{ color: 'var(--tf-text-muted)', fontFamily: 'monospace' }}>{collapsed ? '▸' : '▾'}</span>
       </button>

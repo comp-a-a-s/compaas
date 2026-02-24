@@ -319,8 +319,19 @@ def list_projects() -> list[dict]:
                 "missing_items": ["Project metadata unavailable."],
                 "summary": "Planning packet could not be evaluated.",
             }
+        # Auto-derive team from task assignees if project.team is empty
+        team = proj.get("team") or []
+        if not team:
+            assignees = sorted({
+                t.get("assigned_to", "")
+                for t in tasks
+                if t.get("assigned_to")
+            })
+            if assignees:
+                team = assignees
         result.append({
             **proj,
+            "team": team,
             "task_counts": status_counts,
             "total_tasks": len(tasks),
             "plan_packet": plan_packet,
