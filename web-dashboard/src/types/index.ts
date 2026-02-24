@@ -36,6 +36,7 @@ export interface Project {
   github_branch?: string;
   plan_packet?: PlanningPacketStatus;
   metadata?: ProjectMetadata;
+  run_instructions?: string;
 }
 
 export interface PlanningPacketStatus {

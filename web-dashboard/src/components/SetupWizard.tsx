@@ -1462,11 +1462,8 @@ function StepTelegram({
         <ol style={{ margin: '0 0 0 16px', padding: 0, color: C.textSecondary, fontSize: '11px', lineHeight: 1.55 }}>
           <li style={{ marginBottom: '5px' }}>Open Telegram and message <strong>@BotFather</strong>.</li>
           <li style={{ marginBottom: '5px' }}>Run <Code>/newbot</Code>, choose a bot name + username, copy the bot token.</li>
-          <li style={{ marginBottom: '5px' }}>Send one message to your bot (required so chat id appears in updates).</li>
-          <li style={{ marginBottom: '5px' }}>
-            Open <Code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</Code> and copy <Code>chat.id</Code>.
-          </li>
-          <li>Paste token + chat id here, finish setup, then switch Telegram <strong>On</strong> inside CEO Chat.</li>
+          <li style={{ marginBottom: '5px' }}>To get your Chat ID, message <strong>@userinfobot</strong> in Telegram — it will reply with your ID.</li>
+          <li>Paste token + chat ID here, finish setup, then switch Telegram <strong>On</strong> inside CEO Chat.</li>
         </ol>
       </div>
 

@@ -229,6 +229,14 @@ export default function App() {
   const [microToggleRequestToken, setMicroToggleRequestToken] = useState(0);
   const [telegramMirrorEnabled, setTelegramMirrorEnabled] = useState(() => readTelegramSnapshot().mirrorEnabled);
 
+  // Create-project modal state
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectMode, setNewProjectMode] = useState<'local' | 'github'>('local');
+  const [newProjectRepo, setNewProjectRepo] = useState('');
+  const [newProjectBranch, setNewProjectBranch] = useState('master');
+  const [creatingProject, setCreatingProject] = useState(false);
+
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
@@ -397,45 +405,40 @@ export default function App() {
     }
   }, [activeProjectId]);
 
-  const handleCreateProjectFromHeader = useCallback(async () => {
-    const suggestedName = `Project ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
-    const name = window.prompt('Create new project', suggestedName);
-    if (!name || !name.trim()) return;
+  const handleCreateProjectFromHeader = useCallback(() => {
     const defaultMode = config?.integrations?.workspace_mode === 'github' ? 'github' : 'local';
-    const modeInput = window.prompt('Project location mode (local/github)', defaultMode);
-    const normalizedMode = (modeInput || defaultMode).trim().toLowerCase();
-    const deliveryMode = normalizedMode === 'github' ? 'github' : 'local';
-    const defaultRepo = config?.integrations?.github_repo?.trim() || '';
-    const defaultBranch = config?.integrations?.github_default_branch?.trim() || 'master';
-    let githubRepo = defaultRepo;
-    let githubBranch = defaultBranch;
-    if (deliveryMode === 'github') {
-      githubRepo = (window.prompt('GitHub repository (owner/repo)', defaultRepo) || '').trim();
-      githubBranch = (window.prompt('GitHub default branch', defaultBranch) || defaultBranch).trim() || 'master';
-    }
+    setNewProjectName(`Project ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`);
+    setNewProjectMode(defaultMode === 'github' ? 'github' : 'local');
+    setNewProjectRepo(config?.integrations?.github_repo?.trim() || '');
+    setNewProjectBranch(config?.integrations?.github_default_branch?.trim() || 'master');
+    setShowCreateProject(true);
+  }, [config?.integrations?.workspace_mode, config?.integrations?.github_repo, config?.integrations?.github_default_branch]);
+
+  const submitCreateProject = useCallback(async () => {
+    if (!newProjectName.trim() || creatingProject) return;
+    setCreatingProject(true);
     const created = await createProject({
-      name: name.trim(),
-      description: `Created from the global project selector by ${config?.user?.name || 'Chairman'}.`,
+      name: newProjectName.trim(),
+      description: `Created by ${config?.user?.name || 'Chairman'}.`,
       type: 'app',
-      delivery_mode: deliveryMode,
-      github_repo: githubRepo,
-      github_branch: githubBranch,
+      delivery_mode: newProjectMode,
+      github_repo: newProjectMode === 'github' ? newProjectRepo : '',
+      github_branch: newProjectMode === 'github' ? newProjectBranch : 'master',
     });
+    setCreatingProject(false);
     if (created.status !== 'ok' || !created.project?.id) {
       if (created.error?.settings_target === 'github' || created.error?.code === 'github_not_configured') {
+        setShowCreateProject(false);
         openConnectorSetup('github');
         return;
       }
-      if (created.error?.message) {
-        window.alert(created.error.message);
-      }
       return;
     }
-    const nextProjectId = created.project.id;
-    setActiveProjectId(nextProjectId);
+    setActiveProjectId(created.project.id);
+    setShowCreateProject(false);
     setSettingsConnectorFocus(null);
     await loadProjects(true);
-  }, [config?.integrations?.github_default_branch, config?.integrations?.github_repo, config?.integrations?.workspace_mode, config?.user?.name, loadProjects, openConnectorSetup]);
+  }, [newProjectName, newProjectMode, newProjectRepo, newProjectBranch, creatingProject, config?.user?.name, loadProjects, openConnectorSetup]);
 
   const loadMetrics = useCallback(async () => {
     try {
@@ -905,6 +908,137 @@ export default function App() {
       >
         {renderContent()}
       </Layout>
+
+      {/* Create Project Modal */}
+      {showCreateProject && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backgroundColor: 'rgba(0,0,0,0.5)',
+          }}
+          onClick={() => setShowCreateProject(false)}
+        >
+          <div
+            style={{
+              width: 'min(400px, 90vw)',
+              borderRadius: '12px',
+              border: '1px solid var(--tf-border)',
+              backgroundColor: 'var(--tf-surface)',
+              boxShadow: '0 20px 45px rgba(0,0,0,0.4)',
+              padding: '20px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--tf-text)', marginBottom: '16px' }}>
+              Create New Project
+            </h3>
+            {/* Name */}
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: 'var(--tf-text-secondary)', marginBottom: '5px' }}>
+              Project Name
+            </label>
+            <input
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter') void submitCreateProject(); }}
+              style={{
+                width: '100%', padding: '8px 12px', borderRadius: '8px',
+                border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)',
+                color: 'var(--tf-text)', fontSize: '13px', outline: 'none', boxSizing: 'border-box',
+                marginBottom: '14px',
+              }}
+            />
+            {/* Location */}
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: 'var(--tf-text-secondary)', marginBottom: '5px' }}>
+              Location
+            </label>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+              {(['local', 'github'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setNewProjectMode(mode)}
+                  style={{
+                    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    gap: '6px', padding: '8px', borderRadius: '8px', cursor: 'pointer',
+                    border: `1px solid ${newProjectMode === mode ? 'var(--tf-accent)' : 'var(--tf-border)'}`,
+                    backgroundColor: newProjectMode === mode ? 'rgba(168,131,255,0.1)' : 'var(--tf-surface-raised)',
+                    color: newProjectMode === mode ? 'var(--tf-accent)' : 'var(--tf-text-secondary)',
+                    fontSize: '12px', fontWeight: 500,
+                  }}
+                >
+                  {mode === 'github' ? (
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+                  ) : (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+                  )}
+                  {mode === 'github' ? 'GitHub' : 'Local'}
+                </button>
+              ))}
+            </div>
+            {/* GitHub fields */}
+            {newProjectMode === 'github' && (
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: 'var(--tf-text-secondary)', marginBottom: '5px' }}>
+                  Repository (owner/repo)
+                </label>
+                <input
+                  value={newProjectRepo}
+                  onChange={(e) => setNewProjectRepo(e.target.value)}
+                  placeholder="owner/repo"
+                  style={{
+                    width: '100%', padding: '8px 12px', borderRadius: '8px',
+                    border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)',
+                    color: 'var(--tf-text)', fontSize: '13px', outline: 'none', boxSizing: 'border-box',
+                    marginBottom: '8px',
+                  }}
+                />
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: 'var(--tf-text-secondary)', marginBottom: '5px' }}>
+                  Branch
+                </label>
+                <input
+                  value={newProjectBranch}
+                  onChange={(e) => setNewProjectBranch(e.target.value)}
+                  placeholder="master"
+                  style={{
+                    width: '100%', padding: '8px 12px', borderRadius: '8px',
+                    border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)',
+                    color: 'var(--tf-text)', fontSize: '13px', outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+            )}
+            {/* Buttons */}
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowCreateProject(false)}
+                style={{
+                  padding: '7px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer',
+                  border: '1px solid var(--tf-border)', backgroundColor: 'transparent',
+                  color: 'var(--tf-text-secondary)',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void submitCreateProject()}
+                disabled={!newProjectName.trim() || creatingProject}
+                style={{
+                  padding: '7px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer',
+                  border: '1px solid var(--tf-accent)',
+                  backgroundColor: !newProjectName.trim() ? 'var(--tf-surface-raised)' : 'var(--tf-accent)',
+                  color: !newProjectName.trim() ? 'var(--tf-text-muted)' : 'var(--tf-bg)',
+                  fontWeight: 600,
+                  opacity: creatingProject ? 0.6 : 1,
+                }}
+              >
+                {creatingProject ? 'Creating...' : 'Create Project'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {tourOpen && (
         <div
           style={{

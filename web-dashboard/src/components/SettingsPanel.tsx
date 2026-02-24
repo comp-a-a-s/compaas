@@ -663,22 +663,12 @@ function TelegramSection() {
         <ol style={{ margin: '0 0 0 18px', padding: 0, color: C.textSecondary, fontSize: '11px', lineHeight: 1.55 }}>
           <li style={{ marginBottom: '5px' }}>Open Telegram and message <strong>@BotFather</strong>.</li>
           <li style={{ marginBottom: '5px' }}>Run <code>/newbot</code>, choose a bot name and username, then copy the Bot Token.</li>
-          <li style={{ marginBottom: '5px' }}>Start a chat with your bot and send at least one message (required before chat ID lookup).</li>
-          <li style={{ marginBottom: '5px' }}>
-            Fetch your chat ID in a browser:
-            <br />
-            <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>
-          </li>
-          <li style={{ marginBottom: '5px' }}>
-            Find <code>chat.id</code> in the JSON and paste it above.
-            <br />
-            Personal chats are usually positive numbers, groups often start with <code>-100</code>.
-          </li>
+          <li style={{ marginBottom: '5px' }}>To get your Chat ID, message <strong>@userinfobot</strong> in Telegram — it will reply with your ID.</li>
+          <li style={{ marginBottom: '5px' }}>Paste both the Bot Token and Chat ID above.</li>
           <li>Enable the <strong>Telegram On</strong> toggle inside CEO Chat to mirror that project conversation.</li>
         </ol>
         <p style={{ marginTop: '8px', fontSize: '11px', color: C.textMuted, lineHeight: 1.5 }}>
-          Group setup: add the bot to the group, post one message that mentions/replies to the bot, then call <code>getUpdates</code> again.
-          If no updates appear, disable bot privacy mode via <code>/setprivacy</code> in @BotFather.
+          For group chats: add the bot to the group, then use <code>@userinfobot</code> in the group to get its ID (starts with <code>-100</code>).
         </p>
       </div>
     </div>

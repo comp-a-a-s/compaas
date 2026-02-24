@@ -802,7 +802,7 @@ function DiscussionsTab({ projectId }: DiscussionsTabProps) {
   );
 }
 
-// ---- Overview tab (executive summary + team + plan steps) ----
+// ---- Overview tab (project summary, team, stats, how-to-run) ----
 interface OverviewTabProps {
   project: Project;
   tasks: Task[];
@@ -825,55 +825,75 @@ function OverviewTab({ project, tasks }: OverviewTabProps) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   const inProgress = counts['in_progress'] ?? 0;
   const blocked = counts['blocked'] ?? 0;
+  const todo = counts['todo'] ?? 0;
 
-  // Derive plan steps from tasks ordered by priority then creation
-  const planSteps = useMemo(() => {
-    const priOrder: Record<string, number> = { P0: 0, p0: 0, P1: 1, p1: 1, P2: 2, p2: 2, P3: 3, p3: 3 };
-    return [...tasks].sort((a, b) => {
-      const pa = priOrder[a.priority] ?? 4;
-      const pb = priOrder[b.priority] ?? 4;
-      if (pa !== pb) return pa - pb;
-      return (a.created_at ?? '').localeCompare(b.created_at ?? '');
-    });
-  }, [tasks]);
+  const isCompleted = project.status.toLowerCase() === 'completed';
+  const isActive = project.status.toLowerCase() === 'active';
 
   return (
     <div className="space-y-5">
-      {/* Executive Summary */}
-      {project.description && (
-        <div>
-          <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
-            Executive Summary
-          </p>
-          <p className="text-sm leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
-            {project.description}
-          </p>
-        </div>
-      )}
+      {/* About */}
+      <div>
+        <p className="text-xs uppercase tracking-widest mb-1.5 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+          About
+        </p>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+          {project.description || 'No description yet. The CEO will update this once planning begins.'}
+        </p>
+      </div>
 
-      {/* Progress summary */}
-      {total > 0 && (
-        <div className="rounded-xl p-4" style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}>
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>Progress</span>
-            <span className="text-xs font-bold" style={{ color: 'var(--tf-success)' }}>{pct}%</span>
-          </div>
-          <div className="h-2 rounded-full overflow-hidden mb-3" style={{ backgroundColor: 'var(--tf-surface)' }}>
-            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, backgroundColor: 'var(--tf-success)' }} />
-          </div>
-          <div className="flex gap-4 text-xs">
-            <span style={{ color: 'var(--tf-success)' }}>{done} done</span>
-            <span style={{ color: 'var(--tf-accent-blue)' }}>{inProgress} in progress</span>
-            {blocked > 0 && <span style={{ color: 'var(--tf-error)' }}>{blocked} blocked</span>}
-            <span style={{ color: 'var(--tf-text-muted)' }}>{total} total</span>
-          </div>
-        </div>
-      )}
-
-      {/* Assigned Team */}
+      {/* Stats row */}
       <div>
         <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
-          Assigned Team
+          Stats
+        </p>
+        {total > 0 ? (
+          <div className="rounded-xl p-3" style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}>
+            {/* Progress bar */}
+            <div className="flex justify-between items-center mb-1.5">
+              <span className="text-xs font-medium" style={{ color: 'var(--tf-text)' }}>
+                {isCompleted ? 'Completed' : `${pct}% complete`}
+              </span>
+              <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>{done}/{total} tasks</span>
+            </div>
+            <div className="h-1.5 rounded-full overflow-hidden mb-3" style={{ backgroundColor: 'var(--tf-surface)' }}>
+              <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, backgroundColor: isCompleted ? 'var(--tf-success)' : 'var(--tf-accent-blue)' }} />
+            </div>
+            {/* Stat chips */}
+            <div className="flex flex-wrap gap-2">
+              {done > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#1a2e25', color: 'var(--tf-success)' }}>
+                  {done} done
+                </span>
+              )}
+              {inProgress > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#1c2940', color: 'var(--tf-accent-blue)' }}>
+                  {inProgress} in progress
+                </span>
+              )}
+              {todo > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--tf-surface)', color: 'var(--tf-text-muted)' }}>
+                  {todo} to do
+                </span>
+              )}
+              {blocked > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#2d1519', color: 'var(--tf-error)' }}>
+                  {blocked} blocked
+                </span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+            {isActive ? 'Tasks will appear here once the CEO starts delegating work.' : 'No tasks yet.'}
+          </p>
+        )}
+      </div>
+
+      {/* Team */}
+      <div>
+        <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+          Team
         </p>
         {team.length === 0 ? (
           <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>No team members assigned yet.</p>
@@ -882,11 +902,11 @@ function OverviewTab({ project, tasks }: OverviewTabProps) {
             {team.map((member, i) => (
               <div
                 key={member}
-                className="flex items-center gap-2 rounded-lg px-3 py-2"
+                className="flex items-center gap-1.5 rounded-full px-2.5 py-1"
                 style={{ backgroundColor: 'var(--tf-surface-raised)', border: '1px solid var(--tf-border)' }}
               >
                 <div
-                  className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+                  className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
                   style={{ backgroundColor: avatarBg(member, i), color: 'var(--tf-bg)' }}
                 >
                   {avatarInitial(member)}
@@ -900,62 +920,59 @@ function OverviewTab({ project, tasks }: OverviewTabProps) {
         )}
       </div>
 
-      {/* Plan Steps */}
-      <div>
-        <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
-          Plan Steps
-        </p>
-        {planSteps.length === 0 ? (
-          <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-            No tasks created yet. Ask the CEO to plan this project.
+      {/* How to Run */}
+      {(project.run_instructions || isCompleted) && (
+        <div>
+          <p className="text-xs uppercase tracking-widest mb-1.5 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+            How to Run
           </p>
-        ) : (
-          <div className="space-y-1.5">
-            {planSteps.map((task, i) => {
-              const isDone = task.status.toLowerCase() === 'done';
-              const isBlocked = task.status.toLowerCase() === 'blocked';
-              const isActive = task.status.toLowerCase().includes('progress');
-              const stepColor = isDone
-                ? 'var(--tf-success)'
-                : isBlocked
-                ? 'var(--tf-error)'
-                : isActive
-                ? 'var(--tf-accent-blue)'
-                : 'var(--tf-text-muted)';
+          {project.run_instructions ? (
+            <pre
+              className="text-xs leading-relaxed rounded-xl p-3"
+              style={{
+                color: 'var(--tf-text)',
+                backgroundColor: 'var(--tf-surface-raised)',
+                border: '1px solid var(--tf-border)',
+                fontFamily: 'ui-monospace, monospace',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}
+            >
+              {project.run_instructions}
+            </pre>
+          ) : (
+            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+              Run instructions not provided yet. Ask the CEO to update this.
+            </p>
+          )}
+        </div>
+      )}
 
-              return (
-                <div
-                  key={task.id}
-                  className="flex items-start gap-3 rounded-lg px-3 py-2.5"
-                  style={{
-                    backgroundColor: isActive ? 'rgba(88,166,255,0.06)' : 'var(--tf-surface)',
-                    border: `1px solid ${isActive ? 'rgba(88,166,255,0.2)' : 'var(--tf-border)'}`,
-                    opacity: isDone ? 0.6 : 1,
-                  }}
-                >
-                  <span className="text-xs font-bold mt-0.5 flex-shrink-0" style={{ color: stepColor, minWidth: '18px' }}>
-                    {isDone ? '✓' : isBlocked ? '!' : `${i + 1}.`}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium" style={{ color: isDone ? 'var(--tf-text-muted)' : 'var(--tf-text)', textDecoration: isDone ? 'line-through' : 'none' }}>
-                      {task.title}
-                    </p>
-                    {task.assigned_to && (
-                      <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-                        {task.assigned_to}
-                      </span>
-                    )}
-                  </div>
-                  <span
-                    className="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0"
-                    style={{ backgroundColor: stepColor === 'var(--tf-text-muted)' ? 'var(--tf-surface-raised)' : `${stepColor}15`, color: stepColor }}
-                  >
-                    {task.status.replace(/_/g, ' ')}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+      {/* Location */}
+      <div>
+        <p className="text-xs uppercase tracking-widest mb-1.5 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+          Location
+        </p>
+        <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--tf-text-secondary)' }}>
+          {project.delivery_mode === 'github' ? (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+          )}
+          <span>
+            {project.delivery_mode === 'github' ? 'GitHub' : 'Local'}
+            {project.github_repo ? ` — ${project.github_repo}` : ''}
+            {project.github_branch ? ` (${project.github_branch})` : ''}
+          </span>
+        </div>
+        {project.workspace_path && (
+          <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)', wordBreak: 'break-all' }}>
+            {project.workspace_path}
+          </p>
         )}
       </div>
     </div>

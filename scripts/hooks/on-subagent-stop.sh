@@ -1,5 +1,5 @@
 #!/bin/bash
-# Hook: SubagentStop — logs agent completion for the TUI dashboard.
+# Hook: SubagentStop — logs agent completion for dashboards.
 # Receives JSON input via stdin.
 
 INPUT=$(cat)
@@ -18,7 +18,6 @@ SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.st
 if [ -n "${COMPAAS_DATA_DIR:-}" ]; then
     LOG_DIR="$COMPAAS_DATA_DIR"
 else
-    # Walk up from the script location to find company_data
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     SEARCH_DIR="$SCRIPT_DIR"
     while [ "$SEARCH_DIR" != "/" ]; do
@@ -28,12 +27,29 @@ else
         fi
         SEARCH_DIR="$(dirname "$SEARCH_DIR")"
     done
-    # Fallback to CWD
     LOG_DIR="${LOG_DIR:-./company_data}"
 fi
 mkdir -p "$LOG_DIR"
 
-echo "[$TIMESTAMP] COMPLETED: Agent '$AGENT_NAME' finished work" >> "$LOG_DIR/activity.log"
+# Write structured JSON event to activity.log (compatible with /api/activity/recent)
+echo "$INPUT" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+agent = data.get('agent_type') or data.get('agent_name') or 'unknown'
+event = {
+    'timestamp': '$TIMESTAMP',
+    'agent': agent.lower().replace(' ', '-'),
+    'action': 'COMPLETED',
+    'detail': f'{agent} finished work',
+    'project_id': '',
+    'metadata': {
+        'source': 'hook',
+        'agent_type': agent,
+        'session_id': data.get('session_id', ''),
+    },
+}
+print(json.dumps(event))
+" 2>/dev/null >> "$LOG_DIR/activity.log"
 
 # Append raw event to hook_events.jsonl for structured querying
 echo "$INPUT" | python3 -c "

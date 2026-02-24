@@ -257,7 +257,7 @@ When a task completes and hands off:
 After planning and at project completion, always update the project card so the dashboard is accurate:
 - **After planning**: Call `mcp__project__update_project` with `description` (1–2 sentence executive summary of what will be built) and `team` (comma-separated list of agents assigned to this project).
 - **After each major milestone**: Update `description` if scope changed, and update `team` if new agents joined.
-- **At completion**: Set `status` to `completed` and update `description` with a final summary of what was delivered.
+- **At completion**: Set `status` to `completed`, update `description` with a final summary of what was delivered, and set `run_instructions` with clear steps on how to run/use the final product (e.g. install commands, start commands, URLs).
 
 ## Delegation Rules
 - **ALWAYS** include absolute output path in every Task prompt
