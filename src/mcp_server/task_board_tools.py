@@ -16,6 +16,7 @@ def register_task_tools(mcp: FastMCP, data_dir: str) -> None:
         assigned_to: str,
         priority: str = "medium",
         depends_on: str = "",
+        complexity: str = "",
     ) -> str:
         """Create a new task on the project task board.
 
@@ -26,8 +27,9 @@ def register_task_tools(mcp: FastMCP, data_dir: str) -> None:
             assigned_to: Agent name to assign (e.g., 'lead-backend', 'qa-lead').
             priority: Task priority — p0 (critical), p1 (high), p2 (medium), p3 (low).
             depends_on: Comma-separated task IDs that must complete first.
+            complexity: Complexity tier — tier1, tier2, tier3, tier4. Empty for unclassified.
         """
-        task_id = board.create_task(project_id, title, description, assigned_to, priority, depends_on)
+        task_id = board.create_task(project_id, title, description, assigned_to, priority, depends_on, complexity)
         emit_activity(data_dir, assigned_to, "ASSIGNED", f"Task {task_id}: {title}")
         return f"Task {task_id} created: '{title}' assigned to {assigned_to}"
 

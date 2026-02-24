@@ -4144,7 +4144,17 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     plan_packet_status = project_service.plan_packet_status(active_project_id)
                 except ValueError:
                     plan_packet_status = {"ready": False, "missing_items": ["Project not found."], "summary": ""}
-            sandbox_profile = str(data.get("sandbox_profile", "standard") or "standard").strip().lower()
+            # Auto-select sandbox profile based on intent complexity.
+            # Frontend can override by sending an explicit sandbox_profile value.
+            _raw_profile = data.get("sandbox_profile")
+            if _raw_profile:
+                sandbox_profile = str(_raw_profile).strip().lower()
+            elif intent.get("needs_planning") and intent.get("delegate_allowed"):
+                sandbox_profile = "full"  # 1800s — complex multi-agent work
+            elif intent_class in ("greeting", "status"):
+                sandbox_profile = "safe"  # 300s — quick responses
+            else:
+                sandbox_profile = "standard"  # 900s — default
             idempotency_key = str(data.get("idempotency_key", "") or "").strip()
             run_mode = "micro_project" if micro_project_mode else "full_crew"
             try:

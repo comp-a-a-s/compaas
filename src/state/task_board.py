@@ -42,6 +42,8 @@ class TaskBoard:
         path = self._tasks_path(project_id)
         atomic_yaml_write(path, board)
 
+    VALID_COMPLEXITIES = {"tier1", "tier2", "tier3", "tier4", ""}
+
     def create_task(
         self,
         project_id: str,
@@ -50,12 +52,17 @@ class TaskBoard:
         assigned_to: str,
         priority: str = "medium",
         depends_on: str = "",
+        complexity: str = "",
     ) -> str:
         # Validate priority (allow it through even if not in the strict set,
         # for backwards compat with p0/p1/p2/p3)
         priority = priority.lower()
         if priority not in VALID_PRIORITIES:
             priority = "medium"
+
+        complexity = (complexity or "").strip().lower()
+        if complexity not in self.VALID_COMPLEXITIES:
+            complexity = ""
 
         task_id = f"TASK-{str(uuid.uuid4())[:6].upper()}"
         now = datetime.now(timezone.utc).isoformat()
@@ -66,6 +73,7 @@ class TaskBoard:
             "description": description,
             "assigned_to": assigned_to,
             "priority": priority,
+            "complexity": complexity,
             "status": "todo",
             "depends_on": [d.strip() for d in depends_on.split(",") if d.strip()],
             "created_at": now,
