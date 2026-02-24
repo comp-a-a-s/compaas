@@ -6,6 +6,7 @@ import {
   createChatWebSocket,
   approveProjectPlan,
   sendTelegramMessage,
+  pollTelegramMessages,
   fetchMemory,
   addMemory,
   clearMemory,
@@ -975,6 +976,57 @@ export default function ChatPanel({
   useEffect(() => { onNewCeoMessageRef.current = onNewCeoMessage; }, [onNewCeoMessage]);
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
+
+  // Telegram incoming message polling
+  useEffect(() => {
+    if (!telegramMirrorEnabled) return;
+    const creds = readTelegramCredentials();
+    if (!creds.configured || !creds.token) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const msgs = await pollTelegramMessages(creds.token);
+        if (cancelled) return;
+        for (const msg of msgs) {
+          // Skip if chat is busy (CEO is working), queue message display only
+          const senderLabel = msg.from || 'Telegram';
+          const content = `[via Telegram] ${msg.text}`;
+          setMessages((prev) => [...prev, {
+            role: 'user',
+            content,
+            timestamp: new Date(msg.date * 1000).toISOString(),
+            project_id: activeProjectIdRef.current || '',
+          }]);
+          // Send to CEO via WebSocket if connected and not busy
+          if (!isWaitingRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+            const idempotencyKey = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            wsRef.current.send(JSON.stringify({
+              message: `[Message from ${senderLabel} via Telegram]: ${msg.text}`,
+              structured_response: true,
+              sandbox_profile: 'standard',
+              idempotency_key: idempotencyKey,
+              project_id: activeProjectIdRef.current || '',
+            }));
+            setIsWaiting(true);
+            setStreamingContent('');
+            setThinkingContent('');
+            setActionLog([]);
+            setActionDetails([]);
+            streamingAccumRef.current = '';
+          }
+        }
+      } catch {
+        // Silently ignore polling errors
+      }
+    };
+
+    const interval = setInterval(poll, 5000);
+    poll(); // immediate first poll
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [telegramMirrorEnabled]);
+
   useEffect(() => { if (showSearch) setTimeout(() => searchRef.current?.focus(), 50); }, [showSearch]);
 
   // Pin

@@ -4624,6 +4624,66 @@ def telegram_send_message(body: dict[str, Any]) -> dict[str, Any]:
     return {"status": "ok"}
 
 
+# Track last seen Telegram update_id to avoid duplicate messages
+_telegram_last_update_id: int = 0
+
+
+@app.post("/api/integrations/telegram/poll", summary="Poll for new Telegram messages")
+def telegram_poll_messages(body: dict[str, Any]) -> dict[str, Any]:
+    """Poll the Telegram Bot API for new messages from the user.
+
+    The frontend sends the bot token so the backend can call getUpdates.
+    Returns a list of new text messages since the last poll.
+    """
+    global _telegram_last_update_id
+    token = str(body.get("token", "") or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="token is required.")
+
+    params: dict[str, Any] = {
+        "timeout": 0,
+        "allowed_updates": json.dumps(["message"]),
+    }
+    if _telegram_last_update_id:
+        params["offset"] = _telegram_last_update_id + 1
+
+    qs = urllib.parse.urlencode(params)
+    url = f"https://api.telegram.org/bot{token}/getUpdates?{qs}"
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body_text = resp.read().decode("utf-8", errors="replace")
+            parsed = json.loads(body_text) if body_text else {}
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(status_code=502, detail=f"Telegram HTTP error: {body_text[:220]}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Telegram poll failed: {str(exc)[:220]}") from exc
+
+    if not bool(parsed.get("ok")):
+        detail = parsed.get("description") or parsed
+        raise HTTPException(status_code=502, detail=f"Telegram rejected request: {str(detail)[:220]}")
+
+    results = parsed.get("result", [])
+    messages: list[dict[str, Any]] = []
+    for update in results:
+        uid = update.get("update_id", 0)
+        if uid > _telegram_last_update_id:
+            _telegram_last_update_id = uid
+        msg = update.get("message") or {}
+        text = msg.get("text", "")
+        sender = msg.get("from", {})
+        if text:
+            messages.append({
+                "text": text,
+                "from": sender.get("first_name", "") or sender.get("username", "User"),
+                "date": msg.get("date", 0),
+                "chat_id": str(msg.get("chat", {}).get("id", "")),
+            })
+
+    return {"status": "ok", "messages": messages}
+
+
 def _append_activity_event(event: dict) -> None:
     """Append a JSON-encoded event to activity.log."""
     activity_log_path = os.path.join(DATA_DIR, "activity.log")

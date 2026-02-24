@@ -373,6 +373,22 @@ export async function sendTelegramMessage(data: {
   return safeMutate(`${BASE}/integrations/telegram/send`, 'POST', data);
 }
 
+export interface TelegramIncomingMessage {
+  text: string;
+  from: string;
+  date: number;
+  chat_id: string;
+}
+
+export async function pollTelegramMessages(token: string): Promise<TelegramIncomingMessage[]> {
+  const res = await safeFetch<{ status: string; messages: TelegramIncomingMessage[] }>(
+    `${BASE}/integrations/telegram/poll`,
+    { status: 'error', messages: [] },
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) },
+  );
+  return res.messages ?? [];
+}
+
 // ---- V1 capabilities ----
 
 const V1 = '/api/v1';
