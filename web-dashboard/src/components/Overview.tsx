@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import type { Agent, Project, Task, ActivityEvent } from '../types';
+import type { ActiveAgentInfo } from './TeamPulse';
 import Tooltip from './Tooltip';
 
 interface OverviewProps {
@@ -12,6 +13,7 @@ interface OverviewProps {
   loadingAgents: boolean;
   loadingProjects: boolean;
   loadingTasks: boolean;
+  liveAgents?: Map<string, ActiveAgentInfo>;
 }
 
 // ---- Skeleton helper ----
@@ -625,9 +627,10 @@ interface OrgChartProps {
   events: ActivityEvent[];
   activeProjectId?: string;
   microProjectMode?: boolean;
+  liveAgents?: Map<string, ActiveAgentInfo>;
 }
 
-function OrgChart({ agents, loading, events, activeProjectId = '', microProjectMode = false }: OrgChartProps) {
+function OrgChart({ agents, loading, events, activeProjectId = '', microProjectMode = false, liveAgents }: OrgChartProps) {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const hierarchyViewportRef = useRef<HTMLDivElement | null>(null);
@@ -650,7 +653,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     return byProject.length > 0 ? byProject : events;
   }, [events, activeProjectId]);
 
-  // Set of recently active IDs inferred from live activity events.
+  // Set of recently active IDs inferred from live activity events + liveAgents.
   const recentActiveIds = useMemo(() => {
     const s = new Set<string>();
     for (const agent of agents) {
@@ -659,8 +662,15 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
         s.add(agent.id);
       }
     }
+    // Merge real-time delegation tracking from App.tsx
+    if (liveAgents) {
+      for (const [id] of liveAgents) {
+        if (microProjectMode && id !== 'ceo') continue;
+        s.add(id);
+      }
+    }
     return s;
-  }, [agents, scopedEvents, microProjectMode]);
+  }, [agents, scopedEvents, microProjectMode, liveAgents]);
 
   // Broader active set to drive connector highlights even when events are sparse.
   const activeIds = useMemo(() => {
@@ -782,8 +792,19 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
         if (edgeDirections.size >= 2) break;
       }
     }
+    // Merge liveAgents: add flow edges + task labels for actively delegated agents
+    if (liveAgents) {
+      for (const [agentId, info] of liveAgents) {
+        if (agentId === 'ceo' || (microProjectMode && agentId !== 'ceo')) continue;
+        const direction: FlowDirection = info.flow === 'up' ? 'up' : 'down';
+        buildFlowToAgent(agentId, direction, info.task || '');
+        if (info.task && !activeTaskByAgent.has(agentId)) {
+          activeTaskByAgent.set(agentId, info.task.slice(0, 70));
+        }
+      }
+    }
     return { edgeDirections, activeTaskByAgent, blockedAgentIds };
-  }, [aliasToId, scopedEvents, microProjectMode]);
+  }, [aliasToId, scopedEvents, microProjectMode, liveAgents]);
 
   const mutedAgentIds = useMemo(() => {
     if (!microProjectMode) return new Set<string>();
@@ -1396,6 +1417,7 @@ export default function Overview({
   loadingAgents,
   loadingProjects,
   loadingTasks,
+  liveAgents,
 }: OverviewProps) {
   const [widgets, setWidgets] = useState<Record<WidgetId, boolean>>(loadWidgets);
   const [showWidgetMenu, setShowWidgetMenu] = useState(false);
@@ -1489,6 +1511,7 @@ export default function Overview({
             events={events}
             activeProjectId={activeProjectId}
             microProjectMode={microProjectMode}
+            liveAgents={liveAgents}
           />
         </div>
       )}

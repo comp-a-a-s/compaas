@@ -541,21 +541,36 @@ export default function App() {
           return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
         });
 
-        // Extract agent activity for TeamPulse from SSE events
+        // Extract agent activity for TeamPulse + org chart from SSE events
         const meta = (event.metadata || {}) as Record<string, unknown>;
         const flow = String(meta.flow || '').toLowerCase();
         const source = String(meta.source_agent || '').trim().toLowerCase();
         const target = String(meta.target_agent || '').trim().toLowerCase();
+        const eventAgent = String(event.agent || '').trim().toLowerCase();
         const task = String(meta.task || event.detail || '').trim();
+        const action = (event.action || '').toUpperCase();
+        const state = String(meta.state || '').toLowerCase();
 
+        // Delegation flow: CEO → specialist
         if (flow === 'down' && target && target !== 'ceo') {
           handleAgentActivity(target, task, 'down');
         } else if (flow === 'up' && source && source !== 'ceo') {
           handleAgentActivity(source, task, 'up');
         }
+        // Fallback: DELEGATED action with a target agent
+        if (action === 'DELEGATED' && target && target !== 'ceo') {
+          handleAgentActivity(target, task, 'down');
+        }
+        // Fallback: STARTED action on a non-CEO agent (agent was delegated to)
+        if (action === 'STARTED' && eventAgent && eventAgent !== 'ceo') {
+          handleAgentActivity(eventAgent, task, 'working');
+        }
+        // Remove agent from live map on COMPLETED
+        if ((action === 'COMPLETED' || state === 'completed') && eventAgent && eventAgent !== 'ceo') {
+          removeLiveAgent(eventAgent);
+        }
 
         // Trigger reactive project refresh on data-changing events
-        const action = (event.action || '').toUpperCase();
         if (['COMPLETED', 'ASSIGNED', 'UPDATED', 'CREATED', 'STARTED', 'BLOCKED'].includes(action)) {
           debouncedRefreshProjects();
         }
@@ -583,8 +598,8 @@ export default function App() {
     }, 2000);
   }, [loadProjects]);
 
-  // ---- Live agent activity for TeamPulse ----
-  const LIVE_AGENT_EXPIRY_MS = 30_000;
+  // ---- Live agent activity for TeamPulse + org chart ----
+  const LIVE_AGENT_EXPIRY_MS = 120_000; // 2 minutes — delegations often run longer
 
   const handleAgentActivity = useCallback((agentId: string, task: string, flow: 'down' | 'up' | 'working') => {
     const normalized = agentId.toLowerCase().trim();
@@ -597,6 +612,17 @@ export default function App() {
         since: new Date().toISOString(),
         flow,
       });
+      return next;
+    });
+  }, []);
+
+  const removeLiveAgent = useCallback((agentId: string) => {
+    const normalized = agentId.toLowerCase().trim();
+    if (!normalized) return;
+    setLiveAgents((prev) => {
+      if (!prev.has(normalized)) return prev;
+      const next = new Map(prev);
+      next.delete(normalized);
       return next;
     });
   }, []);
@@ -780,6 +806,7 @@ export default function App() {
             loadingAgents={loadingAgents}
             loadingProjects={loadingProjects}
             loadingTasks={loadingTasks}
+            liveAgents={liveAgents}
           />
         );
 
@@ -882,6 +909,7 @@ export default function App() {
             loadingAgents={loadingAgents}
             loadingProjects={loadingProjects}
             loadingTasks={loadingTasks}
+            liveAgents={liveAgents}
           />
         );
     }
