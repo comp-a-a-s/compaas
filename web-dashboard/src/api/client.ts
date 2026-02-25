@@ -4,12 +4,8 @@ import type {
   Task,
   Decision,
   ActivityEvent,
-  TokenReport,
-  Budget,
   ChatMessage,
   AppConfig,
-  ProjectMetadata,
-  RunRecord,
   FeatureFlags,
   PlanningPacketStatus,
 } from '../types';
@@ -71,24 +67,8 @@ export async function fetchProjectDecisions(id: string): Promise<Decision[]> {
   return safeFetch<Decision[]>(`${BASE}/projects/${encodeURIComponent(id)}/decisions`, []);
 }
 
-export async function fetchTaskBoard(id: string): Promise<Task[]> {
-  return safeFetch<Task[]>(`${BASE}/tasks/${encodeURIComponent(id)}`, []);
-}
-
-export async function fetchTokenReport(): Promise<TokenReport | null> {
-  return safeFetch<TokenReport | null>(`${BASE}/metrics/tokens`, null);
-}
-
-export async function fetchBudgets(): Promise<Budget[]> {
-  return safeFetch<Budget[]>(`${BASE}/metrics/budgets`, []);
-}
-
 export async function fetchRecentActivity(limit = 50): Promise<ActivityEvent[]> {
   return safeFetch<ActivityEvent[]>(`${BASE}/activity/recent?limit=${limit}`, []);
-}
-
-export async function fetchOrgChart(): Promise<Agent[]> {
-  return safeFetch<Agent[]>(`${BASE}/org-chart`, []);
 }
 
 export function createActivityStream(onMessage: (line: string) => void): EventSource {
@@ -400,100 +380,6 @@ export async function fetchFeatureFlags(): Promise<FeatureFlags> {
 
 export async function updateFeatureFlags(flags: Partial<FeatureFlags>): Promise<boolean> {
   return safeMutate(`${V1}/feature-flags`, 'PATCH', flags);
-}
-
-export async function fetchRuns(projectId = '', limit = 100): Promise<RunRecord[]> {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (projectId) params.set('project_id', projectId);
-  const res = await safeFetch<{ status: string; runs: RunRecord[] }>(`${V1}/runs?${params.toString()}`, { status: 'error', runs: [] });
-  return Array.isArray(res.runs) ? res.runs : [];
-}
-
-export async function fetchRunReplay(runId: string): Promise<{ run_id: string; timeline: unknown[] } | null> {
-  const res = await safeFetch<{ status: string; replay: { run_id: string; timeline: unknown[] } | null }>(
-    `${V1}/runs/${encodeURIComponent(runId)}/replay`,
-    { status: 'error', replay: null },
-  );
-  return res.replay ?? null;
-}
-
-export async function cancelRun(runId: string, reason = 'Cancelled by user'): Promise<boolean> {
-  return safeMutate(`${V1}/runs/${encodeURIComponent(runId)}/cancel`, 'POST', { reason });
-}
-
-export async function retryRunStep(runId: string, step: string): Promise<boolean> {
-  return safeMutate(`${V1}/runs/${encodeURIComponent(runId)}/retry-step`, 'POST', { step });
-}
-
-export async function fetchProjectMetadata(projectId: string): Promise<ProjectMetadata | null> {
-  const res = await safeFetch<{ status: string; metadata: ProjectMetadata | null }>(
-    `${V1}/projects/${encodeURIComponent(projectId)}/metadata`,
-    { status: 'error', metadata: null },
-  );
-  return res.metadata ?? null;
-}
-
-export async function updateProjectMetadata(projectId: string, updates: Record<string, unknown>): Promise<boolean> {
-  return safeMutate(`${V1}/projects/${encodeURIComponent(projectId)}/metadata`, 'PATCH', updates);
-}
-
-export async function cloneProject(projectId: string, name = ''): Promise<Project | null> {
-  const res = await safeFetch<{ status: string; project: Project | null }>(
-    `${V1}/projects/${encodeURIComponent(projectId)}/clone`,
-    { status: 'error', project: null },
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) },
-  );
-  return res.project ?? null;
-}
-
-export async function archiveProject(projectId: string): Promise<boolean> {
-  return safeMutate(`${V1}/projects/${encodeURIComponent(projectId)}/archive`, 'POST');
-}
-
-export async function restoreProject(projectId: string): Promise<boolean> {
-  return safeMutate(`${V1}/projects/${encodeURIComponent(projectId)}/restore`, 'POST');
-}
-
-export async function fetchProjectDelta(projectId: string, since = ''): Promise<{ events: ActivityEvent[]; artifacts: unknown[] } | null> {
-  const suffix = since ? `?since=${encodeURIComponent(since)}` : '';
-  const res = await safeFetch<{ status: string; delta: { events: ActivityEvent[]; artifacts: unknown[] } | null }>(
-    `${V1}/projects/${encodeURIComponent(projectId)}/delta${suffix}`,
-    { status: 'error', delta: null },
-  );
-  return res.delta ?? null;
-}
-
-export async function fetchProjectReadmeQuality(projectId: string): Promise<{ score: number; checks: Record<string, boolean> } | null> {
-  const res = await safeFetch<{ status: string; report: { score: number; checks: Record<string, boolean> } | null }>(
-    `${V1}/projects/${encodeURIComponent(projectId)}/readme-quality`,
-    { status: 'error', report: null },
-  );
-  return res.report ?? null;
-}
-
-export async function fetchProjectAnalyticsV1(projectId: string): Promise<Record<string, unknown> | null> {
-  const res = await safeFetch<{ status: string; analytics: Record<string, unknown> | null }>(
-    `${V1}/projects/${encodeURIComponent(projectId)}/analytics`,
-    { status: 'error', analytics: null },
-  );
-  return res.analytics ?? null;
-}
-
-export async function fetchProjectArtifacts(projectId: string): Promise<Array<Record<string, unknown>>> {
-  const res = await safeFetch<{ status: string; artifacts: Array<Record<string, unknown>> }>(
-    `${V1}/projects/${encodeURIComponent(projectId)}/artifacts`,
-    { status: 'error', artifacts: [] },
-  );
-  return Array.isArray(res.artifacts) ? res.artifacts : [];
-}
-
-export async function registerProjectArtifact(projectId: string, payload: {
-  file_path: string;
-  action: string;
-  run_id?: string;
-  agent?: string;
-}): Promise<boolean> {
-  return safeMutate(`${V1}/projects/${encodeURIComponent(projectId)}/artifacts`, 'POST', payload);
 }
 
 export async function fetchGithubRepos(token: string): Promise<Array<{ full_name: string; default_branch: string }>> {

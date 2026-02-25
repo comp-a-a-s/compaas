@@ -607,17 +607,30 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             )
         return {"status": "ok", "issues": issues, "count": len(issues)}
 
+    def _resolve_vercel_creds(
+        token: str = "",
+        project_name: str = "",
+        team_id: str = "",
+    ) -> tuple[str, str, str]:
+        """Resolve Vercel credentials from request body, falling back to saved config."""
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        return (
+            token.strip() or str(integrations.get("vercel_token", "") or "").strip(),
+            project_name.strip() or str(integrations.get("vercel_project_name", "") or "").strip(),
+            team_id.strip() or str(integrations.get("vercel_team_id", "") or "").strip(),
+        )
+
     @router.post("/vercel/link")
     def v1_vercel_link(body: VercelLinkRequest) -> dict[str, Any]:
-        return ctx.integration_service.vercel_link_project(body.token, name=body.project_name, team_id=body.team_id)
+        token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
+        return ctx.integration_service.vercel_link_project(token, name=project_name, team_id=team_id)
 
     @router.post("/vercel/verify")
     def v1_vercel_verify(body: VercelVerifyRequest) -> dict[str, Any]:
         cfg = ctx.load_config()
         integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
-        token = body.token.strip() or str(integrations.get("vercel_token", "") or "").strip()
-        project_name = body.project_name.strip() or str(integrations.get("vercel_project_name", "") or "").strip()
-        team_id = body.team_id.strip() or str(integrations.get("vercel_team_id", "") or "").strip()
+        token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
         result = ctx.integration_service.vercel_verify_connection(
             token,
             project_name=project_name,
@@ -650,35 +663,38 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
 
     @router.post("/vercel/deploy")
     def v1_vercel_deploy(body: VercelDeployRequest) -> dict[str, Any]:
+        token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
         target = body.target.lower().strip() or "preview"
         if target not in {"preview", "production"}:
             raise HTTPException(status_code=400, detail="target must be preview or production")
         return ctx.integration_service.vercel_deploy(
-            body.token,
-            project_name=body.project_name,
-            team_id=body.team_id,
+            token,
+            project_name=project_name,
+            team_id=team_id,
             target=target,
             git_source=body.git_source,
         )
 
     @router.post("/vercel/domain")
     def v1_vercel_domain(body: VercelDomainRequest) -> dict[str, Any]:
+        token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
         return ctx.integration_service.vercel_assign_domain(
-            body.token,
-            project_name=body.project_name,
+            token,
+            project_name=project_name,
             domain=body.domain,
-            team_id=body.team_id,
+            team_id=team_id,
         )
 
     @router.post("/vercel/env")
     def v1_vercel_env(body: VercelEnvRequest) -> dict[str, Any]:
+        token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
         return ctx.integration_service.vercel_set_env(
-            body.token,
-            project_name=body.project_name,
+            token,
+            project_name=project_name,
             key=body.key,
             value=body.value,
             target=body.target,
-            team_id=body.team_id,
+            team_id=team_id,
         )
 
     @router.post("/projects/{project_id}/deploy/vercel")

@@ -1303,8 +1303,12 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
 
   const handleVercelOp = async (mode: 'link' | 'preview' | 'production' | 'domain' | 'env') => {
     const token = vercelTokenMasked ? '' : vercelToken.trim();
-    if (!token || !vercelProjectName.trim()) {
-      setIntegrationOpsStatus('Set Vercel token and project name first.');
+    if (!token && !vercelTokenMasked) {
+      setIntegrationOpsStatus('Set Vercel token first.');
+      return;
+    }
+    if (!vercelProjectName.trim()) {
+      setIntegrationOpsStatus('Set Vercel project name first.');
       return;
     }
     if (mode === 'link') {
