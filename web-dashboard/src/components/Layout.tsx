@@ -2,7 +2,9 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Tooltip from './Tooltip';
 import CompassRoseLogo from './CompassRoseLogo';
 import FloatingSelect from './ui/FloatingSelect';
-import type { Project } from '../types';
+import TeamPulse from './TeamPulse';
+import type { ActiveAgentInfo } from './TeamPulse';
+import type { Agent, Project } from '../types';
 
 interface LayoutProps {
   activeTab: string;
@@ -25,6 +27,8 @@ interface LayoutProps {
   telegramConfigured?: boolean;
   onToggleTelegramMirror?: () => void;
   onRequestMicroToggle?: () => void;
+  agents?: Agent[];
+  liveAgents?: Map<string, ActiveAgentInfo>;
 }
 
 const NAV_ITEMS = [
@@ -300,6 +304,8 @@ export default function Layout({
   telegramConfigured = false,
   onToggleTelegramMirror,
   onRequestMicroToggle,
+  agents = [],
+  liveAgents = new Map(),
 }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getStoredBoolean(SIDEBAR_COLLAPSED_KEY));
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -650,7 +656,9 @@ export default function Layout({
             </div>
           </div>
 
-          <HeaderControls
+          <div className="flex items-center gap-3">
+            <TeamPulse agents={agents} liveAgents={liveAgents} isMobile={isMobileViewport} />
+            <HeaderControls
             searchExpanded={searchExpanded}
             setSearchExpanded={setSearchExpanded}
             globalSearchQuery={globalSearchQuery ?? ''}
@@ -665,6 +673,7 @@ export default function Layout({
             microProjectMode={microProjectMode ?? false}
             isMobileViewport={isMobileViewport}
           />
+          </div>
         </header>
 
         {isMobileViewport ? (

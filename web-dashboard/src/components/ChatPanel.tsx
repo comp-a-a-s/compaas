@@ -883,6 +883,7 @@ interface ChatPanelProps {
   telegramMirrorEnabled?: boolean;
   onTelegramMirrorChange?: (enabled: boolean) => void;
   microToggleRequestToken?: number;
+  onAgentActivity?: (agentId: string, task: string, flow: 'down' | 'up' | 'working') => void;
 }
 
 export default function ChatPanel({
@@ -902,6 +903,7 @@ export default function ChatPanel({
   telegramMirrorEnabled = false,
   onTelegramMirrorChange,
   microToggleRequestToken = 0,
+  onAgentActivity,
 }: ChatPanelProps) {
   // Core state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1270,6 +1272,17 @@ export default function ChatPanel({
                   run_id: payload.run_id ? String(payload.run_id) : undefined,
                   at: new Date().toISOString(),
                 }].slice(-120));
+                // Bubble agent activity up for TeamPulse
+                const detailFlow = String(payload.flow || '').toLowerCase();
+                const detailTarget = String(payload.target_agent || payload.target || '').trim().toLowerCase();
+                const detailSource = String(payload.source_agent || payload.actor || '').trim().toLowerCase();
+                const detailTask = String(payload.task || '').trim();
+                if (detailFlow === 'down' && detailTarget && detailTarget !== 'ceo') {
+                  onAgentActivity?.(detailTarget, detailTask, 'down');
+                } else if (detailFlow === 'up' && detailSource && detailSource !== 'ceo') {
+                  onAgentActivity?.(detailSource, detailTask, 'up');
+                }
+
                 if (String(payload.state || '').toLowerCase() === 'started') {
                   setActionLog((prev) => {
                     if (prev.length === 0) return prev;

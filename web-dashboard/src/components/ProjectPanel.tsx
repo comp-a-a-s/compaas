@@ -129,112 +129,176 @@ interface ProjectListCardProps {
   selected: boolean;
   onSelect: () => void;
 }
+
+function statusAccent(status: string): string {
+  const s = status.toLowerCase();
+  if (s === 'active')    return 'var(--tf-success)';
+  if (s === 'completed') return 'var(--tf-accent-blue)';
+  if (s === 'paused')    return 'var(--tf-warning)';
+  if (s === 'planning')  return 'var(--tf-accent)';
+  if (s === 'blocked')   return 'var(--tf-error)';
+  return 'var(--tf-text-muted)';
+}
+
+function statusIcon(status: string): string {
+  const s = status.toLowerCase();
+  if (s === 'active')    return '\u25CF'; // filled circle
+  if (s === 'completed') return '\u2713'; // check
+  if (s === 'paused')    return '\u275A\u275A'; // pause bars
+  if (s === 'planning')  return '\u25E6'; // open circle
+  if (s === 'blocked')   return '\u2716'; // x
+  return '\u25CB'; // open circle
+}
+
 function ProjectListCard({ project, tasks, selected, onSelect }: ProjectListCardProps) {
+  const accent = statusAccent(project.status);
   const sbadge = statusBadge(project.status);
 
   const counts = project.task_counts ?? {};
   const done = counts['done'] ?? 0;
+  const inProgress = counts['in_progress'] ?? 0;
+  const blocked = counts['blocked'] ?? 0;
   const total = project.total_tasks ?? Object.values(counts).reduce((s, v) => s + v, 0);
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
-  // Derive assigned team from project.team or task assignees
-  const team = useMemo(() => {
-    if (project.team && project.team.length > 0) return project.team;
+  const teamCount = useMemo(() => {
+    if (project.team && project.team.length > 0) return project.team.length;
     const assignees = new Set<string>();
     for (const t of tasks) {
       if (t.assigned_to) assignees.add(t.assigned_to);
     }
-    return Array.from(assignees);
+    return assignees.size;
   }, [project.team, tasks]);
 
   return (
     <button
       onClick={onSelect}
-      className="w-full text-left rounded-xl p-4 flex flex-col gap-3 transition-all duration-200 cursor-pointer"
+      className="w-full text-left rounded-xl transition-all duration-200 cursor-pointer group"
       style={{
         backgroundColor: selected ? 'var(--tf-surface-raised)' : 'var(--tf-surface)',
         border: `1px solid ${selected ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
         outline: 'none',
+        overflow: 'hidden',
       }}
       onMouseEnter={(e) => {
-        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = '#6e7681';
+        if (!selected) {
+          (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border-subtle)';
+          (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+        }
       }}
       onMouseLeave={(e) => {
-        if (!selected) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
+        if (!selected) {
+          (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
+          (e.currentTarget as HTMLButtonElement).style.boxShadow = 'none';
+        }
       }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="text-sm font-semibold leading-tight" style={{ color: 'var(--tf-text)' }}>
-          {project.name}
-        </h3>
-        <span
-          className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0"
-          style={{ backgroundColor: sbadge.bg, color: sbadge.text }}
-        >
-          {project.status}
-        </span>
-      </div>
+      <div className="flex">
+        {/* Left accent strip */}
+        <div
+          className="flex-shrink-0"
+          style={{
+            width: '3px',
+            backgroundColor: accent,
+            borderRadius: '3px 0 0 3px',
+            opacity: selected ? 1 : 0.6,
+            transition: 'opacity 0.2s',
+          }}
+        />
 
-      {project.description && (
-        <p
-          className="text-xs leading-relaxed"
-          style={{ color: 'var(--tf-text-secondary)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-        >
-          {project.description}
-        </p>
-      )}
+        <div className="flex-1 p-3.5 flex flex-col gap-2.5 min-w-0">
+          {/* Row 1: Name + status */}
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <h3
+              className="text-sm font-semibold truncate"
+              style={{ color: 'var(--tf-text)', lineHeight: '1.3' }}
+            >
+              {project.name}
+            </h3>
+            <span
+              className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 flex items-center gap-1"
+              style={{ backgroundColor: sbadge.bg, color: sbadge.text, fontSize: '10px', letterSpacing: '0.02em' }}
+            >
+              <span style={{ fontSize: '7px', lineHeight: 1 }}>{statusIcon(project.status)}</span>
+              {project.status.charAt(0).toUpperCase() + project.status.slice(1)}
+            </span>
+          </div>
 
-      {/* Assigned team */}
-      {team.length > 0 && (
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>Team:</span>
-          <div className="flex -space-x-1.5">
-            {team.slice(0, 6).map((member, i) => (
-              <div
-                key={member}
-                title={member}
-                className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-                style={{ backgroundColor: avatarBg(member, i), color: 'var(--tf-bg)', outline: '2px solid var(--tf-surface)', zIndex: team.length - i }}
-              >
-                {avatarInitial(member)}
+          {/* Row 2: Description (max 1 line) */}
+          {project.description && (
+            <p
+              className="text-xs truncate"
+              style={{ color: 'var(--tf-text-muted)', lineHeight: '1.4' }}
+            >
+              {project.description}
+            </p>
+          )}
+
+          {/* Row 3: Progress */}
+          {total > 0 ? (
+            <div className="flex flex-col gap-1">
+              <div className="h-1 rounded-full flex overflow-hidden" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
+                {done > 0 && (
+                  <div
+                    className="h-full transition-all duration-500"
+                    style={{ width: `${(done / total) * 100}%`, backgroundColor: 'var(--tf-success)' }}
+                  />
+                )}
+                {inProgress > 0 && (
+                  <div
+                    className="h-full transition-all duration-500"
+                    style={{ width: `${(inProgress / total) * 100}%`, backgroundColor: 'var(--tf-accent-blue)' }}
+                  />
+                )}
+                {blocked > 0 && (
+                  <div
+                    className="h-full transition-all duration-500"
+                    style={{ width: `${(blocked / total) * 100}%`, backgroundColor: 'var(--tf-error)' }}
+                  />
+                )}
               </div>
-            ))}
-          </div>
-          {team.length > 6 && (
-            <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>+{team.length - 6}</span>
-          )}
-        </div>
-      )}
-
-      {/* Progress bar */}
-      {total > 0 && (
-        <div>
-          <div className="flex justify-between text-xs mb-1">
-            <span style={{ color: 'var(--tf-text-muted)' }}>{total} tasks</span>
-            <span style={{ color: 'var(--tf-success)' }}>{pct}%</span>
-          </div>
-          <div className="h-1.5 rounded-full" style={{ backgroundColor: 'var(--tf-surface-raised)' }}>
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{ width: `${pct}%`, backgroundColor: 'var(--tf-success)' }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Location + last updated */}
-      <div className="flex items-center justify-between text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-        <span className="flex items-center gap-1">
-          {project.delivery_mode === 'github' ? (
-            <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+              <div className="flex items-center gap-2 text-xs" style={{ fontSize: '10px' }}>
+                <span style={{ color: 'var(--tf-success)' }}>{done}/{total} done</span>
+                {inProgress > 0 && <span style={{ color: 'var(--tf-accent-blue)' }}>{inProgress} active</span>}
+                {blocked > 0 && <span style={{ color: 'var(--tf-error)' }}>{blocked} blocked</span>}
+              </div>
+            </div>
           ) : (
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+            <span className="text-xs" style={{ color: 'var(--tf-text-muted)', fontSize: '10px' }}>No tasks yet</span>
           )}
-          {project.delivery_mode === 'github' ? 'GitHub' : 'Local'}
-        </span>
-        {project.updated_at && (
-          <span>{relativeTime(project.updated_at)}</span>
-        )}
+
+          {/* Row 4: Meta chips */}
+          <div className="flex items-center gap-2 text-xs flex-wrap" style={{ color: 'var(--tf-text-muted)', fontSize: '10px' }}>
+            <span className="flex items-center gap-1">
+              {project.delivery_mode === 'github' ? (
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+              ) : (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+              )}
+              {project.delivery_mode === 'github' ? 'GitHub' : 'Local'}
+            </span>
+            {teamCount > 0 && (
+              <>
+                <span style={{ color: 'var(--tf-border)' }}>|</span>
+                <span className="flex items-center gap-1">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 00-3-3.87" /><path d="M16 3.13a4 4 0 010 7.75" /></svg>
+                  {teamCount}
+                </span>
+              </>
+            )}
+            {pct === 100 && total > 0 && (
+              <>
+                <span style={{ color: 'var(--tf-border)' }}>|</span>
+                <span style={{ color: 'var(--tf-success)' }}>Complete</span>
+              </>
+            )}
+            {project.updated_at && (
+              <>
+                <span className="ml-auto">{relativeTime(project.updated_at)}</span>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </button>
   );
