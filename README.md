@@ -332,33 +332,60 @@ Troubleshooting:
 
 ### Vercel Integration (Full Guide)
 
-Vercel integration enables post-project deploy from CEO chat and deployment tooling in Integrations.
+Vercel integration deploys projects that COMPaaS builds for you to Vercel hosting. This is **not** for deploying COMPaaS itself — COMPaaS runs locally on your machine and uses the Vercel API to push your generated projects to Vercel's cloud.
 
-1. Create/import your Vercel project first:
-   - Open [Vercel Dashboard](https://vercel.com/dashboard).
-   - Create or import the app.
-   - Copy the exact project name.
-2. Create a Vercel token:
-   - Open [Vercel token settings](https://vercel.com/account/tokens).
-   - Create and copy a token.
-3. Configure in COMPaaS:
-   - Open **Settings → Integrations → Quick Connect → Vercel Connector**.
-   - Fill:
-     - project name
-     - team ID (only for team-owned projects; leave empty for personal)
-     - token
-     - default target (`Preview` recommended)
-   - Click **Connect & Verify**.
-4. Confirm verification:
-   - Status should change to **Verified**.
-5. Deploy from CEO flow:
-   - After project completion, CEO can offer deployment to Vercel.
-   - Confirm deploy and receive deployment URL in chat.
+#### Prerequisites
 
-Troubleshooting:
-- `Not authorized` usually means invalid token or wrong scope/team context.
-- `Project not found` means project name or team scope does not match.
-- Re-verify after changing token, project name, or team ID.
+- A [Vercel](https://vercel.com) account (free tier works)
+- A project already created or imported in Vercel (the project COMPaaS will deploy to)
+
+#### Step-by-Step Setup
+
+**1. Create a Vercel API token**
+
+- Go to [vercel.com/account/tokens](https://vercel.com/account/tokens)
+- Click **Create** and give it a descriptive name (e.g. `compaas-deploy`)
+- **Scope**: Full Account (or specific project scope if preferred)
+- Copy the token immediately — it won't be shown again
+
+**2. Find your Vercel project name**
+
+- Go to [vercel.com/dashboard](https://vercel.com/dashboard)
+- Click on your project
+- The project name is in the URL: `vercel.com/<team>/<project-name>` — use the `<project-name>` part
+- If the project is under a team, also note the **Team ID** from Settings → General
+
+**3. Connect in COMPaaS**
+
+- Open `compaas-web` → **Settings** → **Integrations** tab
+- Scroll to **Vercel Connector** under Quick Connect
+- Fill in:
+  - **Project Name**: exact name from step 2 (case-sensitive)
+  - **Token**: paste from step 1
+  - **Team ID**: only if the project belongs to a Vercel team; leave empty for personal projects
+  - **Default Target**: choose `Preview` (recommended) or `Production`
+- Click **Connect & Verify**
+- Wait for the green **Verified** status
+
+**4. Deploy projects**
+
+Two ways to deploy:
+
+- **From CEO Chat**: After the CEO finishes building a project, it will offer to deploy to Vercel. Confirm and receive the deployment URL in chat.
+- **From Settings → Integrations**: Use the Vercel Controls section to manually trigger preview/production deployments, assign domains, or set environment variables.
+
+> Once verified, COMPaaS remembers your credentials. You don't need to re-enter the token for subsequent operations.
+
+#### Troubleshooting
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `Not authorized` | Invalid or expired token | Create a new token at vercel.com/account/tokens and re-verify |
+| `Project not found` | Wrong project name or team scope | Double-check project name (case-sensitive) and team ID |
+| `Could not establish a secure connection` | TLS/certificate issue | Check system certificates; ensure Python `certifi` is installed (`pip install certifi`) |
+| `Timed out` | Network connectivity | Check internet connection and retry |
+| Verification succeeds but deploy fails | Token scope too narrow | Ensure token has deploy permissions for the project |
+| Controls blocked after saving token | (Fixed) Token was masked after save | Update to latest version — operations now use saved credentials automatically |
 
 ### Themes
 

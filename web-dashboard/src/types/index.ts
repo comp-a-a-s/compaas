@@ -90,72 +90,11 @@ export interface ActivityEvent {
   metadata?: Record<string, unknown>;
 }
 
-export interface TokenReport {
-  total_records: number;
-  grand_total_tokens: number;
-  by_agent: Record<string, { model: string; total_tokens: number; task_count: number }>;
-  by_model: Record<string, { total_tokens: number; task_count: number }>;
-  records: TokenRecord[];
-}
-
-export interface TokenRecord {
-  agent_name: string;
-  model: string;
-  task_description: string;
-  estimated_input_tokens: number;
-  estimated_output_tokens: number;
-  estimated_total_tokens: number;
-  project_id?: string;
-  task_id?: string;
-  logged_at: string;
-}
-
-export interface Budget {
-  project_id: string;
-  agent_name: string;
-  token_limit: number;
-  used: number;
-  remaining: number;
-  usage_percent: number;
-  status: string;
-}
-
 export interface ChatMessage {
   role: 'user' | 'ceo' | 'system';
   content: string;
   timestamp: string;
   project_id?: string;
-}
-
-export interface RunTimelineEntry {
-  timestamp: string;
-  state: string;
-  label: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface RunRecord {
-  id: string;
-  project_id: string;
-  provider: string;
-  mode: string;
-  status: string;
-  message: string;
-  checksum: string;
-  sandbox_profile: string;
-  tool_budget?: {
-    max_commands: number;
-    max_runtime_seconds: number;
-    max_files_touched: number;
-  };
-  created_at: string;
-  updated_at: string;
-  started_at?: string;
-  ended_at?: string;
-  timeline?: RunTimelineEntry[];
-  cancel_requested?: boolean;
-  command_count?: number;
-  files_touched?: number;
 }
 
 export interface ProjectMetadata {

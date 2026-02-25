@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import './App.css';
 
 import Layout from './components/Layout';
 import Overview from './components/Overview';
