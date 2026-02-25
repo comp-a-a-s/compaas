@@ -905,7 +905,7 @@ finish_step
 # 5. Install Python dependencies
 start_step 5 "Python dependencies"
 start_spinner
-pip3 install -e ".[dev,local-models]" --quiet
+pip3 install -e ".[dev,local-models]" --quiet >/dev/null 2>&1
 stop_spinner
 log_ok "Python dependencies installed"
 finish_step
@@ -915,8 +915,8 @@ start_step 6 "Building web dashboard"
 if [ "$HAS_NODE" = true ] && [ -d "web-dashboard" ]; then
     start_spinner
     cd web-dashboard
-    npm install --quiet 2>/dev/null
-    npm run build --quiet 2>/dev/null
+    npm install --quiet >/dev/null 2>&1
+    npm run build --quiet >/dev/null 2>&1
     cd "$SCRIPT_DIR"
     stop_spinner
     log_ok "Web dashboard built"
@@ -966,15 +966,18 @@ start_step 8 "Running tests"
 TEST_SANDBOX_DIR="$(mktemp -d "${TMPDIR:-/tmp}/compaas-install-tests-XXXXXX")"
 TEST_DATA_DIR="$TEST_SANDBOX_DIR/company_data"
 TEST_WORKSPACE_DIR="$TEST_SANDBOX_DIR/projects"
+TEST_LOG="$(mktemp "${TMPDIR:-/tmp}/compaas-test-log-XXXXXX")"
 mkdir -p "$TEST_DATA_DIR" "$TEST_WORKSPACE_DIR"
 start_spinner
-if COMPAAS_DATA_DIR="$TEST_DATA_DIR" COMPAAS_WORKSPACE_ROOT="$TEST_WORKSPACE_DIR" "$PYTHON_BIN" -m pytest tests/ -q 2>/dev/null; then
+if COMPAAS_DATA_DIR="$TEST_DATA_DIR" COMPAAS_WORKSPACE_ROOT="$TEST_WORKSPACE_DIR" "$PYTHON_BIN" -m pytest tests/ -q >"$TEST_LOG" 2>&1; then
     stop_spinner
     log_ok "All tests passed"
 else
     stop_spinner
-    log_error "Some tests failed - check output above"
+    log_error "Some tests failed:"
+    cat "$TEST_LOG" 2>/dev/null || true
 fi
+rm -f "$TEST_LOG"
 rm -rf "$TEST_SANDBOX_DIR"
 finish_step
 
