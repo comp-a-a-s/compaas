@@ -1,138 +1,323 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Colors for output
+# ============================================================================
+#  COMPaaS Installer — Animated TUI
+#  Sticky progress bar at bottom, braille spinners, step timeline
+# ============================================================================
+
+# -- Colors & styles ---------------------------------------------------------
+BOLD='\033[1m'
+DIM='\033[2m'
+ITALIC='\033[3m'
+UNDERLINE='\033[4m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+GRAY='\033[0;90m'
+BG_BLUE='\033[44m'
+BG_GREEN='\033[42m'
+BG_PURPLE='\033[45m'
+NC='\033[0m'
 
+# -- Unicode glyphs ----------------------------------------------------------
+ICON_CHECK="\xe2\x9c\x94"   # checkmark
+ICON_CROSS="\xe2\x9c\x98"   # cross
+ICON_ARROW="\xe2\x96\xb6"   # right-pointing triangle
+ICON_DOT="\xe2\x97\x8b"     # open circle
+ICON_BULLET="\xe2\x97\x8f"  # filled circle
+ICON_WARN="\xe2\x9a\xa0"    # warning triangle
+BAR_FILL="\xe2\x96\x88"     # full block
+BAR_LIGHT="\xe2\x96\x91"    # light shade block
+BAR_MED="\xe2\x96\x93"      # dark shade block
+SPINNER_FRAMES=( "\xe2\xa0\x8b" "\xe2\xa0\x99" "\xe2\xa0\xb9" "\xe2\xa0\xb8" "\xe2\xa0\xbc" "\xe2\xa0\xb4" "\xe2\xa0\xa6" "\xe2\xa0\xa7" "\xe2\xa0\x87" "\xe2\xa0\x8f" )
+
+# -- Global state ------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGO_PATH="$SCRIPT_DIR/web-dashboard/public/compass-rose.svg"
 TOTAL_STEPS=8
 CURRENT_STEP=0
 CURRENT_STEP_TITLE=""
 INSTALL_UI_MODE="plain"
+SPINNER_PID=""
+SPINNER_ACTIVE=false
+LOG_LINES=()
+MAX_LOG_LINES=6
+
+STEP_NAMES=(
+    ""
+    "Checking Python"
+    "Checking Node.js"
+    "Checking AI CLIs"
+    "Python virtual environment"
+    "Python dependencies"
+    "Building web dashboard"
+    "Initializing environment"
+    "Running tests"
+)
+STEP_STATUS=()
+for ((i=0; i<=TOTAL_STEPS; i++)); do
+    STEP_STATUS[$i]="pending"
+done
 
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
     INSTALL_UI_MODE="tui"
 fi
 
+# -- Terminal helpers --------------------------------------------------------
 term_cols() {
     local cols=100
     if command -v tput &>/dev/null; then
         cols=$(tput cols 2>/dev/null || echo 100)
     fi
-    if [ -z "${cols:-}" ] || [ "$cols" -lt 60 ]; then
-        cols=60
-    fi
+    [ -z "${cols:-}" ] || [ "$cols" -lt 60 ] && cols=60
     echo "$cols"
 }
 
-repeat_char() {
-    local char="$1"
-    local count="$2"
-    if [ "$count" -le 0 ]; then
-        return 0
+term_rows() {
+    local rows=24
+    if command -v tput &>/dev/null; then
+        rows=$(tput lines 2>/dev/null || echo 24)
     fi
+    [ -z "${rows:-}" ] || [ "$rows" -lt 10 ] && rows=24
+    echo "$rows"
+}
+
+repeat_char() {
+    local char="$1" count="$2"
+    [ "$count" -le 0 ] && return 0
     printf "%${count}s" "" | tr ' ' "$char"
 }
 
-fit_text() {
-    local text="$1"
-    local width="$2"
-    local len="${#text}"
-    if [ "$len" -le "$width" ]; then
-        printf "%s" "$text"
-    elif [ "$width" -gt 3 ]; then
-        printf "%s..." "${text:0:$((width - 3))}"
+hide_cursor()  { [ "$INSTALL_UI_MODE" = "tui" ] && printf '\033[?25l'; }
+show_cursor()  { printf '\033[?25h'; }
+save_cursor()  { printf '\033[s'; }
+restore_cursor() { printf '\033[u'; }
+move_to()      { printf "\033[%d;%dH" "$1" "$2"; }
+clear_line()   { printf '\033[2K'; }
+clear_to_end() { printf '\033[J'; }
+
+# Reserve bottom 5 lines for the sticky progress bar
+STICKY_HEIGHT=5
+setup_scroll_region() {
+    if [ "$INSTALL_UI_MODE" != "tui" ]; then return; fi
+    local rows
+    rows="$(term_rows)"
+    local scroll_end=$((rows - STICKY_HEIGHT))
+    # Set scroll region to top portion only
+    printf "\033[1;%dr" "$scroll_end"
+    # Move cursor to top of scrollable area
+    move_to 1 1
+}
+
+teardown_scroll_region() {
+    if [ "$INSTALL_UI_MODE" != "tui" ]; then return; fi
+    local rows
+    rows="$(term_rows)"
+    printf "\033[1;%dr" "$rows"
+    move_to "$rows" 1
+}
+
+# -- Sticky progress bar (bottom of screen) ----------------------------------
+render_sticky_bar() {
+    if [ "$INSTALL_UI_MODE" != "tui" ]; then return; fi
+
+    local cols rows scroll_end
+    cols="$(term_cols)"
+    rows="$(term_rows)"
+    scroll_end=$((rows - STICKY_HEIGHT))
+
+    save_cursor
+
+    # Disable scroll region temporarily to draw in the reserved area
+    printf "\033[1;%dr" "$rows"
+
+    local bar_row=$((scroll_end + 1))
+    local pct=0
+    [ "$TOTAL_STEPS" -gt 0 ] && pct=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+
+    local bar_width=$((cols - 20))
+    [ "$bar_width" -lt 20 ] && bar_width=20
+    [ "$bar_width" -gt 80 ] && bar_width=80
+    local fill=$((pct * bar_width / 100))
+    local empty=$((bar_width - fill))
+
+    # Line 1: separator
+    move_to "$bar_row" 1
+    clear_line
+    printf "${GRAY}"
+    repeat_char "-" "$cols"
+    printf "${NC}"
+
+    # Line 2: step timeline (compact)
+    move_to $((bar_row + 1)) 1
+    clear_line
+    printf "  "
+    local i
+    for ((i=1; i<=TOTAL_STEPS; i++)); do
+        local status="${STEP_STATUS[$i]:-pending}"
+        if [ "$status" = "done" ]; then
+            printf "${GREEN}${ICON_CHECK}${NC} "
+        elif [ "$status" = "active" ]; then
+            printf "${CYAN}${ICON_ARROW}${NC} "
+        elif [ "$status" = "skip" ]; then
+            printf "${YELLOW}${ICON_WARN}${NC} "
+        elif [ "$status" = "fail" ]; then
+            printf "${RED}${ICON_CROSS}${NC} "
+        else
+            printf "${GRAY}${ICON_DOT}${NC} "
+        fi
+    done
+
+    # Line 3: progress bar
+    move_to $((bar_row + 2)) 1
+    clear_line
+    local bar_str=""
+    local j
+    for ((j=0; j<fill; j++)); do
+        bar_str+="$BAR_FILL"
+    done
+    for ((j=0; j<empty; j++)); do
+        bar_str+="$BAR_LIGHT"
+    done
+
+    local label
+    if [ "$CURRENT_STEP" -gt 0 ] && [ "$CURRENT_STEP" -le "$TOTAL_STEPS" ]; then
+        label="${STEP_NAMES[$CURRENT_STEP]}"
     else
-        printf "%s" "${text:0:$width}"
+        label="Starting..."
+    fi
+    printf "  ${CYAN}${BOLD}%3d%%${NC} ${PURPLE}%b${NC}  ${DIM}%s${NC}" "$pct" "$bar_str" "$label"
+
+    # Line 4: step counter
+    move_to $((bar_row + 3)) 1
+    clear_line
+    printf "  ${GRAY}Step ${CURRENT_STEP}/${TOTAL_STEPS}${NC}"
+    if [ "$pct" -eq 100 ]; then
+        printf "  ${GREEN}${BOLD}Complete!${NC}"
+    fi
+
+    # Line 5: blank padding
+    move_to $((bar_row + 4)) 1
+    clear_line
+
+    # Restore scroll region and cursor
+    printf "\033[1;%dr" "$scroll_end"
+    restore_cursor
+}
+
+# -- Spinner (background process) -------------------------------------------
+_spinner_loop() {
+    local frame_idx=0
+    local num_frames=${#SPINNER_FRAMES[@]}
+    while true; do
+        printf "\r  ${CYAN}%b${NC} ${DIM}working...${NC} " "${SPINNER_FRAMES[$frame_idx]}"
+        frame_idx=$(( (frame_idx + 1) % num_frames ))
+        sleep 0.08
+    done
+}
+
+start_spinner() {
+    if [ "$INSTALL_UI_MODE" != "tui" ]; then return; fi
+    if [ "$SPINNER_ACTIVE" = true ]; then return; fi
+    _spinner_loop &
+    SPINNER_PID=$!
+    SPINNER_ACTIVE=true
+}
+
+stop_spinner() {
+    if [ "$SPINNER_ACTIVE" = true ] && [ -n "$SPINNER_PID" ]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+        SPINNER_ACTIVE=false
+        printf "\r\033[2K"
     fi
 }
 
+# -- Logging (prints above the sticky bar) -----------------------------------
 log_info() {
-    echo -e "${BLUE}  [INFO] $*${NC}"
+    stop_spinner
+    echo -e "  ${BLUE}${ICON_BULLET}${NC}  ${DIM}$*${NC}"
+    render_sticky_bar
 }
 
 log_ok() {
-    echo -e "${GREEN}  [OK]   $*${NC}"
+    stop_spinner
+    echo -e "  ${GREEN}${ICON_CHECK}${NC}  $*"
+    render_sticky_bar
 }
 
 log_warn() {
-    echo -e "${YELLOW}  [WARN] $*${NC}"
+    stop_spinner
+    echo -e "  ${YELLOW}${ICON_WARN}${NC}  ${YELLOW}$*${NC}"
+    render_sticky_bar
 }
 
 log_error() {
-    echo -e "${RED}  [ERR]  $*${NC}"
+    stop_spinner
+    echo -e "  ${RED}${ICON_CROSS}${NC}  ${RED}$*${NC}"
+    render_sticky_bar
 }
 
-render_step_panel() {
-    local title="$1"
-    if [ "$INSTALL_UI_MODE" != "tui" ]; then
-        echo -e "${YELLOW}[${CURRENT_STEP}/${TOTAL_STEPS}] ${title}...${NC}"
-        return
-    fi
-
-    local cols
-    cols="$(term_cols)"
-    if [ "$cols" -gt 110 ]; then
-        cols=110
-    fi
-
-    local inner_width=$((cols - 2))
-    local body_width=$((cols - 4))
-    local bar_width=$((body_width - 24))
-    if [ "$bar_width" -lt 10 ]; then
-        bar_width=10
-    fi
-
-    local pct=$((CURRENT_STEP * 100 / TOTAL_STEPS))
-    local fill=$((CURRENT_STEP * bar_width / TOTAL_STEPS))
-    local empty=$((bar_width - fill))
-    local step_text="Step ${CURRENT_STEP}/${TOTAL_STEPS}: ${title}"
-    local progress_text="Progress: [$(repeat_char "#" "$fill")$(repeat_char "-" "$empty")] ${pct}%"
-
-    echo ""
-    echo -e "${BLUE}+$(repeat_char "-" "$inner_width")+${NC}"
-    printf "${BLUE}|${NC} %-*s ${BLUE}|${NC}\n" "$body_width" "$(fit_text "$step_text" "$body_width")"
-    printf "${BLUE}|${NC} %-*s ${BLUE}|${NC}\n" "$body_width" "$(fit_text "$progress_text" "$body_width")"
-    echo -e "${BLUE}+$(repeat_char "-" "$inner_width")+${NC}"
-}
-
+# -- Step lifecycle ----------------------------------------------------------
 start_step() {
-    CURRENT_STEP="$1"
-    CURRENT_STEP_TITLE="$2"
-    render_step_panel "$CURRENT_STEP_TITLE"
+    local step_num="$1"
+    local step_title="$2"
+    CURRENT_STEP="$step_num"
+    CURRENT_STEP_TITLE="$step_title"
+    STEP_STATUS[$step_num]="active"
+
+    if [ "$INSTALL_UI_MODE" = "tui" ]; then
+        echo ""
+        echo -e "  ${CYAN}${BOLD}${ICON_ARROW} Step ${step_num}/${TOTAL_STEPS}:${NC} ${WHITE}${BOLD}${step_title}${NC}"
+        echo -e "  ${GRAY}$(repeat_char "." 50)${NC}"
+        render_sticky_bar
+    else
+        echo -e "${YELLOW}[${step_num}/${TOTAL_STEPS}] ${step_title}...${NC}"
+    fi
 }
 
 finish_step() {
+    stop_spinner
+    local status="${1:-done}"
+    STEP_STATUS[$CURRENT_STEP]="$status"
     if [ "$INSTALL_UI_MODE" = "tui" ]; then
-        log_ok "Completed: ${CURRENT_STEP_TITLE}"
+        if [ "$status" = "done" ]; then
+            echo -e "  ${GREEN}${BOLD}${ICON_CHECK} Done${NC}"
+        elif [ "$status" = "skip" ]; then
+            echo -e "  ${YELLOW}${BOLD}${ICON_WARN} Skipped${NC}"
+        else
+            echo -e "  ${RED}${BOLD}${ICON_CROSS} Failed${NC}"
+        fi
+        render_sticky_bar
     fi
 }
 
+# -- Banner ------------------------------------------------------------------
 print_banner() {
     if [ "$INSTALL_UI_MODE" = "tui" ]; then
         clear 2>/dev/null || true
-        echo -e "${GREEN}Running installer...${NC}"
-        echo ""
+        hide_cursor
     fi
 
     if command -v chafa &>/dev/null && [ -f "$LOGO_PATH" ]; then
-        # Render the real logo when an image-to-terminal renderer is available.
         chafa --size 30x15 "$LOGO_PATH" 2>/dev/null || true
         echo -e "${PURPLE}"
     else
         echo -e "${PURPLE}"
         cat << 'COMPASS'
-                \   |   /
-                 .-*-.
-            ----(  +  )----
-                 '-*-'
-                /   |   \
+
+                    \   |   /
+                     .-*-.
+                ----(  +  )----
+                     '-*-'
+                    /   |   \
+
 COMPASS
     fi
 
@@ -147,21 +332,44 @@ Y88b  d88P Y88b. .d88P 888   "   888 888       888  888 888  888 Y88b  d88P
  "Y8888P"   "Y88888P"  888       888 888       "Y888888 "Y888888  "Y8888P"
 WORDMARK
     echo -e "${NC}"
-    echo -e "${BLUE}=== COMPaaS Virtual Company - Installation ===${NC}"
-    echo -e "${BLUE}=== Built by Idan H. ===${NC}"
     echo ""
+    echo -e "  ${BLUE}${BOLD}COMPaaS Virtual Company${NC}  ${GRAY}|${NC}  ${DIM}Installation${NC}"
+    echo -e "  ${GRAY}Built by Idan H.${NC}"
+    echo ""
+    echo -e "  ${DIM}${TOTAL_STEPS} steps to set up your AI-powered company platform${NC}"
+    echo ""
+
+    if [ "$INSTALL_UI_MODE" = "tui" ]; then
+        setup_scroll_region
+        render_sticky_bar
+    fi
 }
 
-print_banner
+# -- Cleanup on exit ---------------------------------------------------------
+cleanup() {
+    stop_spinner
+    show_cursor
+    teardown_scroll_region
+}
+trap cleanup EXIT
 
 on_install_error() {
     local exit_code=$?
+    stop_spinner
+    STEP_STATUS[$CURRENT_STEP]="fail"
+    render_sticky_bar
     echo ""
     log_error "Installation failed at step ${CURRENT_STEP}/${TOTAL_STEPS}: ${CURRENT_STEP_TITLE:-unknown}"
-    log_warn "Review the output above, fix the issue, and rerun install.sh."
+    log_warn "Review the output above, fix the issue, and rerun install.sh"
+    show_cursor
+    teardown_scroll_region
     exit "$exit_code"
 }
 trap on_install_error ERR
+
+# ============================================================================
+#  Utility functions (dependency checks, installers)
+# ============================================================================
 
 offer_cli_install() {
     local cli_label="$1"
@@ -186,20 +394,25 @@ offer_cli_install() {
     fi
 
     if [ -t 0 ]; then
+        show_cursor
         read -r -p "  Press Enter to install ${cli_label}, or type 'n' to skip: " INSTALL_NOW
+        hide_cursor
     else
         INSTALL_NOW="n"
     fi
     if [[ "${INSTALL_NOW:-}" =~ ^[Nn]$ ]]; then
         log_warn "Skipping ${cli_label} installation"
     else
+        start_spinner
         if install_npm_cli_with_fallback "$cli_label" "$cli_bin" "$npm_package"; then
+            stop_spinner
             if command -v "$cli_bin" &>/dev/null; then
                 log_ok "${cli_label} installed"
             else
                 log_warn "${cli_label} installed but command is not available yet. Re-open terminal and retry."
             fi
         else
+            stop_spinner
             log_warn "Failed to install ${cli_label}; continuing setup"
         fi
     fi
@@ -209,9 +422,7 @@ detect_shell_rc_file() {
     local shell_name
     shell_name="$(basename "${SHELL:-}")"
     case "$shell_name" in
-        zsh)
-            echo "$HOME/.zshrc"
-            ;;
+        zsh)  echo "$HOME/.zshrc" ;;
         bash)
             if [ -f "$HOME/.bash_profile" ]; then
                 echo "$HOME/.bash_profile"
@@ -219,9 +430,7 @@ detect_shell_rc_file() {
                 echo "$HOME/.bashrc"
             fi
             ;;
-        *)
-            echo ""
-            ;;
+        *) echo "" ;;
     esac
 }
 
@@ -330,26 +539,13 @@ pick_best_python3() {
         candidates+=("$path_candidate")
     done < <(ls -1 /Library/Frameworks/Python.framework/Versions/*/bin/python3 2>/dev/null || true)
 
-    local candidate
-    local version_full
-    local version_major
-    local version_minor
-    local version_patch
-    local version_score
-    local best_bin=""
-    local best_score=-1
-    local best_major=0
-    local best_minor=0
+    local candidate version_full version_major version_minor version_patch version_score
+    local best_bin="" best_score=-1 best_major=0 best_minor=0
 
     for candidate in "${candidates[@]}"; do
-        if [ ! -x "$candidate" ]; then
-            continue
-        fi
-
+        [ ! -x "$candidate" ] && continue
         version_full="$("$candidate" -c 'import sys; v=sys.version_info; print(f"{v.major}.{v.minor}.{v.micro}")' 2>/dev/null || true)"
-        if [[ ! "$version_full" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            continue
-        fi
+        [[ ! "$version_full" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && continue
 
         IFS='.' read -r version_major version_minor version_patch <<< "$version_full"
         version_score=$((version_major * 1000000 + version_minor * 1000 + version_patch))
@@ -362,9 +558,7 @@ pick_best_python3() {
         fi
     done
 
-    if [ -z "$best_bin" ]; then
-        return 2
-    fi
+    [ -z "$best_bin" ] && return 2
 
     PYTHON_BIN="$best_bin"
     export PYTHON_BIN
@@ -385,12 +579,10 @@ install_python3_auto() {
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
             refresh_homebrew_shellenv || true
         fi
-
         if ! command -v brew &>/dev/null; then
             log_error "Homebrew installation failed; cannot auto-install Python."
             return 1
         fi
-
         brew install python
         return $?
     fi
@@ -435,12 +627,10 @@ install_nodejs_auto() {
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
             refresh_homebrew_shellenv || true
         fi
-
         if ! command -v brew &>/dev/null; then
             log_error "Homebrew installation failed; cannot auto-install Node.js."
             return 1
         fi
-
         brew install node
         return $?
     fi
@@ -476,17 +666,11 @@ install_nodejs_auto() {
 }
 
 check_node_version() {
-    if ! command -v node &>/dev/null; then
-        return 2
-    fi
-
+    command -v node &>/dev/null || return 2
     NODE_VERSION=$(node -v | sed 's/^v//')
     local node_major
     node_major=$(echo "$NODE_VERSION" | cut -d. -f1)
-
-    if [ "$node_major" -lt 18 ]; then
-        return 3
-    fi
+    [ "$node_major" -lt 18 ] && return 3
     return 0
 }
 
@@ -517,17 +701,22 @@ ensure_nodejs_ready() {
     fi
 
     local install_node_now
+    show_cursor
     read -r -p "  Press Enter to install the latest Node.js (includes npm) and continue to ${reason}, or type 'n' to skip: " install_node_now
+    hide_cursor
     if [[ "${install_node_now:-}" =~ ^[Nn]$ ]]; then
         log_warn "Skipping Node.js/npm installation"
         return 1
     fi
 
     log_info "Installing Node.js..."
+    start_spinner
     if ! install_nodejs_auto; then
+        stop_spinner
         log_warn "Automatic Node.js installation failed."
         return 1
     fi
+    stop_spinner
 
     refresh_homebrew_shellenv || true
     hash -r
@@ -587,14 +776,18 @@ offer_ollama_install() {
     fi
 
     local install_ollama_now
+    show_cursor
     read -r -p "  Press Enter to install Ollama now, or type 'n' to skip: " install_ollama_now
+    hide_cursor
     if [[ "${install_ollama_now:-}" =~ ^[Nn]$ ]]; then
         log_warn "Skipping Ollama installation"
         return 0
     fi
 
     log_info "Installing Ollama..."
+    start_spinner
     if install_ollama_auto; then
+        stop_spinner
         hash -r
         if command -v ollama &>/dev/null; then
             log_ok "Ollama installed"
@@ -602,6 +795,7 @@ offer_ollama_install() {
             log_warn "Ollama installed but not on PATH yet. Re-open terminal if needed."
         fi
     else
+        stop_spinner
         log_warn "Failed to install Ollama; continuing setup"
     fi
 }
@@ -631,17 +825,22 @@ ensure_python_ready() {
     fi
 
     local install_python_now
+    show_cursor
     read -r -p "  Press Enter to install the latest Python 3 and continue, or type 'n' to cancel: " install_python_now
+    hide_cursor
     if [[ "${install_python_now:-}" =~ ^[Nn]$ ]]; then
         log_error "Python installation canceled. Install Python 3.10+ and rerun."
         return 1
     fi
 
     log_info "Installing Python..."
+    start_spinner
     if ! install_python3_auto; then
+        stop_spinner
         log_error "Automatic Python installation failed. Install Python manually and rerun."
         return 1
     fi
+    stop_spinner
 
     refresh_homebrew_shellenv || true
     hash -r
@@ -656,36 +855,46 @@ ensure_python_ready() {
     return 0
 }
 
+# ============================================================================
+#  Main installation flow
+# ============================================================================
+
+print_banner
+
 # 1. Check Python 3.10+
 start_step 1 "Checking Python"
 if ! ensure_python_ready; then
+    finish_step "fail"
     exit 1
 fi
 finish_step
 
 # 2. Check Node.js (optional, for web dashboard)
-start_step 2 "Checking Node.js (optional, for web dashboard)"
+start_step 2 "Checking Node.js"
 if ensure_nodejs_ready "web dashboard and CLI tools"; then
     HAS_NODE=true
+    finish_step
 else
     log_warn "Node.js not found - web dashboard will not be built"
     log_info "Install Node.js 18+ to enable the web dashboard"
     HAS_NODE=false
+    finish_step "skip"
 fi
-finish_step
 
 # 3. Check optional AI CLIs
-start_step 3 "Checking AI runtime CLIs (optional)"
+start_step 3 "Checking AI CLIs"
 offer_cli_install "Claude Code CLI" "claude" "@anthropic-ai/claude-code"
 offer_cli_install "Codex CLI" "codex" "@openai/codex"
 offer_ollama_install
 finish_step
 
 # 4. Create Python virtual environment
-start_step 4 "Setting up Python virtual environment"
+start_step 4 "Python virtual environment"
 cd "$SCRIPT_DIR"
 if [ ! -d ".venv" ]; then
+    start_spinner
     "$PYTHON_BIN" -m venv .venv
+    stop_spinner
     log_ok "Virtual environment created"
 else
     log_ok "Virtual environment already exists"
@@ -694,23 +903,28 @@ source .venv/bin/activate
 finish_step
 
 # 5. Install Python dependencies
-start_step 5 "Installing Python dependencies"
+start_step 5 "Python dependencies"
+start_spinner
 pip3 install -e ".[dev,local-models]" --quiet
+stop_spinner
 log_ok "Python dependencies installed"
 finish_step
 
 # 6. Build web dashboard (if Node.js available)
 start_step 6 "Building web dashboard"
 if [ "$HAS_NODE" = true ] && [ -d "web-dashboard" ]; then
+    start_spinner
     cd web-dashboard
     npm install --quiet 2>/dev/null
     npm run build --quiet 2>/dev/null
     cd "$SCRIPT_DIR"
+    stop_spinner
     log_ok "Web dashboard built"
+    finish_step
 else
     log_warn "Skipped (Node.js not available or web-dashboard/ not found)"
+    finish_step "skip"
 fi
-finish_step
 
 # 7. Initialize directories and environment
 start_step 7 "Initializing environment"
@@ -753,49 +967,78 @@ TEST_SANDBOX_DIR="$(mktemp -d "${TMPDIR:-/tmp}/compaas-install-tests-XXXXXX")"
 TEST_DATA_DIR="$TEST_SANDBOX_DIR/company_data"
 TEST_WORKSPACE_DIR="$TEST_SANDBOX_DIR/projects"
 mkdir -p "$TEST_DATA_DIR" "$TEST_WORKSPACE_DIR"
+start_spinner
 if COMPAAS_DATA_DIR="$TEST_DATA_DIR" COMPAAS_WORKSPACE_ROOT="$TEST_WORKSPACE_DIR" "$PYTHON_BIN" -m pytest tests/ -q 2>/dev/null; then
+    stop_spinner
     log_ok "All tests passed"
 else
+    stop_spinner
     log_error "Some tests failed - check output above"
 fi
 rm -rf "$TEST_SANDBOX_DIR"
 finish_step
 
-# Done!
+# ============================================================================
+#  Completion
+# ============================================================================
+
+# Mark 100% and do final render
+CURRENT_STEP=$TOTAL_STEPS
+render_sticky_bar
+
+# Tear down the scroll region so final output prints normally
+teardown_scroll_region
+show_cursor
+
 echo ""
-echo -e "${PURPLE}═══════════════════════════════════════════${NC}"
-echo -e "${GREEN}  Installation Complete!${NC}"
-echo -e "${PURPLE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Built by Idan H.${NC}"
 echo ""
-echo -e "  ${BLUE}Getting started:${NC}"
+echo -e "  ${PURPLE}${BOLD}$(repeat_char "=" 50)${NC}"
+echo -e "  ${GREEN}${BOLD}"
+cat << 'DONE_ART'
+   ___ ___  __  __ ___ _    ___ _____ ___
+  / __/ _ \|  \/  | _ \ |  | __|_   _| __|
+ | (_| (_) | |\/| |  _/ |__| _|  | | | _|
+  \___\___/|_|  |_|_| |____|___| |_| |___|
+DONE_ART
+echo -e "${NC}"
+echo -e "  ${PURPLE}${BOLD}$(repeat_char "=" 50)${NC}"
+echo -e "  ${GRAY}Built by Idan H.${NC}"
 echo ""
-echo -e "  1. Activate venv:      ${YELLOW}source .venv/bin/activate${NC}"
-echo -e "  2. Start dashboard:    ${YELLOW}compaas-web${NC}   (opens at http://localhost:8420)"
-echo -e "  3. Run setup wizard:   Choose provider (Anthropic / OpenAI / local Ollama)"
+echo -e "  ${WHITE}${BOLD}Getting started:${NC}"
+echo ""
+echo -e "    ${CYAN}1.${NC} Activate venv:      ${YELLOW}source .venv/bin/activate${NC}"
+echo -e "    ${CYAN}2.${NC} Start dashboard:    ${YELLOW}compaas-web${NC}   ${DIM}(opens at http://localhost:8420)${NC}"
+echo -e "    ${CYAN}3.${NC} Run setup wizard:   ${DIM}Choose provider (Anthropic / OpenAI / local Ollama)${NC}"
 echo ""
 
 if [ -t 0 ]; then
+    echo -e "  ${WHITE}${BOLD}Launch now?${NC}"
     echo ""
-    echo "Select startup mode:"
-    echo "  1) Web dashboard (recommended)"
-    echo "  2) API server only (no browser auto-open)"
-    read -r -p "Choice [1-2, default 1]: " START_MODE
+    echo -e "    ${CYAN}1${NC})  Web dashboard ${GREEN}(recommended)${NC}"
+    echo -e "    ${CYAN}2${NC})  API server only ${DIM}(no browser auto-open)${NC}"
+    echo -e "    ${CYAN}q${NC})  Exit installer"
+    echo ""
+    read -r -p "  Choice [1/2/q, default 1]: " START_MODE
     START_MODE=${START_MODE:-1}
 
     case "$START_MODE" in
         1)
-            echo -e "${GREEN}Starting COMPaaS web dashboard...${NC}"
+            echo ""
+            echo -e "  ${GREEN}${ICON_ARROW} Starting COMPaaS web dashboard...${NC}"
+            echo ""
             ./.venv/bin/compaas-web
             ;;
         2)
-            echo -e "${GREEN}Starting COMPaaS API server (headless)...${NC}"
+            echo ""
+            echo -e "  ${GREEN}${ICON_ARROW} Starting COMPaaS API server (headless)...${NC}"
+            echo ""
             COMPAAS_NO_BROWSER=true ./.venv/bin/compaas-web
             ;;
         *)
-            echo -e "${YELLOW}Unknown choice. Skipping auto-start.${NC}"
+            echo ""
+            echo -e "  ${DIM}Exiting installer. Run ${YELLOW}compaas-web${NC}${DIM} when ready.${NC}"
             ;;
     esac
 else
-    echo -e "${YELLOW}Non-interactive shell detected. Skipping auto-start.${NC}"
+    echo -e "  ${YELLOW}Non-interactive shell detected. Skipping auto-start.${NC}"
 fi
