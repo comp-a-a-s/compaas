@@ -2809,6 +2809,7 @@ async def _handle_ceo_claude(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024,  # 1 MB – prevents LimitOverrunError on large JSON lines
             env=env,
             cwd=PROJECT_ROOT,
         )
@@ -3262,6 +3263,7 @@ async def _handle_ceo_codex(
             prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024,  # 1 MB – prevents LimitOverrunError on large JSON lines
             env=env,
             cwd=run_cwd,
         )
