@@ -1,88 +1,115 @@
-# Plan: CEO Complexity-Based Delegation Framework + Runtime Budget Fix
+# Plan: Live "Team Pulse" — Who's Working, Always Visible
 
-## Problem 1: Runtime Budget Exceeded (900s)
+## Problem
+Users can only see which agents are active by navigating to the Overview tab and looking at the org chart. On every other tab (Projects, Chat, Activity, Settings), there's zero visibility into who's working. The current `isAgentRecentlyActive()` uses a 90-second window on SSE events — laggy and imprecise.
 
-### Root Cause
-The CEO runs under the "standard" sandbox profile which allows only 900 seconds (15 minutes). For anything beyond a simple single-agent delegation, this is insufficient. The profile is selected via `data.get("sandbox_profile", "standard")` in the WebSocket handler — it's always "standard" unless the frontend explicitly sends a different value.
+## Solution: Persistent "Team Pulse" Strip
 
-### Solution: Auto-Select Profile Based on Intent Complexity
-Instead of hardcoding "standard", derive the sandbox profile from the intent classification that already runs:
+A thin, elegant strip integrated into the **Layout header** that shows live agent avatars with activity indicators on **every tab, every screen size**.
 
-| Intent Class | Sandbox Profile | Timeout |
-|---|---|---|
-| greeting, status, clarification | safe | 300s (5 min) |
-| question, review | standard | 900s (15 min) |
-| planning, execution (simple) | standard | 900s (15 min) |
-| execution (complex — `needs_planning=True`) | full | 1800s (30 min) |
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Overview  │  COMPaaS — Company as a Service                │
+│            │  [●CEO] [●CTO] [●Lead-BE] [·CISO] [·...]  ... │
+│            │                        ↑ Team Pulse strip       │
+└────────────┴────────────────────────────────────────────────┘
+```
 
-**Implementation**: In `src/web/api.py`, after `_classify_execution_intent()`, if the intent says `needs_planning=True` AND `delegate_allowed=True`, default to "full" profile instead of "standard". The frontend can still override via `sandbox_profile` in the payload.
+## Architecture (3 layers)
 
-### Files Changed
-- `src/web/api.py` — default profile selection logic after intent classification
+### Layer 1: Global Active-Agents State (App.tsx)
 
----
+**New state in App.tsx:**
+```typescript
+interface ActiveAgentInfo {
+  agentId: string;
+  task: string;        // "Working on: API endpoints"
+  since: string;       // ISO timestamp
+  flow: 'down' | 'up' | 'working';  // delegation direction
+}
 
-## Problem 2: CEO Delegation Framework
+const [liveAgents, setLiveAgents] = useState<Map<string, ActiveAgentInfo>>(new Map());
+```
 
-### Current State
-The CEO template has a single workflow: new idea → parallel research → sequential waves. Every task gets the same heavy process regardless of complexity. Simple tasks (write docs, research a competitor) trigger the same wave-based machinery as full product launches.
+**Data sources (already exist, just need to flow up):**
 
-### Solution: Complexity-Based Delegation Tiers in CEO Prompt
-Rewrite the CEO template to include a **decision tree** that runs before any delegation. The CEO:
-1. Assesses 4 dimensions (Scope, Risk, Effort, Visibility)
-2. Determines the Complexity Tier (1-4)
-3. Follows the tier-specific delegation pattern
+1. **WebSocket events from ChatPanel** — The `action_detail` messages already contain `{ source_agent, target_agent, flow, task }`. Currently these only update ChatPanel's local `actionLog`. Add a callback prop `onAgentActivity(agentId, task, flow)` that bubbles delegation events up to App.
 
-This is primarily a **prompt engineering** change — the CEO is an LLM agent that follows its system prompt. The intelligence lives in the prompt, not in code.
+2. **SSE activity stream** — Already parsed in App.tsx. When events have `metadata.source_agent` / `metadata.target_agent` / `metadata.flow`, update `liveAgents`.
 
-### The Four Tiers (CEO Template)
+3. **Auto-expiry** — A `useEffect` timer that clears agents from `liveAgents` after 30 seconds of no updates (much tighter than the current 90s window).
 
-**Tier 1 — Simple / Single-Domain** (~5 min)
-- 1 role, no cross-team dependency
-- CEO delegates directly, steps away
-- Examples: write docs, research competitor, fix minor bug, financial summary
+### Layer 2: TeamPulse Component (new: TeamPulse.tsx)
 
-**Tier 2 — Moderate / Two-Domain** (~15 min)
-- 2-3 roles, defined hand-off point
-- CEO delegates to both owners, monitors output
-- Examples: small feature (dev + design), security patch (backend + infra)
+A small, self-contained component rendered in the Layout header.
 
-**Tier 3 — Complex / Multi-Domain** (~30 min)
-- 4-7 roles, one coordinator (VP Product or VP Engineering) owns execution
-- CEO activates coordinator, stays at decision points only
-- Examples: new product module, backend migration, new auth layer
+**Desktop (>900px):**
+- Horizontal row of small agent avatars (20-22px circles)
+- Active agents: colored circle + green ring pulse + subtle glow
+- Idle agents: not shown (only active ones appear)
+- Hover tooltip: agent name + what they're working on
+- Smooth enter/exit animations (fade-in/scale-up when agent starts, fade-out when done)
+- Max 6 visible, "+N more" overflow pill if more
 
-**Tier 4 — Full-Scale / Strategic** (30+ min)
-- All/most roles, CEO orchestrates directly
-- Wave-based execution with quality gates
-- Examples: full product launch, platform rebuild, compliance overhaul
+**Mobile (<=900px):**
+- Single green dot badge on the header with count: "3 active"
+- Tap to expand a mini-sheet showing who's working
 
-### Task Board Enhancement
-Add optional `complexity` field to the task model so the CEO can tag tasks with their assessed tier. This supports tracking and analytics.
+**Visual design:**
+- Agent circle: 22px, model-colored background (Opus=accent, Sonnet=blue, etc.), white initial
+- Active ring: 2px `var(--tf-success)` border with `pulse-ring` animation
+- Task label: shown on hover (desktop) or tap (mobile) via existing Tooltip component
+- Flow indicator: tiny arrow icon (down-arrow delegated, up-arrow reporting) shown on hover
+- Uses existing CSS variables (`--tf-success`, `--tf-accent`, etc.) so it works across all 4 themes
 
----
+### Layer 3: Integration Points
 
-## Implementation Steps
+**a. ChatPanel to App callback:**
+- ChatPanel gets a new prop: `onAgentActivity: (agentId: string, task: string, flow: string) => void`
+- In the WebSocket `action_detail` handler (line ~1237), when delegation metadata is detected, call `onAgentActivity`
+- In `action_result` handler, call with `flow: 'up'` to show agent completing
 
-### Step 1: Auto-select sandbox profile based on intent
-**File**: `src/web/api.py` (line ~4147)
+**b. SSE handler in App.tsx:**
+- Already parses activity events. Add ~5 lines to extract agent activity from events with `metadata.flow` === 'down' or 'up'
 
-### Step 2: Add complexity field to task board
-**File**: `src/state/task_board.py`
-**File**: `src/mcp_server/task_board_tools.py`
+**c. Layout.tsx:**
+- Pass `liveAgents` and `agents` to the header area
+- Render `<TeamPulse agents={agents} liveAgents={liveAgents} />` in the header between the page title and the header controls
 
-### Step 3: Rewrite CEO template with delegation tiers
-**File**: `.claude/agent-templates/ceo.md`
+**d. Overview.tsx org chart:**
+- Continue using existing `isAgentRecentlyActive()` + `activeIds` for the detailed org tree (no changes needed — it already works well for that view)
 
-### Step 4: Render templates and test
+## Files Changed
 
----
+| File | Change | Lines |
+|------|--------|-------|
+| `web-dashboard/src/components/TeamPulse.tsx` | **NEW** — the strip component | ~120 lines |
+| `web-dashboard/src/components/Layout.tsx` | Import and render TeamPulse in header | ~15 lines |
+| `web-dashboard/src/App.tsx` | Add `liveAgents` state, SSE extraction, pass as prop | ~30 lines |
+| `web-dashboard/src/components/ChatPanel.tsx` | Add `onAgentActivity` callback prop, call from WS handlers | ~15 lines |
+| `web-dashboard/src/index.css` | Add 1-2 animations (fade-scale-in, fade-scale-out) if needed | ~10 lines |
 
-## Summary of Changes
+**Total: ~190 lines of new/changed code across 5 files. No backend changes needed.**
 
-| File | Change |
-|---|---|
-| `src/web/api.py` | Auto-select sandbox profile from intent complexity |
-| `src/state/task_board.py` | Add `complexity` field to task model |
-| `src/mcp_server/task_board_tools.py` | Expose `complexity` in MCP create_task tool |
-| `.claude/agent-templates/ceo.md` | Full rewrite with complexity tiers + delegation patterns |
+## What this does NOT change
+- No backend API changes (all data already flows via WebSocket + SSE)
+- No changes to the Overview org chart (it keeps working as-is)
+- No new dependencies
+- No changes to the agent registry or status system
+
+## Cross-Platform Behavior
+
+| Platform | Rendering |
+|----------|-----------|
+| Desktop wide (>1200px) | Full avatar row with names on hover |
+| Desktop narrow (900-1200px) | Avatar row, compressed spacing |
+| Tablet (600-900px) | Compact avatar dots in header |
+| Mobile (<600px) | Green count badge: "3 working" — tap to see list |
+
+## Implementation Order
+1. Create `TeamPulse.tsx` component with props interface
+2. Add `liveAgents` state to `App.tsx` + SSE extraction logic
+3. Wire `onAgentActivity` callback from `ChatPanel.tsx` to `App.tsx`
+4. Render `TeamPulse` in `Layout.tsx` header
+5. Add CSS animations if needed
+6. Test across themes (midnight, twilight, dawn, sahara)

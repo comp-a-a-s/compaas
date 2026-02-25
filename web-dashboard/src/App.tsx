@@ -12,6 +12,7 @@ import ChatPanel from './components/ChatPanel';
 import SetupWizard from './components/SetupWizard';
 import SettingsPanel from './components/SettingsPanel';
 import CompassRoseLogo from './components/CompassRoseLogo';
+import type { ActiveAgentInfo } from './components/TeamPulse';
 
 import { useThemeInit } from './hooks/useTheme';
 import { useKeyboardShortcuts, useShortcutsPanel, ShortcutsModal } from './hooks/useKeyboardShortcuts';
@@ -303,6 +304,7 @@ export default function App() {
   // Project-selection required modal for CEO chat
   const [showProjectRequired, setShowProjectRequired] = useState(false);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
+  const [liveAgents, setLiveAgents] = useState<Map<string, ActiveAgentInfo>>(new Map());
 
   // Loading states
   const [loadingAgents, setLoadingAgents] = useState(true);
@@ -539,6 +541,19 @@ export default function App() {
           const next = [...prev, event];
           return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
         });
+
+        // Extract agent activity for TeamPulse from SSE events
+        const meta = (event.metadata || {}) as Record<string, unknown>;
+        const flow = String(meta.flow || '').toLowerCase();
+        const source = String(meta.source_agent || '').trim().toLowerCase();
+        const target = String(meta.target_agent || '').trim().toLowerCase();
+        const task = String(meta.task || event.detail || '').trim();
+
+        if (flow === 'down' && target && target !== 'ceo') {
+          handleAgentActivity(target, task, 'down');
+        } else if (flow === 'up' && source && source !== 'ceo') {
+          handleAgentActivity(source, task, 'up');
+        }
       });
     } catch {
       // SSE not available
@@ -547,7 +562,46 @@ export default function App() {
     return () => {
       es?.close();
     };
-  }, [showWizard]);
+  }, [showWizard]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- Live agent activity for TeamPulse ----
+  const LIVE_AGENT_EXPIRY_MS = 30_000;
+
+  const handleAgentActivity = useCallback((agentId: string, task: string, flow: 'down' | 'up' | 'working') => {
+    const normalized = agentId.toLowerCase().trim();
+    if (!normalized) return;
+    setLiveAgents((prev) => {
+      const next = new Map(prev);
+      next.set(normalized, {
+        agentId: normalized,
+        task: task.slice(0, 100),
+        since: new Date().toISOString(),
+        flow,
+      });
+      return next;
+    });
+  }, []);
+
+  // Auto-expire stale live agents
+  useEffect(() => {
+    if (liveAgents.size === 0) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setLiveAgents((prev) => {
+        let changed = false;
+        const next = new Map<string, ActiveAgentInfo>();
+        for (const [id, info] of prev) {
+          if (now - new Date(info.since).getTime() < LIVE_AGENT_EXPIRY_MS) {
+            next.set(id, info);
+          } else {
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [liveAgents.size]);
 
   // ---- Keyboard shortcuts ----
   const shortcuts = useMemo(() => ({
@@ -869,6 +923,8 @@ export default function App() {
         telegramConfigured={telegramConfigured}
         onToggleTelegramMirror={handleToggleTelegramMirror}
         onRequestMicroToggle={requestMicroToggle}
+        agents={agents}
+        liveAgents={liveAgents}
         chatPanel={
           <ChatPanel
             floating
@@ -889,6 +945,7 @@ export default function App() {
             telegramMirrorEnabled={telegramMirrorEnabled}
             onTelegramMirrorChange={handleTelegramMirrorChange}
             microToggleRequestToken={microToggleRequestToken}
+            onAgentActivity={handleAgentActivity}
           />
         }
       >
