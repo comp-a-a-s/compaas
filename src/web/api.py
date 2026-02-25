@@ -1586,7 +1586,7 @@ def _build_context_prompt(
         "Use an executive, human tone for a Chairman/CEO conversation: concise, clear, respectful, practical. "
         "Do not re-introduce yourself every turn (avoid phrases like '<CEO> here'). "
         "Keep one clear final response per turn, and avoid narrating every intermediate step in prose. "
-        "For build requests, execute concrete implementation actions and report files/commands explicitly."
+        "For build requests, delegate to your specialist team via the Task tool and report their progress."
     )
     return "\n".join(parts)
 
@@ -2951,6 +2951,24 @@ async def _handle_ceo_claude(
                                     "tool": tool_name,
                                     **runtime_metadata,
                                 }
+                                # Send delegation-specific action_detail so ChatPanel
+                                # can forward to onAgentActivity → liveAgents → org chart
+                                await websocket.send_json({
+                                    "type": "action_detail",
+                                    "content": {
+                                        "label": f"Delegating to {delegated_agent}",
+                                        "tool": tool_name,
+                                        "state": "started",
+                                        "run_id": run_id,
+                                        "actor": "ceo",
+                                        "source_agent": "ceo",
+                                        "target": delegated_agent,
+                                        "target_agent": delegated_agent,
+                                        "flow": "down",
+                                        "task": delegated_task[:280],
+                                        **runtime_metadata,
+                                    },
+                                })
                                 _emit_chat_activity(
                                     "ceo",
                                     "DELEGATED",
