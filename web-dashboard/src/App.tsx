@@ -553,6 +553,12 @@ export default function App() {
         } else if (flow === 'up' && source && source !== 'ceo') {
           handleAgentActivity(source, task, 'up');
         }
+
+        // Trigger reactive project refresh on data-changing events
+        const action = (event.action || '').toUpperCase();
+        if (['COMPLETED', 'ASSIGNED', 'UPDATED', 'CREATED', 'STARTED', 'BLOCKED'].includes(action)) {
+          debouncedRefreshProjects();
+        }
       });
     } catch {
       // SSE not available
@@ -560,8 +566,22 @@ export default function App() {
 
     return () => {
       es?.close();
+      if (pendingRefreshRef.current) {
+        clearTimeout(pendingRefreshRef.current);
+        pendingRefreshRef.current = null;
+      }
     };
   }, [showWizard]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- Debounced project refresh on activity events ----
+  const pendingRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedRefreshProjects = useCallback(() => {
+    if (pendingRefreshRef.current) return; // already scheduled
+    pendingRefreshRef.current = setTimeout(() => {
+      pendingRefreshRef.current = null;
+      loadProjects(true);
+    }, 2000);
+  }, [loadProjects]);
 
   // ---- Live agent activity for TeamPulse ----
   const LIVE_AGENT_EXPIRY_MS = 30_000;
@@ -779,6 +799,7 @@ export default function App() {
             agents={filteredAgents}
             loading={loadingAgents}
             microProjectMode={microProjectMode}
+            liveAgents={liveAgents}
           />
         );
 

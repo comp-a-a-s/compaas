@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { fetchAgentDetail } from '../api/client';
 import type { Agent, ActivityEvent, TaskWithProject } from '../types';
+import type { ActiveAgentInfo } from './TeamPulse';
 
 interface AgentPanelProps {
   agents: Agent[];
   loading: boolean;
   microProjectMode?: boolean;
+  liveAgents?: Map<string, ActiveAgentInfo>;
 }
 
 // ---- Helpers ----
@@ -87,14 +89,16 @@ interface AgentCardProps {
   selected: boolean;
   onSelect: () => void;
   disabled?: boolean;
+  liveInfo?: ActiveAgentInfo;
 }
-function AgentCard({ agent, selected, onSelect, disabled = false }: AgentCardProps) {
+function AgentCard({ agent, selected, onSelect, disabled = false, liveInfo }: AgentCardProps) {
   const model = effectiveModel(agent);
   const runtimeLabel = effectiveRuntimeLabel(agent);
   const badge = modelBadge(model);
   const color = avatarColor(model);
   const status = statusStyle(agent.status);
   const initial = agent.name.charAt(0).toUpperCase();
+  const isWorking = Boolean(liveInfo) && !disabled;
 
   return (
     <button
@@ -103,12 +107,17 @@ function AgentCard({ agent, selected, onSelect, disabled = false }: AgentCardPro
       }}
       className="w-full text-left rounded-xl p-4 flex flex-col gap-3 transition-all duration-200 cursor-pointer"
       style={{
-        backgroundColor: selected ? 'var(--tf-surface-raised)' : 'var(--tf-surface)',
-        border: `1px solid ${selected ? 'var(--tf-accent)' : 'var(--tf-border)'}`,
+        backgroundColor: selected
+          ? 'var(--tf-surface-raised)'
+          : isWorking
+          ? 'rgba(63,185,80,0.06)'
+          : 'var(--tf-surface)',
+        border: `1px solid ${selected ? 'var(--tf-accent)' : isWorking ? 'var(--tf-success)' : 'var(--tf-border)'}`,
         opacity: disabled ? 0.48 : 1,
         filter: disabled ? 'grayscale(35%)' : 'none',
         cursor: disabled ? 'not-allowed' : 'pointer',
         outline: 'none',
+        boxShadow: isWorking && !selected ? '0 0 12px rgba(63,185,80,0.15)' : 'none',
       }}
       onMouseEnter={(e) => {
         if (!selected && !disabled) {
@@ -117,27 +126,66 @@ function AgentCard({ agent, selected, onSelect, disabled = false }: AgentCardPro
       }}
       onMouseLeave={(e) => {
         if (!selected && !disabled) {
-          (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--tf-border)';
+          (e.currentTarget as HTMLButtonElement).style.borderColor = isWorking ? 'var(--tf-success)' : 'var(--tf-border)';
         }
       }}
     >
       {/* Avatar + status */}
       <div className="flex items-start justify-between">
-        <div
-          className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
-          style={{ backgroundColor: color, color: 'var(--tf-bg)' }}
-        >
-          {initial}
+        <div style={{ position: 'relative' }}>
+          {isWorking && (
+            <div style={{
+              position: 'absolute',
+              inset: '-4px',
+              borderRadius: '50%',
+              border: '2px solid var(--tf-success)',
+              opacity: 0.6,
+              animation: 'pulse-ring 1.8s ease-out infinite',
+            }} />
+          )}
+          <div
+            className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
+            style={{ backgroundColor: color, color: 'var(--tf-bg)', position: 'relative' }}
+          >
+            {initial}
+          </div>
+          {isWorking && (
+            <div style={{
+              position: 'absolute',
+              bottom: -1,
+              right: -1,
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              backgroundColor: 'var(--tf-success)',
+              border: '2px solid var(--tf-surface)',
+            }} />
+          )}
         </div>
         <div className="flex items-center gap-1.5">
-          <span
-            className="w-2 h-2 rounded-full"
-            style={{ backgroundColor: status.dot }}
-            aria-hidden="true"
-          />
-          <span className="text-xs" style={{ color: status.dot }}>
-            {status.label}
-          </span>
+          {isWorking ? (
+            <>
+              <span
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: 'var(--tf-success)', animation: 'pulse-dot 1.4s ease-in-out infinite' }}
+                aria-hidden="true"
+              />
+              <span className="text-xs font-medium" style={{ color: 'var(--tf-success)' }}>
+                Working
+              </span>
+            </>
+          ) : (
+            <>
+              <span
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: status.dot }}
+                aria-hidden="true"
+              />
+              <span className="text-xs" style={{ color: status.dot }}>
+                {status.label}
+              </span>
+            </>
+          )}
         </div>
       </div>
 
@@ -150,6 +198,22 @@ function AgentCard({ agent, selected, onSelect, disabled = false }: AgentCardPro
           {agent.role}
         </p>
       </div>
+
+      {/* Live task label */}
+      {isWorking && liveInfo?.task && (
+        <p
+          className="text-xs leading-tight animate-pulse-dot"
+          style={{
+            color: 'var(--tf-success)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={liveInfo.task}
+        >
+          {liveInfo.task}
+        </p>
+      )}
 
       {/* Badges */}
       <div className="flex flex-wrap gap-1.5">
@@ -185,8 +249,9 @@ function AgentCard({ agent, selected, onSelect, disabled = false }: AgentCardPro
 interface DetailPanelProps {
   agent: Agent;
   onClose: () => void;
+  liveInfo?: ActiveAgentInfo;
 }
-function DetailPanel({ agent, onClose }: DetailPanelProps) {
+function DetailPanel({ agent, onClose, liveInfo }: DetailPanelProps) {
   const model = effectiveModel(agent);
   const runtimeLabel = effectiveRuntimeLabel(agent);
   const badge = modelBadge(model);
@@ -261,6 +326,35 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+        {/* Live task banner */}
+        {liveInfo && (
+          <section
+            className="rounded-lg px-4 py-3"
+            style={{
+              backgroundColor: 'rgba(63,185,80,0.08)',
+              border: '1px solid rgba(63,185,80,0.25)',
+            }}
+          >
+            <div className="flex items-center gap-2 mb-1.5">
+              <span
+                className="w-2 h-2 rounded-full flex-shrink-0"
+                style={{ backgroundColor: 'var(--tf-success)', animation: 'pulse-dot 1.4s ease-in-out infinite' }}
+              />
+              <h4 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--tf-success)' }}>
+                Currently Working On
+              </h4>
+            </div>
+            <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text)' }}>
+              {liveInfo.task || 'Active (no task detail)'}
+            </p>
+            <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+              Since {new Date(liveInfo.since).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+              {' '}&middot;{' '}
+              {liveInfo.flow === 'down' ? 'Delegated' : liveInfo.flow === 'up' ? 'Reporting back' : 'Working'}
+            </p>
+          </section>
+        )}
+
         {/* Description */}
         {agent.description && (
           <section aria-label="Agent description">
@@ -429,7 +523,7 @@ function DetailPanel({ agent, onClose }: DetailPanelProps) {
 }
 
 // ---- Main AgentPanel ----
-export default function AgentPanel({ agents, loading, microProjectMode = false }: AgentPanelProps) {
+export default function AgentPanel({ agents, loading, microProjectMode = false, liveAgents }: AgentPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailedAgent, setDetailedAgent] = useState<Agent | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -576,6 +670,7 @@ export default function AgentPanel({ agents, loading, microProjectMode = false }
                     selected={effectiveSelectedId === agent.id}
                     disabled={disabled}
                     onSelect={() => handleSelect(agent.id)}
+                    liveInfo={liveAgents?.get(agent.id)}
                   />
                 );
               })}
@@ -588,6 +683,7 @@ export default function AgentPanel({ agents, loading, microProjectMode = false }
           <div className="flex-1 overflow-hidden" style={{ minWidth: 0, minHeight: isNarrowViewport ? '420px' : 0 }}>
             <DetailPanel
               agent={selectedAgent}
+              liveInfo={liveAgents?.get(selectedAgent.id)}
               onClose={() => {
                 setSelectedId(null);
                 setDetailedAgent(null);
