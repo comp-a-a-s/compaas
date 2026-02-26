@@ -114,6 +114,29 @@ interface ProjectListCardProps {
   onSelect: () => void;
 }
 
+const AGENT_DISPLAY_NAMES: Record<string, string> = {
+  'ceo': 'CEO',
+  'cto': 'CTO',
+  'cfo': 'CFO',
+  'ciso': 'CISO',
+  'vp-product': 'CPO',
+  'vp-engineering': 'VP Eng',
+  'chief-researcher': 'Researcher',
+  'lead-backend': 'Backend',
+  'lead-frontend': 'Frontend',
+  'lead-designer': 'Designer',
+  'qa-lead': 'QA',
+  'devops': 'DevOps',
+  'security-engineer': 'Security',
+  'data-engineer': 'Data',
+  'tech-writer': 'Writer',
+};
+
+function resolveTeamName(raw: string): string {
+  const lower = raw.toLowerCase().trim();
+  return AGENT_DISPLAY_NAMES[lower] || raw;
+}
+
 function statusAccent(status: string): string {
   const s = status.toLowerCase();
   if (s === 'active')    return 'var(--tf-success)';
@@ -211,29 +234,68 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
                 <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" /><circle cx="9" cy="7" r="4" />
                 <path d="M23 21v-2a4 4 0 00-3-3.87" /><path d="M16 3.13a4 4 0 010 7.75" />
               </svg>
-              <span>{teamNames.join(', ')}</span>
+              <span>{teamNames.map(resolveTeamName).join(', ')}</span>
             </div>
           )}
 
           {/* How to run */}
           {project.run_instructions && (
-            <div
-              className="text-xs rounded-md px-2 py-1.5"
-              style={{
-                backgroundColor: 'var(--tf-bg)',
-                border: '1px solid var(--tf-border)',
-                color: 'var(--tf-text-secondary)',
-                fontFamily: 'monospace',
-                fontSize: '10px',
-                lineHeight: '1.4',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                maxHeight: '48px',
-                overflow: 'hidden',
-              }}
-            >
-              {project.run_instructions}
+            <div style={{ position: 'relative' }}>
+              <div
+                className="text-xs rounded-md px-2 py-1.5"
+                style={{
+                  backgroundColor: 'var(--tf-bg)',
+                  border: '1px solid var(--tf-border)',
+                  color: 'var(--tf-text-secondary)',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: '10px',
+                  lineHeight: '1.4',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  maxHeight: '48px',
+                  overflow: 'hidden',
+                  paddingRight: '28px',
+                }}
+              >
+                {project.run_instructions}
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigator.clipboard.writeText(project.run_instructions!);
+                  const btn = e.currentTarget;
+                  btn.textContent = '✓';
+                  setTimeout(() => { btn.textContent = '⎘'; }, 1200);
+                }}
+                title="Copy to clipboard"
+                style={{
+                  position: 'absolute',
+                  top: '4px',
+                  right: '4px',
+                  width: '20px',
+                  height: '20px',
+                  borderRadius: '4px',
+                  border: '1px solid var(--tf-border)',
+                  backgroundColor: 'var(--tf-surface)',
+                  color: 'var(--tf-text-muted)',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                }}
+              >
+                ⎘
+              </button>
             </div>
+          )}
+
+          {/* Empty state when no details available */}
+          {!project.description && teamNames.length === 0 && !project.run_instructions && (
+            <p className="text-xs italic" style={{ color: 'var(--tf-text-muted)' }}>
+              No details yet — ask the CEO to plan this project.
+            </p>
           )}
         </div>
       </div>

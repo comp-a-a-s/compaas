@@ -1,5 +1,7 @@
 .env
 .env.local
+# Live company data is private — exclude it.
+# The company_data.example/ directory IS tracked and provides defaults for new clones.
 company_data/
 projects/
 __pycache__/

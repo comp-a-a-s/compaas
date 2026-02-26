@@ -1,0 +1,77 @@
+setup_complete: false
+user:
+  name: ""
+agents:
+  ceo: Marcus
+  cto: Elena
+  chief-researcher: Victor
+  ciso: Rachel
+  cfo: Jonathan
+  vp-product: Olivia
+  vp-engineering: David
+  lead-backend: James
+  lead-frontend: Priya
+  lead-designer: Lena
+  qa-lead: Carlos
+  devops: Nina
+  security-engineer: Alex
+  data-engineer: Maya
+  tech-writer: Tom
+ui:
+  theme: midnight
+  poll_interval_ms: 5000
+server:
+  host: ''
+  port: 0
+  auto_open_browser: true
+llm:
+  provider: anthropic
+  anthropic_mode: cli
+  openai_mode: apikey
+  base_url: https://api.anthropic.com/v1
+  model: claude-sonnet-4-20250514
+  api_key: ''
+  system_prompt: ''
+  proxy_enabled: false
+  proxy_url: http://localhost:4000
+chat_policy:
+  memory_scope: project
+  retention_days: 30
+  auto_summary_every_messages: 18
+feature_flags:
+  planning_approval_gate: true
+  structured_ceo_response: true
+  explain_delegation: true
+  no_delegation_mode: true
+  execution_intent_classifier: true
+  run_replay: true
+  memory_scopes: true
+  memory_retention: true
+  auto_chat_summarization: true
+  prompt_injection_guard: true
+  tool_budget_guardrails: true
+  diff_summary: true
+  github_advanced_controls: true
+  vercel_deploy_lifecycle: true
+  org_chart_advanced_layouts: true
+  ui_global_search: true
+  onboarding_tours: true
+integrations:
+  workspace_mode: local
+  github_token: ''
+  github_repo: ''
+  github_default_branch: master
+  github_auto_push: false
+  github_auto_pr: false
+  github_verified: false
+  github_verified_at: ''
+  github_last_error: ''
+  vercel_token: ''
+  vercel_team_id: ''
+  vercel_project_name: ''
+  vercel_default_target: preview
+  vercel_verified: false
+  vercel_verified_at: ''
+  vercel_last_error: ''
+  slack_token: ''
+  webhook_url: ''

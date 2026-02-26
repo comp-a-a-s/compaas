@@ -7,6 +7,7 @@ import os
 import time
 import yaml
 import pytest
+from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 from src.web.api import app
@@ -346,6 +347,86 @@ class TestListAgentsEndpoint:
         data = client.get("/api/agents").json()
         ceo_entries = [a for a in data if a["id"] == "ceo"]
         assert len(ceo_entries) == 1, "CEO should appear exactly once"
+
+    def test_each_agent_has_recent_activity_field(self, client):
+        data = client.get("/api/agents").json()
+        for agent in data:
+            assert "recent_activity" in agent, (
+                f"Agent '{agent.get('id')}' missing 'recent_activity' field"
+            )
+            assert isinstance(agent["recent_activity"], list), (
+                f"Agent '{agent.get('id')}' 'recent_activity' must be a list"
+            )
+
+    def test_recent_activity_empty_when_no_log(self, client):
+        # With no activity.log present, all agents should have an empty list.
+        data = client.get("/api/agents").json()
+        for agent in data:
+            assert agent["recent_activity"] == [], (
+                f"Agent '{agent.get('id')}' should have empty recent_activity with no log"
+            )
+
+    def test_activity_limit_default_is_five(self, client, temp_data_dir):
+        # Write more than 5 activity entries for a known agent and verify default cap.
+        import json as _json
+        import src.web.api as api_module
+        log_path = os.path.join(temp_data_dir, "activity.log")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with open(log_path, "w") as f:
+            for i in range(10):
+                f.write(_json.dumps({
+                    "agent": "ceo",
+                    "action": f"task_{i}",
+                    "timestamp": now_iso,
+                }) + "\n")
+
+        data = client.get("/api/agents").json()
+        ceo = next(a for a in data if a["id"] == "ceo")
+        assert len(ceo["recent_activity"]) <= 5, (
+            "Default activity_limit should cap recent_activity at 5 entries"
+        )
+
+    def test_activity_limit_parameter_is_respected(self, client, temp_data_dir):
+        # Write 20 activity entries and request a custom limit.
+        import json as _json
+        log_path = os.path.join(temp_data_dir, "activity.log")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with open(log_path, "w") as f:
+            for i in range(20):
+                f.write(_json.dumps({
+                    "agent": "ceo",
+                    "action": f"task_{i}",
+                    "timestamp": now_iso,
+                }) + "\n")
+
+        for limit in (0, 1, 3, 10):
+            data = client.get(f"/api/agents?activity_limit={limit}").json()
+            ceo = next(a for a in data if a["id"] == "ceo")
+            assert len(ceo["recent_activity"]) <= limit, (
+                f"activity_limit={limit} should cap recent_activity at {limit} entries, "
+                f"got {len(ceo['recent_activity'])}"
+            )
+
+    def test_activity_limit_zero_returns_empty_lists(self, client, temp_data_dir):
+        import json as _json
+        log_path = os.path.join(temp_data_dir, "activity.log")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with open(log_path, "w") as f:
+            f.write(_json.dumps({"agent": "ceo", "action": "work", "timestamp": now_iso}) + "\n")
+
+        data = client.get("/api/agents?activity_limit=0").json()
+        for agent in data:
+            assert agent["recent_activity"] == [], (
+                f"activity_limit=0 should yield empty recent_activity for '{agent.get('id')}'"
+            )
+
+    def test_activity_limit_rejects_value_above_50(self, client):
+        response = client.get("/api/agents?activity_limit=51")
+        assert response.status_code == 422, "activity_limit > 50 should be rejected with 422"
+
+    def test_activity_limit_rejects_negative_value(self, client):
+        response = client.get("/api/agents?activity_limit=-1")
+        assert response.status_code == 422, "Negative activity_limit should be rejected with 422"
 
 
 # ---------------------------------------------------------------------------
