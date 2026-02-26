@@ -569,6 +569,53 @@ export default function App() {
     return () => clearInterval(interval);
   }, [activeTab, loadProjects, showWizard, taskPollIntervalMs]);
 
+  // ---- Debounced project refresh on activity events ----
+  const pendingRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedRefreshProjects = useCallback(() => {
+    if (pendingRefreshRef.current) return; // already scheduled
+    pendingRefreshRef.current = setTimeout(() => {
+      pendingRefreshRef.current = null;
+      loadProjects(true);
+    }, 2000);
+  }, [loadProjects]);
+
+  // ---- Live agent activity for TeamPulse + org chart ----
+  const LIVE_AGENT_EXPIRY_MS = 120_000; // 2 minutes — delegations often run longer
+
+  const handleAgentActivity = useCallback((agentId: string, task: string, flow: 'down' | 'up' | 'working') => {
+    // Always normalize to slug format (spaces → dashes) so keys match ORG_TREE IDs
+    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
+    if (!normalized) return;
+    setLiveAgents((prev) => {
+      const existing = prev.get(normalized);
+      // Deduplicate: skip if same agent+flow was updated within 2 seconds
+      // to avoid redundant re-renders from WebSocket + SSE dual delivery.
+      if (existing && existing.flow === flow) {
+        const elapsed = Date.now() - new Date(existing.since).getTime();
+        if (elapsed < 2000) return prev;
+      }
+      const next = new Map(prev);
+      next.set(normalized, {
+        agentId: normalized,
+        task: task.slice(0, 100),
+        since: new Date().toISOString(),
+        flow,
+      });
+      return next;
+    });
+  }, []);
+
+  const removeLiveAgent = useCallback((agentId: string) => {
+    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
+    if (!normalized) return;
+    setLiveAgents((prev) => {
+      if (!prev.has(normalized)) return prev;
+      const next = new Map(prev);
+      next.delete(normalized);
+      return next;
+    });
+  }, []);
+
   // ---- SSE activity stream ----
   useEffect(() => {
     if (showWizard) return;
@@ -659,53 +706,6 @@ export default function App() {
       }
     };
   }, [showWizard, handleAgentActivity, removeLiveAgent, debouncedRefreshProjects]);
-
-  // ---- Debounced project refresh on activity events ----
-  const pendingRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const debouncedRefreshProjects = useCallback(() => {
-    if (pendingRefreshRef.current) return; // already scheduled
-    pendingRefreshRef.current = setTimeout(() => {
-      pendingRefreshRef.current = null;
-      loadProjects(true);
-    }, 2000);
-  }, [loadProjects]);
-
-  // ---- Live agent activity for TeamPulse + org chart ----
-  const LIVE_AGENT_EXPIRY_MS = 120_000; // 2 minutes — delegations often run longer
-
-  const handleAgentActivity = useCallback((agentId: string, task: string, flow: 'down' | 'up' | 'working') => {
-    // Always normalize to slug format (spaces → dashes) so keys match ORG_TREE IDs
-    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
-    if (!normalized) return;
-    setLiveAgents((prev) => {
-      const existing = prev.get(normalized);
-      // Deduplicate: skip if same agent+flow was updated within 2 seconds
-      // to avoid redundant re-renders from WebSocket + SSE dual delivery.
-      if (existing && existing.flow === flow) {
-        const elapsed = Date.now() - new Date(existing.since).getTime();
-        if (elapsed < 2000) return prev;
-      }
-      const next = new Map(prev);
-      next.set(normalized, {
-        agentId: normalized,
-        task: task.slice(0, 100),
-        since: new Date().toISOString(),
-        flow,
-      });
-      return next;
-    });
-  }, []);
-
-  const removeLiveAgent = useCallback((agentId: string) => {
-    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
-    if (!normalized) return;
-    setLiveAgents((prev) => {
-      if (!prev.has(normalized)) return prev;
-      const next = new Map(prev);
-      next.delete(normalized);
-      return next;
-    });
-  }, []);
 
   // Auto-expire stale live agents
   useEffect(() => {
