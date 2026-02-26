@@ -1639,6 +1639,16 @@ def _humanize_llm_runtime_error(
     )
 
     if auth_error:
+        if provider == "anthropic" and mode == "cli":
+            return (
+                "Anthropic authentication failed. "
+                "Run `claude auth login` to refresh your CLI credentials, then retry."
+            )
+        if provider == "anthropic" and mode == "apikey":
+            return (
+                "Anthropic API authentication failed. "
+                "Add a valid key in Settings -> AI -> Anthropic, then retry."
+            )
         if provider == "openai" and mode == "codex":
             return (
                 "OpenAI authentication is missing for Codex CLI. "

@@ -37,7 +37,7 @@ interface ActionInfo { label: string; icon: string; color: string; }
 
 function prettyAgentName(raw: string): string {
   // Micro-agents: "micro-backend-db-schema" → "Backend (db schema)"
-  const microMatch = raw.match(/^micro-(\w[\w-]*?)-([\w][\w-]*)$/i);
+  const microMatch = raw.match(/^micro-([^-]+)-(.+)$/i);
   if (microMatch) {
     const parent = microMatch[1].replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
     const spec = microMatch[2].replace(/-/g, ' ');
@@ -1304,7 +1304,7 @@ export default function ChatPanel({
                   if (finishedAgent) onAgentRemove?.(finishedAgent);
                 }
 
-                if (String(payload.state || '').toLowerCase() === 'started') {
+                if (detailState === 'started') {
                   setActionLog((prev) => {
                     if (prev.length === 0) return prev;
                     const last = prev[prev.length - 1];
