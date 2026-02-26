@@ -96,6 +96,9 @@ class ProjectService:
         Returns ``(project, created)``.
         """
         if idempotency_key:
+            # Hold the lock for the entire check-then-create to prevent two
+            # concurrent requests with the same key from both passing the
+            # duplicate check and creating separate projects.
             with FileLock(self.idempotency_path):
                 mapped = self._load_project_idempotency()
                 existing_id = mapped.get(idempotency_key)
@@ -104,22 +107,30 @@ class ProjectService:
                     if existing:
                         return existing, False
 
-        project_id = self.state_manager.create_project(
-            name,
-            description,
-            project_type,
-            workspace_path=workspace_path,
-            delivery_mode=delivery_mode,
-            github_repo=github_repo,
-            github_branch=github_branch,
-        )
-        project = self.state_manager.get_project(project_id) or {"id": project_id, "name": name}
-        self.ensure_metadata(project_id)
-        if idempotency_key:
-            with FileLock(self.idempotency_path):
-                mapped = self._load_project_idempotency()
+                project_id = self.state_manager.create_project(
+                    name,
+                    description,
+                    project_type,
+                    workspace_path=workspace_path,
+                    delivery_mode=delivery_mode,
+                    github_repo=github_repo,
+                    github_branch=github_branch,
+                )
                 mapped[idempotency_key] = project_id
                 atomic_yaml_write(self.idempotency_path, {"keys": mapped})
+        else:
+            project_id = self.state_manager.create_project(
+                name,
+                description,
+                project_type,
+                workspace_path=workspace_path,
+                delivery_mode=delivery_mode,
+                github_repo=github_repo,
+                github_branch=github_branch,
+            )
+
+        project = self.state_manager.get_project(project_id) or {"id": project_id, "name": name}
+        self.ensure_metadata(project_id)
         return project, True
 
     def get_metadata(self, project_id: str) -> dict[str, Any]:

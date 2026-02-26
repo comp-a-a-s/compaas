@@ -42,8 +42,10 @@ export default function TeamPulse({ agents, liveAgents, isMobile = false }: Team
   const activeList = useMemo(() => {
     const agentMap = new Map(agents.map((a) => [a.id, a]));
     const result: Array<{ agent: Agent; info: ActiveAgentInfo }> = [];
-    for (const [id, info] of liveAgents) {
-      const agent = agentMap.get(id);
+    for (const [rawId, info] of liveAgents) {
+      // Normalize key: spaces → dashes to match agent.id format
+      const slug = rawId.trim().toLowerCase().replace(/\s+/g, '-');
+      const agent = agentMap.get(slug) || agentMap.get(rawId);
       if (agent) {
         result.push({ agent, info });
       }

@@ -1297,11 +1297,16 @@ export default function ChatPanel({
                 } else if (detailFlow === 'up' && detailSource && detailSource !== 'ceo') {
                   onAgentActivity?.(detailSource, detailTask, 'up');
                 }
-                // Remove agents immediately on completion/failure via WebSocket
-                // so the UI doesn't wait for the SSE path or the 120s timeout.
-                if (detailState === 'completed' || detailState === 'failed' || detailFlow === 'failed') {
+                // On completion: transition agent to 'up' flow instead of removing,
+                // keeping the org chart node lit for the full expiry window.
+                if (detailState === 'completed' || detailState === 'failed') {
                   const finishedAgent = detailSource !== 'ceo' ? detailSource : (detailTarget !== 'ceo' ? detailTarget : '');
-                  if (finishedAgent) onAgentRemove?.(finishedAgent);
+                  if (finishedAgent) onAgentActivity?.(finishedAgent, detailTask || 'Completed', 'up');
+                }
+                // Only hard-remove on explicit failure flow (timed-out delegations)
+                if (detailFlow === 'failed') {
+                  const failedAgent = detailSource !== 'ceo' ? detailSource : (detailTarget !== 'ceo' ? detailTarget : '');
+                  if (failedAgent) onAgentRemove?.(failedAgent);
                 }
 
                 if (detailState === 'started') {

@@ -236,6 +236,7 @@ export default function App() {
   const [newProjectRepo, setNewProjectRepo] = useState('');
   const [newProjectBranch, setNewProjectBranch] = useState('master');
   const [creatingProject, setCreatingProject] = useState(false);
+  const [createProjectError, setCreateProjectError] = useState('');
 
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
@@ -411,12 +412,18 @@ export default function App() {
     setNewProjectMode(defaultMode === 'github' ? 'github' : 'local');
     setNewProjectRepo(config?.integrations?.github_repo?.trim() || '');
     setNewProjectBranch(config?.integrations?.github_default_branch?.trim() || 'master');
+    setCreateProjectError('');
     setShowCreateProject(true);
   }, [config?.integrations?.workspace_mode, config?.integrations?.github_repo, config?.integrations?.github_default_branch]);
 
   const submitCreateProject = useCallback(async () => {
     if (!newProjectName.trim() || creatingProject) return;
+    if (newProjectMode === 'github' && !newProjectRepo.trim()) {
+      setCreateProjectError('GitHub mode requires a repository (owner/repo).');
+      return;
+    }
     setCreatingProject(true);
+    setCreateProjectError('');
     const created = await createProject({
       name: newProjectName.trim(),
       description: `Created by ${config?.user?.name || 'Chairman'}.`,
@@ -432,8 +439,11 @@ export default function App() {
         openConnectorSetup('github');
         return;
       }
+      setCreateProjectError(created.error?.message || 'Unable to create project. Please try again.');
       return;
     }
+    setCreateProjectError('');
+    setNewProjectName('');
     setActiveProjectId(created.project.id);
     setShowCreateProject(false);
     setSettingsConnectorFocus(null);
@@ -460,6 +470,43 @@ export default function App() {
           const merged = [...newEvents, ...prev].slice(0, MAX_EVENTS);
           return merged;
         });
+        // Also hydrate liveAgents from seed events so the org chart + TeamPulse
+        // show active agents immediately without waiting for the first SSE tick.
+        const SEED_WINDOW_MS = 180_000;
+        const now = Date.now();
+        const toSlug = (v: string) => v.trim().toLowerCase().replace(/\s+/g, '-');
+        // Collect the latest state per agent: a COMPLETED/FAILED clears an earlier STARTED.
+        const agentStates = new Map<string, { task: string; flow: 'down' | 'up' | 'working' }>();
+        for (const evt of fetched) {
+          const ts = evt.timestamp ? new Date(evt.timestamp).getTime() : 0;
+          if (now - ts > SEED_WINDOW_MS) continue;
+          const meta = (evt.metadata || {}) as Record<string, unknown>;
+          const action = (evt.action || '').toUpperCase();
+          const source = toSlug(String(meta.source_agent || ''));
+          const target = toSlug(String(meta.target_agent || ''));
+          const evtAgent = toSlug(String(evt.agent || ''));
+          const task = String(meta.task || evt.detail || '').trim();
+          if (action === 'DELEGATED' && target && target !== 'ceo') {
+            agentStates.set(target, { task, flow: 'down' });
+          } else if (action === 'STARTED') {
+            const ag = (target && target !== 'ceo') ? target : (source && source !== 'ceo') ? source : (evtAgent !== 'ceo' ? evtAgent : '');
+            if (ag) agentStates.set(ag, { task, flow: 'working' });
+          } else if (action === 'COMPLETED' || action === 'FAILED') {
+            const ag = (source && source !== 'ceo') ? source : (target && target !== 'ceo') ? target : (evtAgent !== 'ceo' ? evtAgent : '');
+            if (ag) agentStates.set(ag, { task: task || 'Completed', flow: 'up' });
+          }
+        }
+        if (agentStates.size > 0) {
+          setLiveAgents((prev) => {
+            const next = new Map(prev);
+            for (const [agentId, info] of agentStates) {
+              if (!next.has(agentId)) {
+                next.set(agentId, { agentId, task: info.task.slice(0, 100), since: new Date().toISOString(), flow: info.flow });
+              }
+            }
+            return next;
+          });
+        }
       }
     }).catch(() => {
       // no recent activity endpoint
@@ -552,28 +599,47 @@ export default function App() {
         const action = (event.action || '').toUpperCase();
         const state = String(meta.state || '').toLowerCase();
 
-        // Delegation flow: CEO → specialist
-        if (flow === 'down' && target && target !== 'ceo') {
-          handleAgentActivity(target, task, 'down');
-        } else if (flow === 'up' && source && source !== 'ceo') {
-          handleAgentActivity(source, task, 'up');
+        // Normalize agent key to canonical slug format (spaces → dashes)
+        const toSlug = (v: string) => v.trim().toLowerCase().replace(/\s+/g, '-');
+
+        // Resolve the affected non-CEO agent from metadata (prefer target for
+        // downward flow, source for upward) with eventAgent as last resort.
+        const agentDown = (target && target !== 'ceo') ? toSlug(target) : '';
+        const agentUp = (source && source !== 'ceo') ? toSlug(source) : '';
+        const agentAny = agentDown || agentUp || (eventAgent && eventAgent !== 'ceo' ? toSlug(eventAgent) : '');
+
+        // Each event should produce exactly ONE handleAgentActivity call to
+        // avoid conflicting flow values when multiple conditions overlap
+        // (e.g., a STARTED event with flow=down would fire both blocks).
+        let handled = false;
+
+        if (action === 'DELEGATED' && agentDown) {
+          handleAgentActivity(agentDown, task, 'down');
+          handled = true;
+        } else if (action === 'STARTED' && agentAny) {
+          // STARTED with flow=down means delegation start → use 'working'
+          // (the agent is actively working, not just delegated to).
+          handleAgentActivity(agentAny, task, 'working');
+          handled = true;
+        } else if ((action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') && agentAny) {
+          // Transition to 'up' instead of removing — keeps the org chart
+          // node lit for the full 120s expiry window.
+          handleAgentActivity(agentAny, task || 'Completed', 'up');
+          handled = true;
         }
-        // Fallback: DELEGATED action with a target agent
-        if (action === 'DELEGATED' && target && target !== 'ceo') {
-          handleAgentActivity(target, task, 'down');
+
+        // If no action-based match, fall back to metadata flow direction
+        if (!handled) {
+          if (flow === 'down' && agentDown) {
+            handleAgentActivity(agentDown, task, 'down');
+          } else if (flow === 'up' && agentUp) {
+            handleAgentActivity(agentUp, task, 'up');
+          }
         }
-        // Fallback: STARTED action on a non-CEO agent (agent was delegated to)
-        if (action === 'STARTED' && eventAgent && eventAgent !== 'ceo') {
-          handleAgentActivity(eventAgent, task, 'working');
-        }
-        // Remove agent from live map on COMPLETED or FAILED
-        if ((action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') && eventAgent && eventAgent !== 'ceo') {
-          removeLiveAgent(eventAgent);
-        }
-        // Also remove on failed flow (emitted by backend for timed-out delegations)
-        if (flow === 'failed' && (target || source)) {
-          const failedAgent = target !== 'ceo' ? target : source;
-          if (failedAgent && failedAgent !== 'ceo') removeLiveAgent(failedAgent);
+
+        // Only hard-remove on explicit failure flow (timed-out delegations)
+        if (flow === 'failed' && agentAny) {
+          removeLiveAgent(agentAny);
         }
 
         // Trigger reactive project refresh on data-changing events
@@ -608,7 +674,8 @@ export default function App() {
   const LIVE_AGENT_EXPIRY_MS = 120_000; // 2 minutes — delegations often run longer
 
   const handleAgentActivity = useCallback((agentId: string, task: string, flow: 'down' | 'up' | 'working') => {
-    const normalized = agentId.toLowerCase().trim();
+    // Always normalize to slug format (spaces → dashes) so keys match ORG_TREE IDs
+    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
     if (!normalized) return;
     setLiveAgents((prev) => {
       const existing = prev.get(normalized);
@@ -630,7 +697,7 @@ export default function App() {
   }, []);
 
   const removeLiveAgent = useCallback((agentId: string) => {
-    const normalized = agentId.toLowerCase().trim();
+    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
     if (!normalized) return;
     setLiveAgents((prev) => {
       if (!prev.has(normalized)) return prev;
@@ -1112,6 +1179,12 @@ export default function App() {
                   }}
                 />
               </div>
+            )}
+            {/* Error message */}
+            {createProjectError && (
+              <p style={{ fontSize: '12px', color: 'var(--tf-error, #f87171)', margin: '0 0 10px 0' }}>
+                {createProjectError}
+              </p>
             )}
             {/* Buttons */}
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>

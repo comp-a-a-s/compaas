@@ -112,8 +112,12 @@ export async function saveSetupConfig(config: Partial<AppConfig>): Promise<boole
       body: JSON.stringify(config),
       signal: controller.signal,
     });
+    if (!res.ok) {
+      console.warn(`[COMPaaS] Setup save failed: ${res.status} ${res.statusText}`);
+    }
     return res.ok;
-  } catch {
+  } catch (err) {
+    console.warn('[COMPaaS] Setup save error:', err);
     return false;
   } finally {
     clearTimeout(timeoutId);
@@ -243,12 +247,15 @@ export async function createProject(data: {
     }
     const payload = await res.json();
     return payload as { status: 'ok'; project?: Project; plan_packet?: PlanningPacketStatus };
-  } catch {
+  } catch (err) {
+    const isTimeout = err instanceof DOMException && err.name === 'AbortError';
     return {
       status: 'error',
       error: {
         status: 0,
-        message: 'Network error while creating project.',
+        message: isTimeout
+          ? 'Request timed out. The project may have been created — check the Projects list before retrying.'
+          : 'Network error while creating project.',
       },
     };
   } finally {
