@@ -112,8 +112,12 @@ export async function saveSetupConfig(config: Partial<AppConfig>): Promise<boole
       body: JSON.stringify(config),
       signal: controller.signal,
     });
+    if (!res.ok) {
+      console.warn(`[COMPaaS] Setup save failed: ${res.status} ${res.statusText}`);
+    }
     return res.ok;
-  } catch {
+  } catch (err) {
+    console.warn('[COMPaaS] Setup save error:', err);
     return false;
   } finally {
     clearTimeout(timeoutId);

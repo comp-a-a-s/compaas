@@ -265,7 +265,8 @@ class TestCorsConfiguration:
         assert "*" not in origins, "CORS allow_origins must not include wildcard '*'"
         assert origins, "CORS allow_origins should not be empty"
 
-    def test_cors_only_allows_get_method(self):
+    def test_cors_allows_standard_methods(self):
+        """Default CORS policy allows standard HTTP methods needed by the dashboard."""
         from src.web.api import app
         cors_middleware = None
         for middleware in app.user_middleware:
@@ -281,7 +282,10 @@ class TestCorsConfiguration:
         else:
             methods = cors_middleware[1].get("allow_methods", [])
 
-        assert methods == ["GET"], f"CORS should only allow GET, got: {methods}"
+        # Dashboard needs GET, POST, PATCH, PUT, DELETE, OPTIONS
+        for required in ("GET", "POST", "PATCH", "DELETE"):
+            assert required in methods, f"CORS must allow {required}, got: {methods}"
+        assert "*" not in methods, "CORS should not use wildcard methods"
 
     def test_default_origins_are_localhost_only(self):
         """When COMPAAS_CORS_ORIGINS env var is not set, only localhost origins allowed."""

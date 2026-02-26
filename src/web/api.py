@@ -77,11 +77,12 @@ _allowed_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()
     "http://localhost:5173",
     "http://localhost:8420",
 ]
-_cors_methods_env = os.environ.get(
-    "COMPAAS_CORS_METHODS",
-    "GET",
+_cors_methods_env = os.environ.get("COMPAAS_CORS_METHODS", "")
+_allowed_methods = (
+    [m.strip().upper() for m in _cors_methods_env.split(",") if m.strip()]
+    if _cors_methods_env
+    else ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"]
 )
-_allowed_methods = [m.strip().upper() for m in _cors_methods_env.split(",") if m.strip()] or ["GET"]
 
 app.add_middleware(
     CORSMiddleware,
