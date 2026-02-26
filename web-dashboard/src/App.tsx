@@ -562,15 +562,18 @@ export default function App() {
         const action = (event.action || '').toUpperCase();
         const state = String(meta.state || '').toLowerCase();
 
+        // Normalize agent key to canonical slug format (spaces → dashes)
+        const toSlug = (v: string) => v.trim().toLowerCase().replace(/\s+/g, '-');
+
         // Delegation flow: CEO → specialist
         if (flow === 'down' && target && target !== 'ceo') {
-          handleAgentActivity(target, task, 'down');
+          handleAgentActivity(toSlug(target), task, 'down');
         } else if (flow === 'up' && source && source !== 'ceo') {
-          handleAgentActivity(source, task, 'up');
+          handleAgentActivity(toSlug(source), task, 'up');
         }
         // Fallback: DELEGATED action with a target agent
         if (action === 'DELEGATED' && target && target !== 'ceo') {
-          handleAgentActivity(target, task, 'down');
+          handleAgentActivity(toSlug(target), task, 'down');
         }
         // Fallback: STARTED action on a non-CEO agent (agent was delegated to)
         // Prefer metadata agent ID (slug format like "lead-backend") over eventAgent
@@ -578,27 +581,26 @@ export default function App() {
         if (action === 'STARTED') {
           const startedAgent = (target && target !== 'ceo') ? target : (source && source !== 'ceo') ? source : '';
           if (startedAgent) {
-            handleAgentActivity(startedAgent, task, 'working');
+            handleAgentActivity(toSlug(startedAgent), task, 'working');
           } else if (eventAgent && eventAgent !== 'ceo') {
-            handleAgentActivity(eventAgent.replace(/ /g, '-'), task, 'working');
+            handleAgentActivity(toSlug(eventAgent), task, 'working');
           }
         }
-        // Remove agent from live map on COMPLETED or FAILED
-        // Use metadata agent IDs (slug format) when available; fall back to
-        // eventAgent with dash normalization since normalizeAgent() converts
-        // slugs like "lead-backend" to display names "Lead Backend".
+        // On COMPLETED or FAILED: transition agent to 'up' flow instead of
+        // removing — keeps the org chart node lit for the full expiry window
+        // (120s) so the user sees which agents recently worked.
         if (action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') {
           const doneAgent = (source && source !== 'ceo') ? source : (target && target !== 'ceo') ? target : '';
           if (doneAgent) {
-            removeLiveAgent(doneAgent);
+            handleAgentActivity(toSlug(doneAgent), task || 'Completed', 'up');
           } else if (eventAgent && eventAgent !== 'ceo') {
-            removeLiveAgent(eventAgent.replace(/ /g, '-'));
+            handleAgentActivity(toSlug(eventAgent), task || 'Completed', 'up');
           }
         }
-        // Also remove on failed flow (emitted by backend for timed-out delegations)
+        // Only hard-remove on explicit failure flow (timed-out delegations)
         if (flow === 'failed' && (target || source)) {
           const failedAgent = target !== 'ceo' ? target : source;
-          if (failedAgent && failedAgent !== 'ceo') removeLiveAgent(failedAgent);
+          if (failedAgent && failedAgent !== 'ceo') removeLiveAgent(toSlug(failedAgent));
         }
 
         // Trigger reactive project refresh on data-changing events
@@ -633,7 +635,8 @@ export default function App() {
   const LIVE_AGENT_EXPIRY_MS = 120_000; // 2 minutes — delegations often run longer
 
   const handleAgentActivity = useCallback((agentId: string, task: string, flow: 'down' | 'up' | 'working') => {
-    const normalized = agentId.toLowerCase().trim();
+    // Always normalize to slug format (spaces → dashes) so keys match ORG_TREE IDs
+    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
     if (!normalized) return;
     setLiveAgents((prev) => {
       const existing = prev.get(normalized);
@@ -655,7 +658,7 @@ export default function App() {
   }, []);
 
   const removeLiveAgent = useCallback((agentId: string) => {
-    const normalized = agentId.toLowerCase().trim();
+    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
     if (!normalized) return;
     setLiveAgents((prev) => {
       if (!prev.has(normalized)) return prev;

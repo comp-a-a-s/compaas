@@ -69,9 +69,14 @@ function modelColor(model: string): string {
 }
 
 // ---- Recent activity helpers ----
+// Normalize agent identifier to canonical slug format (spaces → dashes, lowercase)
+function toAgentSlug(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\s+/g, '-');
+}
+
 function isAgentRecentlyActive(agentId: string, agentName: string, events: ActivityEvent[]): boolean {
   const now = Date.now();
-  const WINDOW_MS = 90_000;
+  const WINDOW_MS = 180_000; // 3 minutes — wide enough to survive page navigation delays
   const idLower = agentId.toLowerCase();
   const nameLower = agentName.toLowerCase();
   // normalizeAgent() converts slugs like "lead-backend" to display names "Lead Backend",
@@ -82,14 +87,17 @@ function isAgentRecentlyActive(agentId: string, agentName: string, events: Activ
     const evtTime = new Date(evt.timestamp).getTime();
     if (now - evtTime > WINDOW_MS) return false;
     const evtAgent = (evt.agent ?? '').toLowerCase();
+    const evtAgentSlug = toAgentSlug(evtAgent);
     // Check direct agent match (slug, space-separated slug, or personal name)
-    if (evtAgent === idLower || evtAgent === idSpaced || evtAgent === nameLower || evtAgent.includes(nameLower)) return true;
+    if (evtAgent === idLower || evtAgent === idSpaced || evtAgentSlug === idLower || evtAgent === nameLower || evtAgent.includes(nameLower)) return true;
     // Also check delegation metadata — agents appear as target/source in delegation events
     const meta = evt.metadata || {};
     const target = String(meta.target_agent ?? '').toLowerCase();
     const source = String(meta.source_agent ?? '').toLowerCase();
-    if (target === idLower || target === nameLower) return true;
-    if (source === idLower || source === nameLower) return true;
+    const targetSlug = toAgentSlug(target);
+    const sourceSlug = toAgentSlug(source);
+    if (target === idLower || targetSlug === idLower || target === nameLower) return true;
+    if (source === idLower || sourceSlug === idLower || source === nameLower) return true;
     return false;
   });
 }
@@ -672,6 +680,24 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     return byProject.length > 0 ? byProject : events;
   }, [events, activeProjectId]);
 
+  // Map of agent aliases (name, role, space-separated slug) → canonical agent ID.
+  // Must be declared before recentActiveIds which depends on it.
+  const aliasToId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agent of agents) {
+      const idLower = agent.id.toLowerCase();
+      map.set(idLower, agent.id);
+      map.set(agent.name.toLowerCase(), agent.id);
+      map.set(agent.role.toLowerCase(), agent.id);
+      // Also map space-separated form of slug: "lead backend" → "lead-backend"
+      const spaced = idLower.replace(/-/g, ' ');
+      if (spaced !== idLower) {
+        map.set(spaced, agent.id);
+      }
+    }
+    return map;
+  }, [agents]);
+
   // Set of recently active IDs inferred from live activity events + liveAgents.
   const recentActiveIds = useMemo(() => {
     const s = new Set<string>();
@@ -681,15 +707,19 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
         s.add(agent.id);
       }
     }
-    // Merge real-time delegation tracking from App.tsx
+    // Merge real-time delegation tracking from App.tsx.
+    // Normalize keys to canonical slug form (spaces → dashes) and resolve
+    // via aliasToId so that keys like "lead backend" map to "lead-backend".
     if (liveAgents) {
-      for (const [id] of liveAgents) {
-        if (microProjectMode && id !== 'ceo') continue;
-        s.add(id);
+      for (const [rawId] of liveAgents) {
+        const slug = toAgentSlug(rawId);
+        const canonicalId = aliasToId.get(slug) || aliasToId.get(rawId) || slug;
+        if (microProjectMode && canonicalId !== 'ceo') continue;
+        s.add(canonicalId);
       }
     }
     return s;
-  }, [agents, scopedEvents, microProjectMode, liveAgents]);
+  }, [agents, scopedEvents, microProjectMode, liveAgents, aliasToId]);
 
   // Broader active set to drive connector highlights even when events are sparse.
   const activeIds = useMemo(() => {
@@ -701,16 +731,6 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     }
     return s;
   }, [agents, recentActiveIds, microProjectMode]);
-
-  const aliasToId = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const agent of agents) {
-      map.set(agent.id.toLowerCase(), agent.id);
-      map.set(agent.name.toLowerCase(), agent.id);
-      map.set(agent.role.toLowerCase(), agent.id);
-    }
-    return map;
-  }, [agents]);
 
   const latestFlow = useMemo((): {
     edgeDirections: Map<string, FlowDirection>;
@@ -813,12 +833,14 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     }
     // Merge liveAgents: add flow edges + task labels for actively delegated agents
     if (liveAgents) {
-      for (const [agentId, info] of liveAgents) {
-        if (agentId === 'ceo' || (microProjectMode && agentId !== 'ceo')) continue;
+      for (const [rawId, info] of liveAgents) {
+        const slug = toAgentSlug(rawId);
+        const canonicalId = aliasToId.get(slug) || aliasToId.get(rawId) || slug;
+        if (canonicalId === 'ceo' || (microProjectMode && canonicalId !== 'ceo')) continue;
         const direction: FlowDirection = info.flow === 'up' ? 'up' : 'down';
-        buildFlowToAgent(agentId, direction, info.task || '');
-        if (info.task && !activeTaskByAgent.has(agentId)) {
-          activeTaskByAgent.set(agentId, info.task.slice(0, 70));
+        buildFlowToAgent(canonicalId, direction, info.task || '');
+        if (info.task && !activeTaskByAgent.has(canonicalId)) {
+          activeTaskByAgent.set(canonicalId, info.task.slice(0, 70));
         }
       }
     }
