@@ -470,6 +470,43 @@ export default function App() {
           const merged = [...newEvents, ...prev].slice(0, MAX_EVENTS);
           return merged;
         });
+        // Also hydrate liveAgents from seed events so the org chart + TeamPulse
+        // show active agents immediately without waiting for the first SSE tick.
+        const SEED_WINDOW_MS = 180_000;
+        const now = Date.now();
+        const toSlug = (v: string) => v.trim().toLowerCase().replace(/\s+/g, '-');
+        // Collect the latest state per agent: a COMPLETED/FAILED clears an earlier STARTED.
+        const agentStates = new Map<string, { task: string; flow: 'down' | 'up' | 'working' }>();
+        for (const evt of fetched) {
+          const ts = evt.timestamp ? new Date(evt.timestamp).getTime() : 0;
+          if (now - ts > SEED_WINDOW_MS) continue;
+          const meta = (evt.metadata || {}) as Record<string, unknown>;
+          const action = (evt.action || '').toUpperCase();
+          const source = toSlug(String(meta.source_agent || ''));
+          const target = toSlug(String(meta.target_agent || ''));
+          const evtAgent = toSlug(String(evt.agent || ''));
+          const task = String(meta.task || evt.detail || '').trim();
+          if (action === 'DELEGATED' && target && target !== 'ceo') {
+            agentStates.set(target, { task, flow: 'down' });
+          } else if (action === 'STARTED') {
+            const ag = (target && target !== 'ceo') ? target : (source && source !== 'ceo') ? source : (evtAgent !== 'ceo' ? evtAgent : '');
+            if (ag) agentStates.set(ag, { task, flow: 'working' });
+          } else if (action === 'COMPLETED' || action === 'FAILED') {
+            const ag = (source && source !== 'ceo') ? source : (target && target !== 'ceo') ? target : (evtAgent !== 'ceo' ? evtAgent : '');
+            if (ag) agentStates.set(ag, { task: task || 'Completed', flow: 'up' });
+          }
+        }
+        if (agentStates.size > 0) {
+          setLiveAgents((prev) => {
+            const next = new Map(prev);
+            for (const [agentId, info] of agentStates) {
+              if (!next.has(agentId)) {
+                next.set(agentId, { agentId, task: info.task.slice(0, 100), since: new Date().toISOString(), flow: info.flow });
+              }
+            }
+            return next;
+          });
+        }
       }
     }).catch(() => {
       // no recent activity endpoint
