@@ -676,8 +676,25 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
 
   const scopedEvents = useMemo(() => {
     if (!activeProjectId) return events;
-    const byProject = events.filter((evt) => (evt.project_id || '') === activeProjectId);
-    return byProject.length > 0 ? byProject : events;
+    // Filter to the active project, but ALWAYS include delegation events
+    // (DELEGATED/STARTED/COMPLETED with agent flow metadata) regardless of
+    // project_id.  The backend may resolve to a different project than the
+    // frontend's activeProjectId, which would silently drop delegation events
+    // and prevent agents from lighting up in the org chart.
+    const result = events.filter((evt) => {
+      if ((evt.project_id || '') === activeProjectId) return true;
+      const meta = (evt.metadata || {}) as Record<string, unknown>;
+      const flow = String(meta.flow || '').toLowerCase();
+      if (flow === 'down' || flow === 'up') return true;
+      const action = (evt.action || '').toUpperCase();
+      if (action === 'DELEGATED' || action === 'STARTED' || action === 'COMPLETED') {
+        const target = String(meta.target_agent || '').toLowerCase();
+        const source = String(meta.source_agent || '').toLowerCase();
+        if ((target && target !== 'ceo') || (source && source !== 'ceo')) return true;
+      }
+      return false;
+    });
+    return result.length > 0 ? result : events;
   }, [events, activeProjectId]);
 
   // Map of agent aliases (name, role, space-separated slug) → canonical agent ID.

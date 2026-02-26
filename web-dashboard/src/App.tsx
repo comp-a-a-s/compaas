@@ -602,42 +602,44 @@ export default function App() {
         // Normalize agent key to canonical slug format (spaces → dashes)
         const toSlug = (v: string) => v.trim().toLowerCase().replace(/\s+/g, '-');
 
-        // Delegation flow: CEO → specialist
-        if (flow === 'down' && target && target !== 'ceo') {
-          handleAgentActivity(toSlug(target), task, 'down');
-        } else if (flow === 'up' && source && source !== 'ceo') {
-          handleAgentActivity(toSlug(source), task, 'up');
+        // Resolve the affected non-CEO agent from metadata (prefer target for
+        // downward flow, source for upward) with eventAgent as last resort.
+        const agentDown = (target && target !== 'ceo') ? toSlug(target) : '';
+        const agentUp = (source && source !== 'ceo') ? toSlug(source) : '';
+        const agentAny = agentDown || agentUp || (eventAgent && eventAgent !== 'ceo' ? toSlug(eventAgent) : '');
+
+        // Each event should produce exactly ONE handleAgentActivity call to
+        // avoid conflicting flow values when multiple conditions overlap
+        // (e.g., a STARTED event with flow=down would fire both blocks).
+        let handled = false;
+
+        if (action === 'DELEGATED' && agentDown) {
+          handleAgentActivity(agentDown, task, 'down');
+          handled = true;
+        } else if (action === 'STARTED' && agentAny) {
+          // STARTED with flow=down means delegation start → use 'working'
+          // (the agent is actively working, not just delegated to).
+          handleAgentActivity(agentAny, task, 'working');
+          handled = true;
+        } else if ((action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') && agentAny) {
+          // Transition to 'up' instead of removing — keeps the org chart
+          // node lit for the full 120s expiry window.
+          handleAgentActivity(agentAny, task || 'Completed', 'up');
+          handled = true;
         }
-        // Fallback: DELEGATED action with a target agent
-        if (action === 'DELEGATED' && target && target !== 'ceo') {
-          handleAgentActivity(toSlug(target), task, 'down');
-        }
-        // Fallback: STARTED action on a non-CEO agent (agent was delegated to)
-        // Prefer metadata agent ID (slug format like "lead-backend") over eventAgent
-        // which is a display name (like "lead backend") due to normalizeAgent().
-        if (action === 'STARTED') {
-          const startedAgent = (target && target !== 'ceo') ? target : (source && source !== 'ceo') ? source : '';
-          if (startedAgent) {
-            handleAgentActivity(toSlug(startedAgent), task, 'working');
-          } else if (eventAgent && eventAgent !== 'ceo') {
-            handleAgentActivity(toSlug(eventAgent), task, 'working');
+
+        // If no action-based match, fall back to metadata flow direction
+        if (!handled) {
+          if (flow === 'down' && agentDown) {
+            handleAgentActivity(agentDown, task, 'down');
+          } else if (flow === 'up' && agentUp) {
+            handleAgentActivity(agentUp, task, 'up');
           }
         }
-        // On COMPLETED or FAILED: transition agent to 'up' flow instead of
-        // removing — keeps the org chart node lit for the full expiry window
-        // (120s) so the user sees which agents recently worked.
-        if (action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') {
-          const doneAgent = (source && source !== 'ceo') ? source : (target && target !== 'ceo') ? target : '';
-          if (doneAgent) {
-            handleAgentActivity(toSlug(doneAgent), task || 'Completed', 'up');
-          } else if (eventAgent && eventAgent !== 'ceo') {
-            handleAgentActivity(toSlug(eventAgent), task || 'Completed', 'up');
-          }
-        }
+
         // Only hard-remove on explicit failure flow (timed-out delegations)
-        if (flow === 'failed' && (target || source)) {
-          const failedAgent = target !== 'ceo' ? target : source;
-          if (failedAgent && failedAgent !== 'ceo') removeLiveAgent(toSlug(failedAgent));
+        if (flow === 'failed' && agentAny) {
+          removeLiveAgent(agentAny);
         }
 
         // Trigger reactive project refresh on data-changing events
