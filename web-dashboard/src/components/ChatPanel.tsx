@@ -36,6 +36,13 @@ function msgKey(msg: ChatMessage): string {
 interface ActionInfo { label: string; icon: string; color: string; }
 
 function prettyAgentName(raw: string): string {
+  // Micro-agents: "micro-backend-db-schema" → "Backend (db schema)"
+  const microMatch = raw.match(/^micro-(\w[\w-]*?)-([\w][\w-]*)$/i);
+  if (microMatch) {
+    const parent = microMatch[1].replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    const spec = microMatch[2].replace(/-/g, ' ');
+    return `${parent} (${spec})`;
+  }
   const normalized = raw.replace(/^chief-/i, 'chief ').replace(/^vp-/i, 'vp ');
   return normalized
     .split(/[\s_-]+/)
@@ -89,6 +96,11 @@ function summarizeActionPayload(payload: {
   if (flow === 'blocked') {
     const source = prettyAgentName(actorRaw);
     return `${source} hit a blocker and is requesting guidance`;
+  }
+  // Failed delegation: show which agent failed
+  if (flow === 'failed') {
+    const failedAgent = prettyAgentName(actorRaw);
+    return `${failedAgent} failed — result not received`;
   }
   // Internal CEO work — describe the action without "Ceo is..." prefix
   if (task) return task.slice(0, 100);
@@ -884,6 +896,7 @@ interface ChatPanelProps {
   onTelegramMirrorChange?: (enabled: boolean) => void;
   microToggleRequestToken?: number;
   onAgentActivity?: (agentId: string, task: string, flow: 'down' | 'up' | 'working') => void;
+  onAgentRemove?: (agentId: string) => void;
 }
 
 export default function ChatPanel({
@@ -904,6 +917,7 @@ export default function ChatPanel({
   onTelegramMirrorChange,
   microToggleRequestToken = 0,
   onAgentActivity,
+  onAgentRemove,
 }: ChatPanelProps) {
   // Core state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1274,6 +1288,7 @@ export default function ChatPanel({
                 }].slice(-120));
                 // Bubble agent activity up for TeamPulse
                 const detailFlow = String(payload.flow || '').toLowerCase();
+                const detailState = String(payload.state || '').toLowerCase();
                 const detailTarget = String(payload.target_agent || payload.target || '').trim().toLowerCase();
                 const detailSource = String(payload.source_agent || payload.actor || '').trim().toLowerCase();
                 const detailTask = String(payload.task || '').trim();
@@ -1281,6 +1296,12 @@ export default function ChatPanel({
                   onAgentActivity?.(detailTarget, detailTask, 'down');
                 } else if (detailFlow === 'up' && detailSource && detailSource !== 'ceo') {
                   onAgentActivity?.(detailSource, detailTask, 'up');
+                }
+                // Remove agents immediately on completion/failure via WebSocket
+                // so the UI doesn't wait for the SSE path or the 120s timeout.
+                if (detailState === 'completed' || detailState === 'failed' || detailFlow === 'failed') {
+                  const finishedAgent = detailSource !== 'ceo' ? detailSource : (detailTarget !== 'ceo' ? detailTarget : '');
+                  if (finishedAgent) onAgentRemove?.(finishedAgent);
                 }
 
                 if (String(payload.state || '').toLowerCase() === 'started') {
