@@ -74,13 +74,16 @@ function isAgentRecentlyActive(agentId: string, agentName: string, events: Activ
   const WINDOW_MS = 90_000;
   const idLower = agentId.toLowerCase();
   const nameLower = agentName.toLowerCase();
+  // normalizeAgent() converts slugs like "lead-backend" to display names "Lead Backend",
+  // so we also need to match the space-separated form of the slug.
+  const idSpaced = idLower.replace(/-/g, ' ');
   return events.some((evt) => {
     if (!evt.timestamp) return false;
     const evtTime = new Date(evt.timestamp).getTime();
     if (now - evtTime > WINDOW_MS) return false;
     const evtAgent = (evt.agent ?? '').toLowerCase();
-    // Check direct agent match
-    if (evtAgent === idLower || evtAgent === nameLower || evtAgent.includes(nameLower)) return true;
+    // Check direct agent match (slug, space-separated slug, or personal name)
+    if (evtAgent === idLower || evtAgent === idSpaced || evtAgent === nameLower || evtAgent.includes(nameLower)) return true;
     // Also check delegation metadata — agents appear as target/source in delegation events
     const meta = evt.metadata || {};
     const target = String(meta.target_agent ?? '').toLowerCase();

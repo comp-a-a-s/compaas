@@ -573,12 +573,27 @@ export default function App() {
           handleAgentActivity(target, task, 'down');
         }
         // Fallback: STARTED action on a non-CEO agent (agent was delegated to)
-        if (action === 'STARTED' && eventAgent && eventAgent !== 'ceo') {
-          handleAgentActivity(eventAgent, task, 'working');
+        // Prefer metadata agent ID (slug format like "lead-backend") over eventAgent
+        // which is a display name (like "lead backend") due to normalizeAgent().
+        if (action === 'STARTED') {
+          const startedAgent = (target && target !== 'ceo') ? target : (source && source !== 'ceo') ? source : '';
+          if (startedAgent) {
+            handleAgentActivity(startedAgent, task, 'working');
+          } else if (eventAgent && eventAgent !== 'ceo') {
+            handleAgentActivity(eventAgent.replace(/ /g, '-'), task, 'working');
+          }
         }
         // Remove agent from live map on COMPLETED or FAILED
-        if ((action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') && eventAgent && eventAgent !== 'ceo') {
-          removeLiveAgent(eventAgent);
+        // Use metadata agent IDs (slug format) when available; fall back to
+        // eventAgent with dash normalization since normalizeAgent() converts
+        // slugs like "lead-backend" to display names "Lead Backend".
+        if (action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') {
+          const doneAgent = (source && source !== 'ceo') ? source : (target && target !== 'ceo') ? target : '';
+          if (doneAgent) {
+            removeLiveAgent(doneAgent);
+          } else if (eventAgent && eventAgent !== 'ceo') {
+            removeLiveAgent(eventAgent.replace(/ /g, '-'));
+          }
         }
         // Also remove on failed flow (emitted by backend for timed-out delegations)
         if (flow === 'failed' && (target || source)) {
