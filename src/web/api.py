@@ -2783,7 +2783,10 @@ async def _handle_ceo_claude(
 
     process = None
     saw_tool_use = False
-    pending_delegate_agents: list[str] = []
+    # Map tool_use_id → delegated agent name for accurate result matching.
+    # Previous FIFO list could mis-attribute results when parallel delegations
+    # returned out of order.
+    pending_delegate_agents: dict[str, str] = {}
     try:
         cmd = [claude_path, "--agent", "ceo", "-p", prompt]
         # Web dashboard runs are non-interactive, so permission prompts cannot
@@ -2940,9 +2943,14 @@ async def _handle_ceo_claude(
                             delegated_task = str(
                                 tool_input.get("description") or tool_input.get("prompt") or ""
                             ).strip()
+                            tool_use_id = str(block.get("id", "") or "").strip()
                             if delegated_agent:
                                 is_delegation = True
-                                pending_delegate_agents.append(delegated_agent)
+                                if tool_use_id:
+                                    pending_delegate_agents[tool_use_id] = delegated_agent
+                                else:
+                                    # Fallback: use a synthetic key if id is missing
+                                    pending_delegate_agents[f"_fallback_{len(pending_delegate_agents)}"] = delegated_agent
                                 delegation_metadata = {
                                     "source_agent": "ceo",
                                     "target_agent": delegated_agent,
@@ -3005,7 +3013,17 @@ async def _handle_ceo_claude(
                             )
                         if content and content.strip():
                             preview = content.strip()[:200].replace("\n", " ")
-                            delegated_agent = pending_delegate_agents.pop(0) if pending_delegate_agents else ""
+                            # Match result to delegation via tool_use_id for
+                            # accurate attribution even with parallel delegations.
+                            result_tool_use_id = str(block.get("tool_use_id", "") or "").strip()
+                            delegated_agent = ""
+                            if result_tool_use_id and result_tool_use_id in pending_delegate_agents:
+                                delegated_agent = pending_delegate_agents.pop(result_tool_use_id)
+                            elif pending_delegate_agents:
+                                # Fallback: pop first entry (preserves old FIFO behavior
+                                # when tool_use_id is missing)
+                                first_key = next(iter(pending_delegate_agents))
+                                delegated_agent = pending_delegate_agents.pop(first_key)
                             result_metadata: dict[str, Any] = {}
                             if delegated_agent:
                                 result_metadata = {
@@ -3064,12 +3082,70 @@ async def _handle_ceo_claude(
                 err = event.get("message", "Unknown error")
                 await websocket.send_json({"type": "error", "content": err})
                 _emit_chat_activity("ceo", "ERROR", str(err), project_id=project_id, metadata=runtime_metadata)
+                # Emit FAILED for any agents whose results never arrived
+                for _tid, agent_name in list(pending_delegate_agents.items()):
+                    fail_meta = {
+                        "source_agent": agent_name,
+                        "target_agent": "ceo",
+                        "flow": "failed",
+                        **runtime_metadata,
+                    }
+                    await websocket.send_json({
+                        "type": "action_detail",
+                        "content": {
+                            "label": f"{agent_name} failed — CEO error",
+                            "state": "failed",
+                            "run_id": run_id,
+                            "actor": agent_name,
+                            "target": "ceo",
+                            "flow": "failed",
+                            **fail_meta,
+                        },
+                    })
+                    _emit_chat_activity(
+                        agent_name,
+                        "FAILED",
+                        f"Agent terminated — CEO error: {str(err)[:120]}",
+                        project_id=project_id,
+                        metadata=fail_meta,
+                    )
+                pending_delegate_agents.clear()
                 if run_id:
                     run_service.transition_run(run_id, state="failed", label=str(err))
                 return None
 
         if full_response is None:
             full_response = "".join(response_parts).strip() or None
+
+        # Emit FAILED for any delegated agents whose results never came back.
+        # This can happen when the CEO process exits mid-delegation.
+        for _tid, agent_name in list(pending_delegate_agents.items()):
+            fail_meta = {
+                "source_agent": agent_name,
+                "target_agent": "ceo",
+                "flow": "failed",
+                **runtime_metadata,
+            }
+            await websocket.send_json({
+                "type": "action_detail",
+                "content": {
+                    "label": f"{agent_name} — no result received",
+                    "state": "failed",
+                    "run_id": run_id,
+                    "actor": agent_name,
+                    "target": "ceo",
+                    "flow": "failed",
+                    **fail_meta,
+                },
+            })
+            _emit_chat_activity(
+                agent_name,
+                "FAILED",
+                "Agent result never received — process ended",
+                project_id=project_id,
+                metadata=fail_meta,
+            )
+        pending_delegate_agents.clear()
 
         try:
             await asyncio.wait_for(process.wait(), timeout=10.0)

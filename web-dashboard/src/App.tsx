@@ -533,9 +533,10 @@ export default function App() {
         const event = parseActivityLine(line);
         if (!event) return;
         setActivityEvents((prev) => {
-          // Deduplicate: skip if identical event already present in last 10 entries
+          // Deduplicate: skip if identical event already present in last 50 entries.
+          // Wider window handles SSE reconnections that may replay recent events.
           const key = eventKey(event);
-          const tail = prev.slice(-10);
+          const tail = prev.slice(-50);
           if (tail.some((e) => eventKey(e) === key)) return prev;
           const next = [...prev, event];
           return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
@@ -565,9 +566,14 @@ export default function App() {
         if (action === 'STARTED' && eventAgent && eventAgent !== 'ceo') {
           handleAgentActivity(eventAgent, task, 'working');
         }
-        // Remove agent from live map on COMPLETED
-        if ((action === 'COMPLETED' || state === 'completed') && eventAgent && eventAgent !== 'ceo') {
+        // Remove agent from live map on COMPLETED or FAILED
+        if ((action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') && eventAgent && eventAgent !== 'ceo') {
           removeLiveAgent(eventAgent);
+        }
+        // Also remove on failed flow (emitted by backend for timed-out delegations)
+        if (flow === 'failed' && (target || source)) {
+          const failedAgent = target !== 'ceo' ? target : source;
+          if (failedAgent && failedAgent !== 'ceo') removeLiveAgent(failedAgent);
         }
 
         // Trigger reactive project refresh on data-changing events
@@ -605,6 +611,13 @@ export default function App() {
     const normalized = agentId.toLowerCase().trim();
     if (!normalized) return;
     setLiveAgents((prev) => {
+      const existing = prev.get(normalized);
+      // Deduplicate: skip if same agent+flow was updated within 2 seconds
+      // to avoid redundant re-renders from WebSocket + SSE dual delivery.
+      if (existing && existing.flow === flow) {
+        const elapsed = Date.now() - new Date(existing.since).getTime();
+        if (elapsed < 2000) return prev;
+      }
       const next = new Map(prev);
       next.set(normalized, {
         agentId: normalized,
@@ -994,6 +1007,7 @@ export default function App() {
             onTelegramMirrorChange={handleTelegramMirrorChange}
             microToggleRequestToken={microToggleRequestToken}
             onAgentActivity={handleAgentActivity}
+            onAgentRemove={removeLiveAgent}
           />
         }
       >
