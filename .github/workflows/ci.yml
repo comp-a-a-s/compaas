@@ -27,6 +27,9 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v --tb=short
 
+      - name: Validate provider smoke-test script
+        run: python -c "from scripts.provider_smoke_test import main; print('smoke-test script OK')"
+
       - name: Run tests with coverage
         if: matrix.python-version == '3.12'
         run: pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=65

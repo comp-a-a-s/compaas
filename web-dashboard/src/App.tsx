@@ -1,15 +1,15 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 
 import Layout from './components/Layout';
 import Overview from './components/Overview';
 import AgentPanel from './components/AgentPanel';
 import ProjectPanel from './components/ProjectPanel';
-import ActivityPanel from './components/ActivityPanel';
-import EventLogPanel from './components/MetricsPanel';
+const ActivityPanel = lazy(() => import('./components/ActivityPanel'));
+const EventLogPanel = lazy(() => import('./components/MetricsPanel'));
+const ChatPanel = lazy(() => import('./components/ChatPanel'));
+const SettingsPanel = lazy(() => import('./components/SettingsPanel'));
 import Walkthrough from './components/Walkthrough';
-import ChatPanel from './components/ChatPanel';
 import SetupWizard from './components/SetupWizard';
-import SettingsPanel from './components/SettingsPanel';
 import CompassRoseLogo from './components/CompassRoseLogo';
 import type { ActiveAgentInfo } from './components/TeamPulse';
 
@@ -658,7 +658,7 @@ export default function App() {
         pendingRefreshRef.current = null;
       }
     };
-  }, [showWizard]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [showWizard, handleAgentActivity, removeLiveAgent, debouncedRefreshProjects]);
 
   // ---- Debounced project refresh on activity events ----
   const pendingRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -863,136 +863,139 @@ export default function App() {
   // ---- Render ----
 
   const renderContent = () => {
-    switch (activeTab) {
-      case 'overview':
-        if (normalizedSearch && filteredProjects.length === 0 && filteredAgents.length === 0 && filteredAllTasks.length === 0) {
+    const content = (() => {
+      switch (activeTab) {
+        case 'overview':
+          if (normalizedSearch && filteredProjects.length === 0 && filteredAgents.length === 0 && filteredAllTasks.length === 0) {
+            return (
+              <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
+                <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No results</p>
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                  No overview data matches "{globalSearchQuery}". Refine or clear the search query.
+                </p>
+              </div>
+            );
+          }
           return (
-            <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
-              <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No results</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-                No overview data matches "{globalSearchQuery}". Refine or clear the search query.
-              </p>
-            </div>
+            <Overview
+              agents={filteredAgents}
+              projects={filteredProjects}
+              tasks={filteredAllTasks}
+              events={filteredActivityEvents}
+              activeProjectId={activeProjectId}
+              microProjectMode={microProjectMode}
+              loadingAgents={loadingAgents}
+              loadingProjects={loadingProjects}
+              loadingTasks={loadingTasks}
+              liveAgents={liveAgents}
+            />
           );
-        }
-        return (
-          <Overview
-            agents={filteredAgents}
-            projects={filteredProjects}
-            tasks={filteredAllTasks}
-            events={filteredActivityEvents}
-            activeProjectId={activeProjectId}
-            microProjectMode={microProjectMode}
-            loadingAgents={loadingAgents}
-            loadingProjects={loadingProjects}
-            loadingTasks={loadingTasks}
-            liveAgents={liveAgents}
-          />
-        );
 
-      case 'agents':
-        if (normalizedSearch && filteredAgents.length === 0) {
+        case 'agents':
+          if (normalizedSearch && filteredAgents.length === 0) {
+            return (
+              <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
+                <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching agents</p>
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                  No agent matches "{globalSearchQuery}".
+                </p>
+              </div>
+            );
+          }
           return (
-            <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
-              <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching agents</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-                No agent matches "{globalSearchQuery}".
-              </p>
-            </div>
+            <AgentPanel
+              agents={filteredAgents}
+              loading={loadingAgents}
+              microProjectMode={microProjectMode}
+              liveAgents={liveAgents}
+            />
           );
-        }
-        return (
-          <AgentPanel
-            agents={filteredAgents}
-            loading={loadingAgents}
-            microProjectMode={microProjectMode}
-            liveAgents={liveAgents}
-          />
-        );
 
-      case 'projects':
-        if (normalizedSearch && filteredProjects.length === 0) {
+        case 'projects':
+          if (normalizedSearch && filteredProjects.length === 0) {
+            return (
+              <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
+                <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching projects</p>
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                  No project or task matches "{globalSearchQuery}".
+                </p>
+              </div>
+            );
+          }
           return (
-            <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
-              <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching projects</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-                No project or task matches "{globalSearchQuery}".
-              </p>
-            </div>
+            <ProjectPanel
+              projects={filteredProjects}
+              loading={loadingProjects}
+              tasksByProject={filteredTasksByProject}
+              initialProjectId={pendingProjectId}
+              selectedProjectId={activeProjectId}
+              onSelectProject={(projectId) => setActiveProjectId(projectId)}
+              onProjectIdConsumed={() => setPendingProjectId(null)}
+              onRefresh={loadProjects}
+              defaultWorkspaceMode={config?.integrations?.workspace_mode === 'github' ? 'github' : 'local'}
+              defaultGithubRepo={config?.integrations?.github_repo || ''}
+              defaultGithubBranch={config?.integrations?.github_default_branch || 'master'}
+              githubConfigured={githubConfigured}
+              onProjectCreated={(projectId) => {
+                setActiveProjectId(projectId);
+                setPendingProjectId(projectId);
+                loadProjects(true);
+              }}
+              onGitHubSetupRequired={() => openConnectorSetup('github')}
+            />
           );
-        }
-        return (
-          <ProjectPanel
-            projects={filteredProjects}
-            loading={loadingProjects}
-            tasksByProject={filteredTasksByProject}
-            initialProjectId={pendingProjectId}
-            selectedProjectId={activeProjectId}
-            onSelectProject={(projectId) => setActiveProjectId(projectId)}
-            onProjectIdConsumed={() => setPendingProjectId(null)}
-            onRefresh={loadProjects}
-            defaultWorkspaceMode={config?.integrations?.workspace_mode === 'github' ? 'github' : 'local'}
-            defaultGithubRepo={config?.integrations?.github_repo || ''}
-            defaultGithubBranch={config?.integrations?.github_default_branch || 'master'}
-            githubConfigured={githubConfigured}
-            onProjectCreated={(projectId) => {
-              setActiveProjectId(projectId);
-              setPendingProjectId(projectId);
-              loadProjects(true);
-            }}
-            onGitHubSetupRequired={() => openConnectorSetup('github')}
-          />
-        );
 
-      case 'activity':
-        if (normalizedSearch && filteredActivityEvents.length === 0) {
+        case 'activity':
+          if (normalizedSearch && filteredActivityEvents.length === 0) {
+            return (
+              <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
+                <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching activity</p>
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                  No activity entry matches "{globalSearchQuery}".
+                </p>
+              </div>
+            );
+          }
           return (
-            <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
-              <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching activity</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-                No activity entry matches "{globalSearchQuery}".
-              </p>
-            </div>
+            <ActivityPanel
+              events={filteredActivityEvents}
+            />
           );
-        }
-        return (
-          <ActivityPanel
-            events={filteredActivityEvents}
-          />
-        );
 
-      case 'events':
-        return (
-          <EventLogPanel
-            events={filteredActivityEvents}
-          />
-        );
+        case 'events':
+          return (
+            <EventLogPanel
+              events={filteredActivityEvents}
+            />
+          );
 
-      case 'settings':
-        return (
-          <SettingsPanel
-            onConfigUpdated={handleConfigUpdated}
-            initialTab={settingsConnectorFocus ? 'integrations' : 'general'}
-            focusConnector={settingsConnectorFocus}
-          />
-        );
+        case 'settings':
+          return (
+            <SettingsPanel
+              onConfigUpdated={handleConfigUpdated}
+              initialTab={settingsConnectorFocus ? 'integrations' : 'general'}
+              focusConnector={settingsConnectorFocus}
+            />
+          );
 
-      default:
-        return (
-          <Overview
-            agents={filteredAgents}
-            projects={filteredProjects}
-            tasks={filteredAllTasks}
-            events={filteredActivityEvents}
-            activeProjectId={activeProjectId}
-            microProjectMode={microProjectMode}
-            loadingAgents={loadingAgents}
-            loadingProjects={loadingProjects}
-            loadingTasks={loadingTasks}
-            liveAgents={liveAgents}
-          />
-        );
-    }
+        default:
+          return (
+            <Overview
+              agents={filteredAgents}
+              projects={filteredProjects}
+              tasks={filteredAllTasks}
+              events={filteredActivityEvents}
+              activeProjectId={activeProjectId}
+              microProjectMode={microProjectMode}
+              loadingAgents={loadingAgents}
+              loadingProjects={loadingProjects}
+              loadingTasks={loadingTasks}
+              liveAgents={liveAgents}
+            />
+          );
+      }
+    })();
+    return <Suspense fallback={<div style={{ padding: '2rem', textAlign: 'center', color: 'var(--tf-text-muted)' }}>Loading…</div>}>{content}</Suspense>;
   };
 
   const ceoName = config?.agents?.['ceo'] || 'CEO';
@@ -1054,28 +1057,30 @@ export default function App() {
         agents={agents}
         liveAgents={liveAgents}
         chatPanel={
-          <ChatPanel
-            floating
-            chatOpen={chatOpen}
-            onNewCeoMessage={() => {
-              if (!chatOpen) setChatHasUnread(true);
-            }}
-            ceoName={ceoName}
-            userName={userName}
-            microProjectMode={microProjectMode}
-            onMicroProjectModeChange={setMicroProjectMode}
-            onNavigateToProject={navigateToProject}
-            pendingApprovalProjects={pendingApprovalProjects}
-            onProjectApproved={() => loadProjects()}
-            projects={projects}
-            activeProjectId={activeProjectId}
-            onActiveProjectChange={handleActiveProjectChange}
-            telegramMirrorEnabled={telegramMirrorEnabled}
-            onTelegramMirrorChange={handleTelegramMirrorChange}
-            microToggleRequestToken={microToggleRequestToken}
-            onAgentActivity={handleAgentActivity}
-            onAgentRemove={removeLiveAgent}
-          />
+          <Suspense fallback={null}>
+            <ChatPanel
+              floating
+              chatOpen={chatOpen}
+              onNewCeoMessage={() => {
+                if (!chatOpen) setChatHasUnread(true);
+              }}
+              ceoName={ceoName}
+              userName={userName}
+              microProjectMode={microProjectMode}
+              onMicroProjectModeChange={setMicroProjectMode}
+              onNavigateToProject={navigateToProject}
+              pendingApprovalProjects={pendingApprovalProjects}
+              onProjectApproved={() => loadProjects()}
+              projects={projects}
+              activeProjectId={activeProjectId}
+              onActiveProjectChange={handleActiveProjectChange}
+              telegramMirrorEnabled={telegramMirrorEnabled}
+              onTelegramMirrorChange={handleTelegramMirrorChange}
+              microToggleRequestToken={microToggleRequestToken}
+              onAgentActivity={handleAgentActivity}
+              onAgentRemove={removeLiveAgent}
+            />
+          </Suspense>
         }
       >
         {renderContent()}

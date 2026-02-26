@@ -76,7 +76,7 @@ function toAgentSlug(raw: string): string {
 
 function isAgentRecentlyActive(agentId: string, agentName: string, events: ActivityEvent[]): boolean {
   const now = Date.now();
-  const WINDOW_MS = 180_000; // 3 minutes — wide enough to survive page navigation delays
+  const WINDOW_MS = 120_000; // 2 minutes — matches LIVE_AGENT_EXPIRY_MS in App.tsx
   const idLower = agentId.toLowerCase();
   const nameLower = agentName.toLowerCase();
   // normalizeAgent() converts slugs like "lead-backend" to display names "Lead Backend",
@@ -375,18 +375,43 @@ function AgentDetailModal({ agent, onClose }: AgentDetailModalProps) {
 
       <div>
         <p style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--tf-text-muted)', marginBottom: '6px' }}>
-          Recent Activity
+          Activity Timeline
         </p>
         {recentActivity.length === 0 ? (
           <p style={{ fontSize: '12px', color: 'var(--tf-text-muted)' }}>No recent activity</p>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {recentActivity.slice(0, 3).map((evt, i) => (
-              <div key={i} style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', padding: '4px 8px', backgroundColor: 'var(--tf-surface-raised)', borderRadius: '4px' }}>
-                <span style={{ color: 'var(--tf-accent-blue)', marginRight: '6px' }}>{evt.action}</span>
-                {evt.detail}
-              </div>
-            ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0', maxHeight: '240px', overflowY: 'auto' }}>
+            {recentActivity.slice(0, 8).map((evt, i) => {
+              const ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+              const isLast = i === Math.min(recentActivity.length, 8) - 1;
+              return (
+                <div key={i} style={{ display: 'flex', gap: '10px', minHeight: '36px' }}>
+                  {/* Timeline spine */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '12px', flexShrink: 0 }}>
+                    <div style={{
+                      width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                      backgroundColor: i === 0 ? 'var(--tf-success)' : 'var(--tf-border)',
+                      border: i === 0 ? '2px solid rgba(63,185,80,0.3)' : 'none',
+                    }} />
+                    {!isLast && (
+                      <div style={{ width: '2px', flex: 1, backgroundColor: 'var(--tf-border)', minHeight: '16px' }} />
+                    )}
+                  </div>
+                  {/* Content */}
+                  <div style={{ flex: 1, paddingBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--tf-accent-blue)', fontWeight: 600 }}>{evt.action}</span>
+                      {ts && <span style={{ fontSize: '10px', color: 'var(--tf-text-muted)' }}>{ts}</span>}
+                    </div>
+                    {evt.detail && (
+                      <p style={{ fontSize: '11px', color: 'var(--tf-text-secondary)', marginTop: '2px', lineHeight: 1.4 }}>
+                        {evt.detail}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -429,7 +454,7 @@ const ORG_TREE: OrgTreeNode = {
     { id: 'cfo' },
     {
       id: 'vp-product',
-      displayRole: 'Chief Product Officer',
+      displayRole: 'CPO',
       children: [
         { id: 'lead-designer' },
         { id: 'tech-writer' },
@@ -1002,15 +1027,16 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
 
   const activeAgentCount = activeIds.size;
 
-  // Build a short list of active agent names for the status badge
+  // Build a short list of active agent names for the status badge.
+  // Use recentActiveIds (not broader activeIds) so the header matches the glowing nodes.
   const activeAgentNames = useMemo(() => {
     const names: string[] = [];
-    for (const id of activeIds) {
+    for (const id of recentActiveIds) {
       const a = agentMap.get(id);
       if (a) names.push(a.name);
     }
     return names;
-  }, [activeIds, agentMap]);
+  }, [recentActiveIds, agentMap]);
 
   return (
     <div ref={chartContainerRef} style={{ maxWidth: '100%', overflow: 'hidden' }}>

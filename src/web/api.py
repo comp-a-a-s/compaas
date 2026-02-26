@@ -773,6 +773,13 @@ def update_config(request: Request, updates: dict) -> dict:
     config = _load_config()
     merged = _deep_merge(config, updates)
     _save_config(merged)
+    # Auto-render agent templates when agent names change
+    if "agents" in updates:
+        try:
+            from scripts.render_agents import render_templates
+            render_templates()
+        except Exception:
+            pass  # best-effort
     return {"status": "ok"}
 
 
@@ -910,7 +917,7 @@ def _resolve_routed_model_for_runtime(
 
 
 @app.get("/api/agents", summary="List all agents with their models and roles")
-def list_agents() -> list[dict]:
+def list_agents(activity_limit: int = Query(default=5, ge=0, le=50)) -> list[dict]:
     """Return every known agent (core team, on-demand, and dynamically hired)."""
     agents: list[dict] = []
     runtime = _llm_runtime_snapshot()
@@ -921,15 +928,13 @@ def list_agents() -> list[dict]:
     activity_by_agent: dict[str, list[dict]] = {}
     activity_log_path = os.path.join(DATA_DIR, "activity.log")
     if os.path.exists(activity_log_path):
-        import json as _json
-        import time as _time
-        cutoff = _time.time() - 600  # 10 minutes
+        cutoff = time.time() - 600  # 10 minutes
         try:
             with open(activity_log_path, "rb") as bf:
                 bf.seek(0, 2)
                 fsize = bf.tell()
-                # Read last 128KB to avoid scanning huge files
-                read_size = min(fsize, 131072)
+                # Read last 64KB to avoid scanning huge files
+                read_size = min(fsize, 65536)
                 bf.seek(max(0, fsize - read_size))
                 tail = bf.read().decode("utf-8", errors="replace")
             for raw_line in tail.splitlines():
@@ -937,12 +942,11 @@ def list_agents() -> list[dict]:
                 if not raw_line:
                     continue
                 try:
-                    evt = _json.loads(raw_line)
+                    evt = json.loads(raw_line)
                     ts_str = evt.get("timestamp", "")
                     if ts_str:
-                        from datetime import datetime as _dt, timezone as _tz
                         try:
-                            ts_val = _dt.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+                            ts_val = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
                         except Exception:
                             ts_val = 0
                         if ts_val < cutoff:
@@ -962,7 +966,8 @@ def list_agents() -> list[dict]:
 
     for agent_id, info in AGENT_REGISTRY.items():
         base_model = str(info.get("model", "sonnet") or "sonnet")
-        agent_activity = activity_by_agent.get(agent_id, [])[-20:]
+        raw = activity_by_agent.get(agent_id, [])
+        agent_activity = raw[-activity_limit:] if activity_limit else []
         entry = {
             "id": agent_id,
             "name": _get_agent_name(agent_id, info["name"]),
@@ -986,7 +991,8 @@ def list_agents() -> list[dict]:
         for h in log.get("hired", []):
             base_model = str(h.get("model", "sonnet") or "sonnet")
             hired_id = str(h.get("name", "")).strip().lower()
-            agent_activity = activity_by_agent.get(hired_id, [])[-20:]
+            raw = activity_by_agent.get(hired_id, [])
+            agent_activity = raw[-activity_limit:] if activity_limit else []
             entry = {
                 "id": h["name"],
                 "name": h["name"],
