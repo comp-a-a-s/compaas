@@ -236,6 +236,7 @@ export default function App() {
   const [newProjectRepo, setNewProjectRepo] = useState('');
   const [newProjectBranch, setNewProjectBranch] = useState('master');
   const [creatingProject, setCreatingProject] = useState(false);
+  const [createProjectError, setCreateProjectError] = useState('');
 
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
@@ -411,12 +412,18 @@ export default function App() {
     setNewProjectMode(defaultMode === 'github' ? 'github' : 'local');
     setNewProjectRepo(config?.integrations?.github_repo?.trim() || '');
     setNewProjectBranch(config?.integrations?.github_default_branch?.trim() || 'master');
+    setCreateProjectError('');
     setShowCreateProject(true);
   }, [config?.integrations?.workspace_mode, config?.integrations?.github_repo, config?.integrations?.github_default_branch]);
 
   const submitCreateProject = useCallback(async () => {
     if (!newProjectName.trim() || creatingProject) return;
+    if (newProjectMode === 'github' && !newProjectRepo.trim()) {
+      setCreateProjectError('GitHub mode requires a repository (owner/repo).');
+      return;
+    }
     setCreatingProject(true);
+    setCreateProjectError('');
     const created = await createProject({
       name: newProjectName.trim(),
       description: `Created by ${config?.user?.name || 'Chairman'}.`,
@@ -432,8 +439,11 @@ export default function App() {
         openConnectorSetup('github');
         return;
       }
+      setCreateProjectError(created.error?.message || 'Unable to create project. Please try again.');
       return;
     }
+    setCreateProjectError('');
+    setNewProjectName('');
     setActiveProjectId(created.project.id);
     setShowCreateProject(false);
     setSettingsConnectorFocus(null);
@@ -1112,6 +1122,12 @@ export default function App() {
                   }}
                 />
               </div>
+            )}
+            {/* Error message */}
+            {createProjectError && (
+              <p style={{ fontSize: '12px', color: 'var(--tf-error, #f87171)', margin: '0 0 10px 0' }}>
+                {createProjectError}
+              </p>
             )}
             {/* Buttons */}
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>

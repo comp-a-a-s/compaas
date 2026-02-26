@@ -12,6 +12,8 @@ from fastapi import WebSocketDisconnect
 import src.web.api as api
 import src.llm_provider as llm_provider
 from src.state.project_state import ProjectStateManager
+from src.state.task_board import TaskBoard
+from src.web.services.project_service import ProjectService
 from src.web.services.run_service import RunService
 from src.web.settings import RuntimeSettings
 
@@ -515,9 +517,12 @@ def test_resolve_chat_project_creates_for_build_request(tmp_path, monkeypatch):
     data_dir = tmp_path / "company_data"
     data_dir.mkdir(parents=True, exist_ok=True)
     manager = ProjectStateManager(str(data_dir))
+    task_board = TaskBoard(str(data_dir))
+    ps = ProjectService(str(data_dir), manager, task_board)
 
     monkeypatch.setattr(api, "DATA_DIR", str(data_dir))
     monkeypatch.setattr(api, "state_manager", manager)
+    monkeypatch.setattr(api, "project_service", ps)
     monkeypatch.setattr(api, "CHAT_LOG_PATH", str(data_dir / "chat_messages.json"))
 
     project_id, project, created = api._resolve_chat_project("", "build me a simple web page", "Idan")

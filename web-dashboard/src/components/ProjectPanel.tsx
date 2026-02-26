@@ -1745,7 +1745,12 @@ export default function ProjectPanel({
     }
     setNewProjectName('');
     setNewProjectDescription('');
+    setNewProjectMode(defaultWorkspaceMode === 'github' ? 'github' : 'local');
+    setNewProjectRepo(defaultGithubRepo);
+    setNewProjectBranch(defaultGithubBranch || 'master');
+    setProjectError('');
     onProjectCreated?.(created.project.id);
+    onRefresh?.();
     onSelectProject?.(created.project.id);
   };
 

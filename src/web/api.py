@@ -362,6 +362,9 @@ def create_project(request: Request, body: dict | None = None) -> dict:
     if github_branch == "master" and "github_branch" not in payload:
         github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
 
+    if not name:
+        raise HTTPException(status_code=400, detail="Project name is required.")
+
     if delivery_mode == "github":
         github_token = str(integrations.get("github_token", "") or "").strip()
         github_verified = bool(integrations.get("github_verified"))
@@ -374,8 +377,6 @@ def create_project(request: Request, body: dict | None = None) -> dict:
                     "settings_target": "github",
                 },
             )
-    if not name:
-        raise HTTPException(status_code=400, detail="Project name is required.")
 
     idempotency_key = (
         request.headers.get("Idempotency-Key", "").strip()
@@ -1442,19 +1443,15 @@ def _resolve_chat_project(project_id: str, user_message: str, user_name: str) ->
         github_token = bool(str(integrations.get("github_token", "") or "").strip())
         if delivery_mode == "github" and not (github_token and github_repo and github_verified):
             delivery_mode = "local"
-        new_pid = state_manager.create_project(
-            project_name,
-            project_desc,
-            "app",
+        new_project, _ = project_service.create_project(
+            name=project_name,
+            description=project_desc,
+            project_type="app",
             delivery_mode=delivery_mode,
             github_repo=github_repo if delivery_mode == "github" else "",
             github_branch=str(integrations.get("github_default_branch", "master") or "master").strip() or "master",
         )
-        try:
-            project_service.ensure_metadata(new_pid)
-        except Exception:
-            pass
-        new_project = state_manager.get_project(new_pid)
+        new_pid = str(new_project.get("id", ""))
         emit_activity(
             DATA_DIR,
             "ceo",

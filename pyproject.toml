@@ -5,6 +5,7 @@ description = "COMPaaS — Company as a Service, AI virtual company orchestratio
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.0,<3.0",
+    "cffi>=1.0",
     "pyyaml>=6.0,<7.0",
     "textual>=0.50,<1.0",
     "watchfiles>=0.20",
