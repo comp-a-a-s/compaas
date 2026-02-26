@@ -33,7 +33,7 @@ const AGENT_DEFAULTS: AgentDefault[] = [
   { id: 'chief-researcher', role: 'Chief Researcher', defaultName: 'Victor' },
   { id: 'ciso', role: 'CISO', defaultName: 'Rachel' },
   { id: 'cfo', role: 'CFO', defaultName: 'Jonathan' },
-  { id: 'vp-product', role: 'VP Product', defaultName: 'Sarah' },
+  { id: 'vp-product', role: 'Chief Product Officer', defaultName: 'Olivia' },
   { id: 'vp-engineering', role: 'VP Engineering', defaultName: 'David' },
   { id: 'lead-backend', role: 'Lead Backend', defaultName: 'James' },
   { id: 'lead-frontend', role: 'Lead Frontend', defaultName: 'Priya' },
@@ -56,7 +56,7 @@ const POLL_INTERVAL_OPTIONS = [
 const NAME_TEMPLATES: Record<string, Record<string, string>> = {
   'Classic Tech': {
     ceo: 'Marcus', cto: 'Elena', 'chief-researcher': 'Victor', ciso: 'Rachel',
-    cfo: 'Jonathan', 'vp-product': 'Sarah', 'vp-engineering': 'David', 'lead-backend': 'James',
+    cfo: 'Jonathan', 'vp-product': 'Olivia', 'vp-engineering': 'David', 'lead-backend': 'James',
     'lead-frontend': 'Priya', 'lead-designer': 'Lena', 'qa-lead': 'Carlos', devops: 'Nina',
     'security-engineer': 'Alex', 'data-engineer': 'Maya', 'tech-writer': 'Tom',
   },
@@ -72,11 +72,11 @@ const NAME_TEMPLATES: Record<string, Record<string, string>> = {
     'lead-frontend': 'Aphrodite', 'lead-designer': 'Persephone', 'qa-lead': 'Dionysus', devops: 'Nike',
     'security-engineer': 'Poseidon', 'data-engineer': 'Demeter', 'tech-writer': 'Prometheus',
   },
-  'Avengers': {
-    ceo: 'Tony', cto: 'Pepper', 'chief-researcher': 'Bruce', ciso: 'Natasha',
-    cfo: 'Nick', 'vp-product': 'Wanda', 'vp-engineering': 'Thor', 'lead-backend': 'Steve',
-    'lead-frontend': 'Shuri', 'lead-designer': 'Carol', 'qa-lead': 'Clint', devops: 'Hope',
-    'security-engineer': 'Scott', 'data-engineer': 'Maria', 'tech-writer': 'Vision',
+  'Renaissance': {
+    ceo: 'Leonardo', cto: 'Ada', 'chief-researcher': 'Galileo', ciso: 'Florence',
+    cfo: 'Medici', 'vp-product': 'Isabella', 'vp-engineering': 'Filippo', 'lead-backend': 'Dante',
+    'lead-frontend': 'Raphael', 'lead-designer': 'Botticelli', 'qa-lead': 'Copernicus', devops: 'Vesalius',
+    'security-engineer': 'Machiavelli', 'data-engineer': 'Kepler', 'tech-writer': 'Gutenberg',
   },
 };
 

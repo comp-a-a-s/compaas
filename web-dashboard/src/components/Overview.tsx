@@ -429,7 +429,7 @@ const ORG_TREE: OrgTreeNode = {
     { id: 'cfo' },
     {
       id: 'vp-product',
-      displayRole: 'CPO',
+      displayRole: 'Chief Product Officer',
       children: [
         { id: 'lead-designer' },
         { id: 'tech-writer' },

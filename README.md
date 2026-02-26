@@ -179,7 +179,7 @@ A terminal-based dashboard with org chart, project summary, task board, and acti
 | chief-researcher | Victor | Chief Researcher | opus | leadership |
 | ciso | Rachel | Chief Information Security Officer | opus | leadership |
 | cfo | Jonathan | Chief Financial Officer | sonnet | leadership |
-| vp-product | Sarah | VP of Product | sonnet | leadership |
+| vp-product | Olivia | Chief Product Officer | sonnet | leadership |
 | vp-engineering | David | VP of Engineering | sonnet | leadership |
 | lead-backend | James | Lead Backend Engineer | sonnet | engineering |
 | lead-frontend | Priya | Lead Frontend Engineer | sonnet | engineering |

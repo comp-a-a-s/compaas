@@ -641,7 +641,7 @@ DEFAULT_CONFIG: dict = {
     "user": {"name": ""},
     "agents": {
         "ceo": "Marcus", "cto": "Elena", "chief-researcher": "Victor",
-        "ciso": "Rachel", "cfo": "Jonathan", "vp-product": "Sarah",
+        "ciso": "Rachel", "cfo": "Jonathan", "vp-product": "Olivia",
         "vp-engineering": "David", "lead-backend": "James",
         "lead-frontend": "Priya", "lead-designer": "Lena",
         "qa-lead": "Carlos", "devops": "Nina",
@@ -915,8 +915,54 @@ def list_agents() -> list[dict]:
     agents: list[dict] = []
     runtime = _llm_runtime_snapshot()
 
+    # Pre-scan activity log once for all agents (last 500 lines, ~10 min window).
+    # This lets the frontend know which agents are recently active without needing
+    # the per-agent detail endpoint.
+    activity_by_agent: dict[str, list[dict]] = {}
+    activity_log_path = os.path.join(DATA_DIR, "activity.log")
+    if os.path.exists(activity_log_path):
+        import json as _json
+        import time as _time
+        cutoff = _time.time() - 600  # 10 minutes
+        try:
+            with open(activity_log_path, "rb") as bf:
+                bf.seek(0, 2)
+                fsize = bf.tell()
+                # Read last 128KB to avoid scanning huge files
+                read_size = min(fsize, 131072)
+                bf.seek(max(0, fsize - read_size))
+                tail = bf.read().decode("utf-8", errors="replace")
+            for raw_line in tail.splitlines():
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    evt = _json.loads(raw_line)
+                    ts_str = evt.get("timestamp", "")
+                    if ts_str:
+                        from datetime import datetime as _dt, timezone as _tz
+                        try:
+                            ts_val = _dt.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+                        except Exception:
+                            ts_val = 0
+                        if ts_val < cutoff:
+                            continue
+                    agent_key = str(evt.get("agent", "")).strip().lower()
+                    if agent_key:
+                        activity_by_agent.setdefault(agent_key, []).append(evt)
+                        # Also index by target_agent from metadata
+                        meta = evt.get("metadata") or {}
+                        target_agent = str(meta.get("target_agent", "")).strip().lower()
+                        if target_agent and target_agent != agent_key:
+                            activity_by_agent.setdefault(target_agent, []).append(evt)
+                except (ValueError, KeyError):
+                    continue
+        except OSError:
+            pass
+
     for agent_id, info in AGENT_REGISTRY.items():
         base_model = str(info.get("model", "sonnet") or "sonnet")
+        agent_activity = activity_by_agent.get(agent_id, [])[-20:]
         entry = {
             "id": agent_id,
             "name": _get_agent_name(agent_id, info["name"]),
@@ -928,6 +974,7 @@ def list_agents() -> list[dict]:
             "runtime_mode": runtime["mode"],
             "runtime_model": _agent_runtime_model(base_model, runtime),
             "runtime_label": _agent_runtime_label(base_model, runtime),
+            "recent_activity": agent_activity,
         }
         agents.append(entry)
 
@@ -938,6 +985,8 @@ def list_agents() -> list[dict]:
             log = yaml.safe_load(f) or {"hired": []}
         for h in log.get("hired", []):
             base_model = str(h.get("model", "sonnet") or "sonnet")
+            hired_id = str(h.get("name", "")).strip().lower()
+            agent_activity = activity_by_agent.get(hired_id, [])[-20:]
             entry = {
                 "id": h["name"],
                 "name": h["name"],
@@ -951,6 +1000,7 @@ def list_agents() -> list[dict]:
                 "runtime_mode": runtime["mode"],
                 "runtime_model": _agent_runtime_model(base_model, runtime),
                 "runtime_label": _agent_runtime_label(base_model, runtime),
+                "recent_activity": agent_activity,
             }
             agents.append(entry)
 

@@ -135,7 +135,7 @@ How does the user arrive here?
 - **Touch targets**: Minimum 44x44px for mobile tap targets.
 
 ## Coordination
-- **{{VP_PRODUCT_NAME}}** (VP Product): Receive user personas, flows, and PRD requirements. Align on user problems before designing.
+- **{{VP_PRODUCT_NAME}}** (Chief Product Officer): Receive user personas, flows, and PRD requirements. Align on user problems before designing.
 - **{{FRONTEND_NAME}}** (Lead Frontend): Hand off token values, component specs, interaction descriptions, and responsive behavior. {{FRONTEND_NAME}} builds from your specs.
 - **{{QA_NAME}}** (QA Lead): Provide visual specs for QA to verify implementation fidelity and accessibility compliance.
 

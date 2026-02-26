@@ -13,7 +13,7 @@ CORE_TEAM = {
     "chief-researcher": {"role": "Chief Researcher", "status": "permanent", "model": "opus"},
     "ciso": {"role": "Chief Information Security Officer", "status": "permanent", "model": "opus"},
     "cfo": {"role": "Chief Financial Officer", "status": "permanent", "model": "sonnet"},
-    "vp-product": {"role": "VP of Product", "status": "permanent", "model": "sonnet"},
+    "vp-product": {"role": "Chief Product Officer", "status": "permanent", "model": "sonnet"},
     "vp-engineering": {"role": "VP of Engineering", "status": "permanent", "model": "sonnet"},
     "lead-backend": {"role": "Lead Backend Engineer", "status": "permanent", "model": "sonnet"},
     "lead-frontend": {"role": "Lead Frontend Engineer", "status": "permanent", "model": "sonnet"},
