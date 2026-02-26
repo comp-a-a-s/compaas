@@ -1639,6 +1639,16 @@ def _humanize_llm_runtime_error(
     )
 
     if auth_error:
+        if provider == "anthropic" and mode == "cli":
+            return (
+                "Anthropic authentication failed. "
+                "Run `claude auth login` to refresh your CLI credentials, then retry."
+            )
+        if provider == "anthropic" and mode == "apikey":
+            return (
+                "Anthropic API authentication failed. "
+                "Add a valid key in Settings -> AI -> Anthropic, then retry."
+            )
         if provider == "openai" and mode == "codex":
             return (
                 "OpenAI authentication is missing for Codex CLI. "
@@ -1661,11 +1671,20 @@ def _humanize_llm_runtime_error(
         "connection refused" in lower
         or "failed to connect" in lower
         or "connection error" in lower
+        or "failedtoopensocket" in lower
+        or "unable to connect to api" in lower
         or "timed out" in lower
         or "name or service not known" in lower
         or "temporary failure in name resolution" in lower
     )
     if connection_error:
+        if provider == "anthropic":
+            return (
+                "Could not connect to the Anthropic API. "
+                "If using CLI auth, run `claude auth login` first. "
+                "If using API-key mode, add a valid key in Settings -> AI -> Anthropic. "
+                "Also check your network connection and any proxy configuration."
+            )
         if provider == "openai_compat":
             return (
                 "Could not reach the local/OpenAI-compatible model server. "
@@ -1678,6 +1697,37 @@ def _humanize_llm_runtime_error(
             )
 
     return text[:300]
+
+
+# ---- Subprocess environment sanitization ----
+
+# Claude Code env vars that must NOT be inherited by child CLI processes.
+# CLAUDECODE blocks nesting; FD-based vars reference file descriptors that
+# are not inheritable; session/container IDs belong to the parent session.
+_CLAUDE_ENV_VARS_TO_STRIP = (
+    "CLAUDECODE",
+    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_CONTAINER_ID",
+    "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_DEBUG",
+    "CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES",
+    "CLAUDE_AUTO_BACKGROUND_TASKS",
+    "CLAUDE_AFTER_LAST_COMPACT",
+)
+
+
+def _sanitize_subprocess_env(env: dict[str, str]) -> dict[str, str]:
+    """Remove Claude Code env vars that break child CLI subprocesses.
+
+    The web dashboard spawns Claude CLI as a subprocess.  When the dashboard
+    itself runs inside a Claude Code session, these vars leak into the child
+    and cause either nesting blocks (``CLAUDECODE=1``) or invalid FD
+    references (``CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR``).
+    """
+    for var in _CLAUDE_ENV_VARS_TO_STRIP:
+        env.pop(var, None)
+    return env
 
 
 _MICRO_COMPLEX_KEYWORDS = (
@@ -2753,7 +2803,7 @@ async def _handle_ceo_claude(
 
     Returns the full response string, or None if an error was sent.
     """
-    env = os.environ.copy()
+    env = _sanitize_subprocess_env(os.environ.copy())
     anthropic_mode = str(llm_cfg.get("anthropic_mode", "cli") or "cli").lower()
     runtime_metadata = {
         "provider": "anthropic",
@@ -2780,6 +2830,20 @@ async def _handle_ceo_claude(
                     label="Anthropic API-key mode selected without configured key",
                 )
             return None
+    elif anthropic_mode == "cli":
+        # In CLI mode, inject the config API key into the env if available
+        # so the subprocess has credentials even without OAuth login.
+        if anthropic_api_key and not env.get("ANTHROPIC_API_KEY"):
+            env["ANTHROPIC_API_KEY"] = anthropic_api_key
+
+    # Pre-flight: warn (but don't block) if no auth mechanism is detectable.
+    if not env.get("ANTHROPIC_API_KEY") and not os.path.exists(
+        os.path.expanduser("~/.claude/.credentials.json")
+    ):
+        logger.warning(
+            "No ANTHROPIC_API_KEY and no CLI credentials found. "
+            "The CEO subprocess will likely fail to authenticate."
+        )
 
     process = None
     saw_tool_use = False
@@ -3270,7 +3334,7 @@ async def _handle_ceo_codex(
             run_service.transition_run(run_id, state="failed", label=message)
         return None
 
-    env = os.environ.copy()
+    env = _sanitize_subprocess_env(os.environ.copy())
     api_key = str(llm_cfg.get("api_key", "") or "").strip()
     if api_key:
         env["OPENAI_API_KEY"] = api_key
