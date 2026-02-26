@@ -172,21 +172,32 @@ function OrgNode({
   // Latest activity detail for tooltip
   const latestActivity = agent.recent_activity?.[0];
 
+  // Determine what label to show under the card
+  const activityLabel = activeTaskLabel && !muted
+    ? activeTaskLabel
+    : isActive && latestActivity
+      ? (latestActivity.detail || latestActivity.action)
+      : isActive
+        ? 'Working...'
+        : null;
+
   return (
     <div
-      className="flex flex-col items-center gap-1 px-3 py-2 rounded-xl"
+      className={`flex flex-col items-center gap-1 px-3 py-2 rounded-xl${isActive ? ' org-node-active' : ''}`}
       style={{
         backgroundColor: muted
           ? 'color-mix(in srgb, var(--tf-surface-raised) 84%, var(--tf-bg))'
           : blocked
             ? 'rgba(234,114,103,0.08)'
-            : isActive ? 'rgba(63,185,80,0.06)' : 'var(--tf-surface-raised)',
-        border: `1px solid ${blocked ? 'var(--tf-error)' : isActive ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+            : isActive ? 'rgba(63,185,80,0.14)' : 'var(--tf-surface-raised)',
+        border: `1.5px solid ${blocked ? 'var(--tf-error)' : isActive ? 'var(--tf-success)' : 'var(--tf-border)'}`,
         minWidth: '88px',
         maxWidth: '128px',
         cursor: onAgentClick ? 'pointer' : 'default',
         transition: 'border-color 0.3s, background-color 0.3s, box-shadow 0.3s',
-        boxShadow: isActive ? '0 0 10px rgba(63,185,80,0.2)' : 'none',
+        boxShadow: isActive
+          ? '0 0 12px rgba(63,185,80,0.35), 0 0 4px rgba(63,185,80,0.2)'
+          : 'none',
         opacity: muted ? 0.46 : 1,
         filter: muted ? 'grayscale(38%)' : 'none',
       }}
@@ -217,16 +228,21 @@ function OrgNode({
         {isActive && (
           <div style={{
             position: 'absolute',
-            inset: '-4px',
+            inset: '-5px',
             borderRadius: '50%',
             border: '2px solid var(--tf-success)',
-            opacity: 0.6,
+            opacity: 0.8,
             animation: 'pulse-ring 1.8s ease-out infinite',
           }} />
         )}
         <div
           className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-          style={{ backgroundColor: color, color: 'var(--tf-bg)', position: 'relative' }}
+          style={{
+            backgroundColor: color,
+            color: 'var(--tf-bg)',
+            position: 'relative',
+            ...(isActive ? { boxShadow: `0 0 8px ${color}66` } : {}),
+          }}
         >
           {initial}
         </div>
@@ -234,38 +250,38 @@ function OrgNode({
         {isActive && (
           <div style={{
             position: 'absolute',
-            bottom: 0,
-            right: 0,
-            width: '8px',
-            height: '8px',
+            bottom: -1,
+            right: -1,
+            width: '10px',
+            height: '10px',
             borderRadius: '50%',
             backgroundColor: 'var(--tf-success)',
-            border: '1.5px solid var(--tf-surface-raised)',
+            border: '2px solid var(--tf-surface-raised)',
+            boxShadow: '0 0 4px rgba(63,185,80,0.5)',
           }} />
         )}
       </div>
-      <p className="text-xs font-medium text-center leading-tight" style={{ color: 'var(--tf-text)' }}>
+      <p className="text-xs font-medium text-center leading-tight" style={{ color: isActive ? 'var(--tf-success)' : 'var(--tf-text)' }}>
         {agent.name}
       </p>
       <p className="text-xs text-center leading-tight" style={{ color: 'var(--tf-text-muted)' }}>
         {displayRole ?? agent.role}
       </p>
       {/* Show live activity label when working */}
-      {activeTaskLabel && !muted ? (
+      {activityLabel && !muted ? (
         <p
           className="text-xs text-center leading-tight animate-pulse-dot"
-          style={{ color: blocked ? 'var(--tf-error)' : 'var(--tf-success)', maxWidth: '96px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          title={activeTaskLabel}
+          style={{
+            color: blocked ? 'var(--tf-error)' : 'var(--tf-success)',
+            maxWidth: '96px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontWeight: 500,
+          }}
+          title={activityLabel}
         >
-          {activeTaskLabel}
-        </p>
-      ) : isActive && latestActivity ? (
-        <p
-          className="text-xs text-center leading-tight animate-pulse-dot"
-          style={{ color: 'var(--tf-success)', maxWidth: '90px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          title={latestActivity.detail || latestActivity.action}
-        >
-          {latestActivity.action}
+          {activityLabel}
         </p>
       ) : null}
     </div>
@@ -944,55 +960,72 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
 
   const activeAgentCount = activeIds.size;
 
+  // Build a short list of active agent names for the status badge
+  const activeAgentNames = useMemo(() => {
+    const names: string[] = [];
+    for (const id of activeIds) {
+      const a = agentMap.get(id);
+      if (a) names.push(a.name);
+    }
+    return names;
+  }, [activeIds, agentMap]);
+
   return (
     <div ref={chartContainerRef} style={{ maxWidth: '100%', overflow: 'hidden' }}>
       {/* Chart label with active agent count */}
       <div
         style={{
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'center',
-          gap: '8px',
+          gap: '6px',
           marginBottom: '20px',
         }}
       >
-        <p
-          style={{
-            fontSize: '10px',
-            fontWeight: 600,
-            textTransform: 'uppercase',
-            letterSpacing: '0.1em',
-            color: 'var(--tf-text-muted)',
-          }}
-        >
-          Organization Chart
-        </p>
-        {activeAgentCount > 0 && (
-          <span
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <p
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '2px 8px',
-              borderRadius: '999px',
               fontSize: '10px',
               fontWeight: 600,
-              backgroundColor: activeAgentCount > 1 ? 'rgba(63,185,80,0.12)' : 'rgba(63,185,80,0.08)',
-              color: 'var(--tf-success)',
-              border: '1px solid rgba(63,185,80,0.25)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.1em',
+              color: 'var(--tf-text-muted)',
             }}
           >
+            Organization Chart
+          </p>
+          {activeAgentCount > 0 && (
             <span
               style={{
-                width: '5px',
-                height: '5px',
-                borderRadius: '50%',
-                backgroundColor: 'var(--tf-success)',
-                animation: 'pulse-ring 1.8s ease-out infinite',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '2px 8px',
+                borderRadius: '999px',
+                fontSize: '10px',
+                fontWeight: 600,
+                backgroundColor: activeAgentCount > 1 ? 'rgba(63,185,80,0.12)' : 'rgba(63,185,80,0.08)',
+                color: 'var(--tf-success)',
+                border: '1px solid rgba(63,185,80,0.25)',
               }}
-            />
-            {activeAgentCount} active{activeAgentCount > 1 ? ' — collaborating' : ''}
-          </span>
+            >
+              <span
+                style={{
+                  width: '5px',
+                  height: '5px',
+                  borderRadius: '50%',
+                  backgroundColor: 'var(--tf-success)',
+                  animation: 'pulse-ring 1.8s ease-out infinite',
+                }}
+              />
+              {activeAgentCount} active{activeAgentCount > 1 ? ' — collaborating' : ''}
+            </span>
+          )}
+        </div>
+        {activeAgentNames.length > 0 && (
+          <p style={{ fontSize: '11px', color: 'var(--tf-success)', fontWeight: 500, textAlign: 'center' }}>
+            {activeAgentNames.join(', ')}
+          </p>
         )}
       </div>
       {activeProjectId && (
@@ -1111,13 +1144,15 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
                         <button
                           key={agent.id}
                           onClick={() => handleAgentClick(agent)}
+                          className={active && !mutedInMicro ? 'org-node-active' : ''}
                           style={{
-                            border: `1px solid ${active && !mutedInMicro ? 'var(--tf-success)' : 'var(--tf-border)'}`,
-                            backgroundColor: active && !mutedInMicro ? 'rgba(63,185,80,0.08)' : 'var(--tf-surface)',
-                            color: 'var(--tf-text)',
+                            border: `1.5px solid ${active && !mutedInMicro ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+                            backgroundColor: active && !mutedInMicro ? 'rgba(63,185,80,0.15)' : 'var(--tf-surface)',
+                            color: active && !mutedInMicro ? 'var(--tf-success)' : 'var(--tf-text)',
                             borderRadius: '999px',
                             padding: '4px 9px',
                             fontSize: '11px',
+                            fontWeight: active && !mutedInMicro ? 600 : 400,
                             cursor: 'pointer',
                             display: 'flex',
                             alignItems: 'center',
