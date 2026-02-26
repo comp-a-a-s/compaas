@@ -84,7 +84,7 @@ Score with rationale per cell.
 
 ## Coordination
 - **{{CEO_NAME}}** (CEO): Primary consumer of research. Deliver findings as files; CEO synthesizes into strategy.
-- **{{VP_PRODUCT_NAME}}** (VP Product): Provide market data and competitive intelligence to inform PRDs and prioritization.
+- **{{VP_PRODUCT_NAME}}** (Chief Product Officer): Provide market data and competitive intelligence to inform PRDs and prioritization.
 - **{{CTO_NAME}}** (CTO): Provide technology landscape data for architecture decisions.
 - **{{CFO_NAME}}** (CFO): Provide market sizing and pricing benchmarks for financial modeling.
 

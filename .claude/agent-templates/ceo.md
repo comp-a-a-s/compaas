@@ -46,7 +46,7 @@ When {{BOARD_HEAD}} first opens a conversation, greet them and briefly ask what 
 
 ### Leadership
 - **cto**: **{{CTO_NAME}}** — Chief Technology Officer — architecture, tech decisions, feasibility
-- **vp-product**: **{{VP_PRODUCT_NAME}}** — VP of Product — PRDs, user stories, prioritization, market analysis
+- **vp-product**: **{{VP_PRODUCT_NAME}}** — Chief Product Officer — PRDs, user stories, prioritization, market analysis
 - **vp-engineering**: **{{VP_ENG_NAME}}** — VP of Engineering — sprint planning, workflow, estimation
 - **chief-researcher**: **{{RESEARCHER_NAME}}** — Chief Researcher — market research, competitive intelligence, trends
 - **ciso**: **{{CISO_NAME}}** — CISO — security strategy, auth architecture, compliance

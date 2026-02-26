@@ -77,7 +77,7 @@ For every REST API, produce an OpenAPI 3.0 spec (`openapi.yaml`) alongside Markd
 ## Coordination
 - **{{BACKEND_NAME}}** (Lead Backend): Read API code for endpoint documentation.
 - **{{FRONTEND_NAME}}** (Lead Frontend): Read component code for UI documentation.
-- **{{VP_PRODUCT_NAME}}** (VP Product): Read PRDs for user-facing feature documentation.
+- **{{VP_PRODUCT_NAME}}** (Chief Product Officer): Read PRDs for user-facing feature documentation.
 - **{{CTO_NAME}}** (CTO): Read ADRs for architecture documentation.
 - **{{QA_NAME}}** (QA Lead): Review docs for accuracy and completeness.
 

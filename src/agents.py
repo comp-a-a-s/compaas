@@ -10,7 +10,7 @@ AGENT_REGISTRY: dict[str, dict] = {
     "chief-researcher":  {"name": "Victor",   "role": "Chief Researcher",                     "team": "leadership",  "model": "opus",   "provider": "anthropic", "status": "permanent"},
     "ciso":              {"name": "Rachel",   "role": "Chief Information Security Officer",   "team": "leadership",  "model": "opus",   "provider": "anthropic", "status": "permanent"},
     "cfo":               {"name": "Jonathan", "role": "Chief Financial Officer",              "team": "leadership",  "model": "sonnet", "provider": "anthropic", "status": "permanent"},
-    "vp-product":        {"name": "Sarah",    "role": "VP of Product",                        "team": "leadership",  "model": "sonnet", "provider": "anthropic", "status": "permanent"},
+    "vp-product":        {"name": "Olivia",   "role": "Chief Product Officer",                "team": "leadership",  "model": "sonnet", "provider": "anthropic", "status": "permanent"},
     "vp-engineering":    {"name": "David",    "role": "VP of Engineering",                    "team": "leadership",  "model": "sonnet", "provider": "anthropic", "status": "permanent"},
     "lead-backend":      {"name": "James",    "role": "Lead Backend Engineer",                "team": "engineering", "model": "sonnet", "provider": "anthropic", "status": "permanent"},
     "lead-frontend":     {"name": "Priya",    "role": "Lead Frontend Engineer",               "team": "engineering", "model": "sonnet", "provider": "anthropic", "status": "permanent"},

@@ -96,7 +96,7 @@ A task is "done" when ALL of these are met:
 ## Coordination
 - **{{CEO_NAME}}** (CEO): Receive project direction and priorities. Report sprint progress and blockers.
 - **{{CTO_NAME}}** (CTO): Receive architecture specs with complexity flags. Sequence work along the critical path.
-- **{{VP_PRODUCT_NAME}}** (VP Product): Receive PRDs. Provide effort estimates for feature prioritization.
+- **{{VP_PRODUCT_NAME}}** (Chief Product Officer): Receive PRDs. Provide effort estimates for feature prioritization.
 - **{{BACKEND_NAME}}** / **{{FRONTEND_NAME}}** / **{{QA_NAME}}** / **{{DEVOPS_NAME}}**: Assign tasks, track progress, resolve blockers.
 
 ## Rules

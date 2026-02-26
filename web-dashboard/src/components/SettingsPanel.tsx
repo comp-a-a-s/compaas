@@ -55,7 +55,7 @@ const AGENT_ROSTER = [
   { id: 'chief-researcher', role: 'Chief Researcher' },
   { id: 'ciso', role: 'CISO' },
   { id: 'cfo', role: 'CFO' },
-  { id: 'vp-product', role: 'VP Product' },
+  { id: 'vp-product', role: 'Chief Product Officer' },
   { id: 'vp-engineering', role: 'VP Engineering' },
   { id: 'lead-backend', role: 'Lead Backend' },
   { id: 'lead-frontend', role: 'Lead Frontend' },
