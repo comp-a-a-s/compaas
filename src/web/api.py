@@ -2398,6 +2398,21 @@ _SUPPORT_AGENT_TASKS: dict[str, str] = {
     "tech-writer": "Document setup, activation, and project handoff.",
 }
 
+_DELEGATION_ROLE_REASONS: dict[str, str] = {
+    "chief-researcher": "Assess feasibility, unknowns, and tradeoffs before committing execution scope.",
+    "vp-product": "Define requirements, milestones, and success criteria for delivery.",
+    "cto": "Validate architecture direction and quality constraints up front.",
+    "vp-engineering": "Break work into implementation streams and assign execution ownership.",
+    "lead-frontend": "Own user-facing flow and frontend implementation details.",
+    "lead-backend": "Own backend APIs, service logic, and integration contracts.",
+    "lead-designer": "Refine UX clarity, interaction patterns, and visual hierarchy.",
+    "qa-lead": "Drive validation strategy, regression coverage, and acceptance confidence.",
+    "devops": "Prepare release path, environments, and operational reliability checks.",
+    "security-engineer": "Review security-sensitive surfaces and permission boundaries.",
+    "data-engineer": "Shape analytics, instrumentation, and data-layer implementation.",
+    "tech-writer": "Prepare activation guidance and handoff documentation.",
+}
+
 _EXECUTIVE_ALIGNMENT_AGENTS: tuple[str, ...] = (
     "chief-researcher",
     "vp-product",
@@ -2587,6 +2602,58 @@ def _infer_support_agents(
     ]
     # Cap concurrent delegation to reduce noise and over-orchestration.
     return ordered[:max_agents]
+
+
+def _build_delegation_reasoning(
+    user_message: str,
+    *,
+    intent: dict[str, Any] | None,
+    project: dict | None,
+    config: dict,
+    support_agents: list[str],
+) -> dict[str, Any]:
+    """Summarize why the CEO selected specific delegates for this turn."""
+    if not support_agents:
+        return {"stage": "none", "summary": "", "reasons": []}
+
+    profile = intent or _classify_execution_intent(user_message)
+    intent_class = str(profile.get("class", "") or "")
+    chat_policy = config.get("chat_policy", {}) if isinstance(config.get("chat_policy"), dict) else {}
+    strategy = str(chat_policy.get("delegation_strategy", "executive_first") or "executive_first").strip().lower()
+    if strategy not in {"executive_first", "balanced", "direct"}:
+        strategy = "executive_first"
+
+    status = str((project or {}).get("status", "") or "").strip().lower()
+    early_stage = status in _EARLY_PROJECT_STATUSES
+    plan_approved = bool((project or {}).get("plan_approved"))
+    validation_stage = _is_validation_stage(
+        user_message,
+        intent_class=intent_class,
+        project=project,
+    )
+    alignment_stage = strategy == "executive_first" and not validation_stage and (not plan_approved or early_stage)
+
+    if intent_class == "planning" or alignment_stage:
+        stage = "executive_alignment"
+        summary = "Executive alignment first: scope, requirements, and architecture are clarified before delivery handoffs."
+    elif validation_stage:
+        stage = "validation_handoff"
+        summary = "Validation and handoff stage: QA confidence and documentation completeness are prioritized."
+    else:
+        stage = "delivery_execution"
+        summary = "Delivery execution stage: implementation owners are engaged to ship scoped work."
+
+    reasons = []
+    for agent_id in support_agents:
+        reasons.append({
+            "agent_id": agent_id,
+            "agent_name": _configured_agent_name(agent_id, config),
+            "reason": _DELEGATION_ROLE_REASONS.get(
+                agent_id,
+                "Specialist execution support selected for this stage.",
+            ),
+        })
+    return {"stage": stage, "summary": summary, "reasons": reasons}
 
 
 def _agent_task_summary(agent_id: str, user_message: str) -> str:
@@ -4657,6 +4724,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 project=active_project,
                 config=config,
             )
+            delegation_reasoning = _build_delegation_reasoning(
+                user_message,
+                intent=intent,
+                project=active_project,
+                config=config,
+                support_agents=support_agents,
+            )
             is_execution_turn = str(intent.get("intent", "")) == "execution" and bool(intent.get("actionable"))
             if active_project_id and is_execution_turn and (
                 not bool(intent.get("needs_planning"))
@@ -4699,7 +4773,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     sandbox_profile=sandbox_profile,
                     idempotency_key=idempotency_key,
                     mode=run_mode,
-                    metadata={"intent": intent, "intent_class": intent_class, "support_agents": support_agents},
+                    metadata={
+                        "intent": intent,
+                        "intent_class": intent_class,
+                        "support_agents": support_agents,
+                        "delegation_stage": delegation_reasoning.get("stage", ""),
+                    },
                 )
             except RuntimeError as exc:
                 await websocket.send_json({"type": "error", "content": str(exc)})
@@ -4724,6 +4803,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     "intent_class": intent_class,
                     "sandbox_profile": sandbox_profile,
                     "support_agents": support_agents,
+                    "delegation_stage": delegation_reasoning.get("stage", ""),
+                    "delegation_summary": delegation_reasoning.get("summary", ""),
+                    "delegation_reasons": delegation_reasoning.get("reasons", []),
                 },
             })
 

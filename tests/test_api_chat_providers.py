@@ -140,6 +140,38 @@ def test_infer_support_agents_planning_includes_vp_product():
     assert "qa-lead" not in agents
 
 
+def test_build_delegation_reasoning_returns_executive_alignment_summary():
+    message = "Can you estimate scope and timeline for a career growth tracker?"
+    intent = api._classify_execution_intent(message)
+    support_agents = ["chief-researcher", "vp-product", "cto"]
+    reasoning = api._build_delegation_reasoning(
+        message,
+        intent=intent,
+        project={"status": "planning", "plan_approved": False},
+        config={},
+        support_agents=support_agents,
+    )
+    assert reasoning["stage"] == "executive_alignment"
+    assert "Executive alignment first" in reasoning["summary"]
+    assert len(reasoning["reasons"]) == len(support_agents)
+    assert any(item.get("agent_id") == "vp-product" for item in reasoning["reasons"])
+
+
+def test_build_delegation_reasoning_returns_validation_summary():
+    message = "Run QA regression and prepare release notes."
+    intent = api._classify_execution_intent(message)
+    support_agents = ["qa-lead", "tech-writer"]
+    reasoning = api._build_delegation_reasoning(
+        message,
+        intent=intent,
+        project={"status": "active", "plan_approved": True},
+        config={},
+        support_agents=support_agents,
+    )
+    assert reasoning["stage"] == "validation_handoff"
+    assert "Validation and handoff stage" in reasoning["summary"]
+
+
 def test_infer_support_agents_execution_uses_executive_first_on_early_stage():
     intent = {
         "intent": "execution",

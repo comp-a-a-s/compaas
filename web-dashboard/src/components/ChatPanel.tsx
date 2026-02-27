@@ -578,6 +578,18 @@ interface ActionDetailEntry {
   at: string;
 }
 
+interface DelegationReasonItem {
+  agent_id: string;
+  agent_name: string;
+  reason: string;
+}
+
+interface DelegationContext {
+  stage: string;
+  summary: string;
+  reasons: DelegationReasonItem[];
+}
+
 function ActionLog({ entries, ceoName }: { entries: ActionEntry[]; ceoName: string }) {
   const [collapsed, setCollapsed] = useState(false);
   if (entries.length === 0) return null;
@@ -631,6 +643,38 @@ function ActionLog({ entries, ceoName }: { entries: ActionEntry[]; ceoName: stri
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function DelegationReasoning({ context }: { context: DelegationContext }) {
+  if (!context.summary && context.reasons.length === 0) return null;
+  const stageLabel = context.stage
+    ? context.stage.split('_').map((token) => token.charAt(0).toUpperCase() + token.slice(1)).join(' ')
+    : 'Delegation Plan';
+  return (
+    <div
+      className="mx-1 mb-2 rounded-lg overflow-hidden"
+      style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}
+    >
+      <div
+        className="px-3 py-1.5 text-xs font-medium"
+        style={{ color: 'var(--tf-accent-blue)', borderBottom: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}
+      >
+        Delegation Reasoning • {stageLabel}
+      </div>
+      <div className="px-3 py-2 space-y-1.5">
+        {context.summary && (
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-muted)' }}>
+            {context.summary}
+          </p>
+        )}
+        {context.reasons.map((item) => (
+          <div key={item.agent_id} className="text-xs leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+            <strong style={{ color: 'var(--tf-text)' }}>{item.agent_name}:</strong> {item.reason}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -929,6 +973,7 @@ export default function ChatPanel({
   const [thinkingContent, setThinkingContent] = useState('');
   const [actionLog, setActionLog] = useState<ActionEntry[]>([]);
   const [actionDetails, setActionDetails] = useState<ActionDetailEntry[]>([]);
+  const [delegationContext, setDelegationContext] = useState<DelegationContext | null>(null);
   const [showActionDetails, setShowActionDetails] = useState(false);
   const [latestRunId, setLatestRunId] = useState('');
   const [planningPendingDecision, setPlanningPendingDecision] = useState<{ message: string; reason: string; missingItems?: string[] } | null>(null);
@@ -1034,6 +1079,7 @@ export default function ChatPanel({
             setThinkingContent('');
             setActionLog([]);
             setActionDetails([]);
+            setDelegationContext(null);
             streamingAccumRef.current = '';
           }
         }
@@ -1181,6 +1227,7 @@ export default function ChatPanel({
     setStreamingContent('');
     setThinkingContent('');
     setActionLog([]);
+    setDelegationContext(null);
     setIsWaiting(false);
     if (!chatOpenRef.current) onNewCeoMessageRef.current?.();
   }, []);
@@ -1240,6 +1287,27 @@ export default function ChatPanel({
                 if (!payload) break;
                 const rid = String(payload.id || '');
                 if (rid) setLatestRunId(rid);
+                const stage = String(payload.delegation_stage || '');
+                const summary = String(payload.delegation_summary || '');
+                const reasonsRaw = Array.isArray(payload.delegation_reasons)
+                  ? payload.delegation_reasons
+                  : [];
+                const reasons = reasonsRaw
+                  .map((item) => {
+                    if (!item || typeof item !== 'object') return null;
+                    const row = item as Record<string, unknown>;
+                    const agentId = String(row.agent_id || '').trim();
+                    const agentName = String(row.agent_name || agentId || '').trim();
+                    const reason = String(row.reason || '').trim();
+                    if (!agentId || !agentName || !reason) return null;
+                    return { agent_id: agentId, agent_name: agentName, reason };
+                  })
+                  .filter((item): item is DelegationReasonItem => item !== null);
+                if (summary || reasons.length > 0) {
+                  setDelegationContext({ stage, summary, reasons });
+                } else {
+                  setDelegationContext(null);
+                }
               }
               break;
             case 'action':
@@ -1405,6 +1473,7 @@ export default function ChatPanel({
               setStreamingContent('');
               setThinkingContent('');
               setActionLog([]);
+              setDelegationContext(null);
               setIsWaiting(false);
               setDeployOffer(null);
               break;
@@ -1443,6 +1512,7 @@ export default function ChatPanel({
               }
               setIsWaiting(false);
               setThinkingContent('');
+              setDelegationContext(null);
               break;
           }
         } catch { /* ignore */ }
@@ -1564,6 +1634,7 @@ export default function ChatPanel({
     setThinkingContent('');
     setActionLog([]);
     setActionDetails([]);
+    setDelegationContext(null);
     streamingAccumRef.current = '';
     turnErroredRef.current = false;
     setMicroPendingDecision(null);
@@ -1598,6 +1669,7 @@ export default function ChatPanel({
     stopTypingAnimation();
     await clearChatHistory(activeProjectId);
     setMessages([]); setStreamingContent(''); setThinkingContent('');
+    setDelegationContext(null);
     streamingAccumRef.current = '';
     setPinnedIds(new Set()); localStorage.removeItem('tf_pinned_msgs');
   }, [activeProjectId, stopTypingAnimation]);
@@ -2193,6 +2265,7 @@ export default function ChatPanel({
             {isWaiting && !streamingContent && actionLog.length === 0 && showThinking && (
               <ThinkingIndicator ceoName={ceoName} customText={thinkingContent || undefined} />
             )}
+            {isWaiting && delegationContext && <DelegationReasoning context={delegationContext} />}
             {isWaiting && actionLog.length > 0 && <ActionLog entries={actionLog} ceoName={ceoName} />}
             {showActionDetails && actionDetails.length > 0 && (
               <div className="mx-1 mb-3 rounded-lg overflow-hidden" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-bg)' }}>
