@@ -92,6 +92,23 @@ def test_classify_execution_intent_treats_difficulty_question_as_planning():
     assert intent["needs_planning"] is True
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Can you estimate the effort and timeline for building a B2B onboarding portal?",
+        "Give me a rough order of magnitude for a healthcare scheduling app.",
+        "What would it take to build a data governance dashboard?",
+        "I need discovery and requirements for a mobile expense tracker.",
+        "Please provide feasibility and tradeoff analysis for launching this feature.",
+    ],
+)
+def test_classify_execution_intent_discovery_keywords_route_to_planning(message: str):
+    intent = api._classify_execution_intent(message)
+    assert intent["intent"] == "planning"
+    assert intent["class"] == "planning"
+    assert intent["needs_planning"] is True
+
+
 def test_infer_support_agents_avoids_substring_false_positive_from_build():
     message = "id like to understand how difficult will be to build a career growth tracker"
     intent = api._classify_execution_intent(message)
@@ -105,6 +122,21 @@ def test_infer_support_agents_avoids_substring_false_positive_from_build():
     assert "cto" in agents
     assert "vp-engineering" in agents
     assert "lead-frontend" not in agents
+    assert "qa-lead" not in agents
+
+
+def test_infer_support_agents_planning_includes_vp_product():
+    message = "Can you estimate scope and milestones for a career growth tracker?"
+    intent = api._classify_execution_intent(message)
+    agents = api._infer_support_agents(
+        message,
+        intent=intent,
+        project={"status": "planning", "plan_approved": False},
+        config={"chat_policy": {"delegation_strategy": "executive_first"}},
+    )
+    assert "chief-researcher" in agents
+    assert "vp-product" in agents
+    assert "cto" in agents
     assert "qa-lead" not in agents
 
 

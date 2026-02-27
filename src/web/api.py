@@ -1948,10 +1948,68 @@ def _classify_execution_intent(user_message: str) -> dict[str, Any]:
             "delegate_allowed": False,
         }
 
-    execution_terms = ("build", "implement", "create", "write", "generate", "deploy", "fix", "ship")
-    planning_terms = ("plan", "architecture", "roadmap", "strategy", "research", "tradeoff", "scope")
-    complex_terms = ("production", "security", "scalable", "migration", "ci/cd", "end-to-end", "compliance")
-    review_terms = ("review", "qa", "test", "regression", "validate", "verify")
+    execution_terms = (
+        "build",
+        "implement",
+        "create",
+        "write",
+        "generate",
+        "develop",
+        "code",
+        "scaffold",
+        "set up",
+        "setup",
+        "integrate",
+        "refactor",
+        "optimize",
+        "deploy",
+        "launch",
+        "deliver",
+        "fix",
+        "ship",
+    )
+    planning_terms = (
+        "plan",
+        "architecture",
+        "roadmap",
+        "strategy",
+        "research",
+        "tradeoff",
+        "scope",
+        "discovery",
+        "requirements",
+        "estimate",
+        "effort",
+        "feasibility",
+        "timeline",
+        "milestone",
+        "spec",
+        "prd",
+    )
+    complex_terms = (
+        "production",
+        "security",
+        "scalable",
+        "migration",
+        "ci/cd",
+        "end-to-end",
+        "compliance",
+        "multi-tenant",
+        "sso",
+        "audit",
+    )
+    review_terms = (
+        "review",
+        "qa",
+        "test",
+        "regression",
+        "validate",
+        "verify",
+        "acceptance",
+        "uat",
+        "signoff",
+        "smoke test",
+    )
     discovery_terms = _DISCOVERY_SCOPING_HINTS
 
     execution_hits = sum(1 for t in execution_terms if _contains_keyword(text, (t,)))
@@ -1981,7 +2039,7 @@ def _classify_execution_intent(user_message: str) -> dict[str, Any]:
             "actionable": False,
             "delegate_allowed": False,
         }
-    if planning_hits > execution_hits or (execution_hits > 0 and discovery_hits > 0):
+    if planning_hits > execution_hits or discovery_hits > 0:
         confidence = min(0.98, 0.62 + (planning_hits + discovery_hits) * 0.08)
         return {
             "intent": "planning",
@@ -2313,20 +2371,22 @@ _PROJECT_PHASE_TEMPLATE = [
 ]
 
 _SUPPORT_AGENT_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("research", "investigate", "analyze", "compare", "strategy"), "chief-researcher"),
-    (("frontend", "ui", "ux", "web", "page", "canvas", "css", "react"), "lead-frontend"),
-    (("backend", "api", "server", "database", "endpoint", "auth"), "lead-backend"),
-    (("design", "layout", "theme", "branding", "copy"), "lead-designer"),
-    (("test", "qa", "bug", "regression", "edge case"), "qa-lead"),
-    (("deploy", "release", "vercel", "docker", "infra", "ci", "cd"), "devops"),
-    (("security", "token", "oauth", "permission"), "security-engineer"),
-    (("data", "analytics", "metric", "dashboard"), "data-engineer"),
-    (("readme", "guide", "documentation", "docs", "handoff"), "tech-writer"),
+    (("research", "investigate", "analyze", "analysis", "compare", "strategy", "discovery"), "chief-researcher"),
+    (("product", "requirements", "prioritization", "backlog", "roadmap", "user story", "prd"), "vp-product"),
+    (("frontend", "ui", "ux", "web", "page", "canvas", "css", "react", "component", "responsive"), "lead-frontend"),
+    (("backend", "api", "server", "database", "endpoint", "auth", "service", "graphql", "webhook"), "lead-backend"),
+    (("design", "layout", "theme", "branding", "copy", "wireframe", "prototype"), "lead-designer"),
+    (("test", "qa", "bug", "regression", "edge case", "smoke test", "e2e", "acceptance"), "qa-lead"),
+    (("deploy", "release", "vercel", "docker", "infra", "ci", "cd", "pipeline", "kubernetes", "terraform"), "devops"),
+    (("security", "token", "oauth", "permission", "rbac", "sso", "vulnerability", "threat model"), "security-engineer"),
+    (("data", "analytics", "metric", "dashboard", "etl", "warehouse", "instrumentation", "schema"), "data-engineer"),
+    (("readme", "guide", "documentation", "docs", "handoff", "runbook", "playbook", "changelog"), "tech-writer"),
 )
 
 _SUPPORT_AGENT_TASKS: dict[str, str] = {
     "chief-researcher": "Validate scope assumptions and identify implementation constraints.",
     "cto": "Confirm architecture and quality gates for the implementation.",
+    "vp-product": "Define product requirements, milestones, and success criteria.",
     "vp-engineering": "Break implementation into concrete engineering workstreams.",
     "lead-frontend": "Implement user-facing UI flow and interaction logic.",
     "lead-backend": "Implement server/data logic and integration endpoints.",
@@ -2340,6 +2400,7 @@ _SUPPORT_AGENT_TASKS: dict[str, str] = {
 
 _EXECUTIVE_ALIGNMENT_AGENTS: tuple[str, ...] = (
     "chief-researcher",
+    "vp-product",
     "cto",
     "vp-engineering",
 )
@@ -2376,6 +2437,15 @@ _VALIDATION_STAGE_HINTS: tuple[str, ...] = (
     "document",
     "docs",
     "checklist",
+    "uat",
+    "user acceptance",
+    "release notes",
+    "go/no-go",
+    "signoff",
+    "staging",
+    "rc",
+    "bug bash",
+    "hardening",
 )
 
 _DISCOVERY_SCOPING_HINTS: tuple[str, ...] = (
@@ -2389,6 +2459,15 @@ _DISCOVERY_SCOPING_HINTS: tuple[str, ...] = (
     "complexity",
     "how long",
     "how hard",
+    "rough order of magnitude",
+    "rom",
+    "ballpark",
+    "scope",
+    "timeline",
+    "milestone",
+    "requirements",
+    "tradeoff",
+    "what would it take",
 )
 
 
