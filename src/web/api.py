@@ -770,6 +770,9 @@ DEFAULT_CONFIG: dict = {
         "memory_scope": "project",
         "retention_days": 30,
         "auto_summary_every_messages": runtime_settings.chat_auto_summary_interval,
+        "delegation_strategy": "executive_first",
+        "delegation_max_agents": 4,
+        "delegation_include_qa_docs_early": False,
     },
     "feature_flags": runtime_settings.feature_flags.model_dump(),
     "integrations": {
@@ -2333,6 +2336,46 @@ _SUPPORT_AGENT_TASKS: dict[str, str] = {
     "tech-writer": "Document setup, activation, and project handoff.",
 }
 
+_EXECUTIVE_ALIGNMENT_AGENTS: tuple[str, ...] = (
+    "chief-researcher",
+    "cto",
+    "vp-engineering",
+)
+
+_EARLY_PROJECT_STATUSES: set[str] = {
+    "",
+    "planning",
+    "draft",
+    "discovery",
+    "scoping",
+}
+
+_VALIDATION_PROJECT_STATUSES: set[str] = {
+    "review",
+    "qa",
+    "validation",
+    "release",
+    "handoff",
+    "ready-for-release",
+    "stabilization",
+    "done",
+}
+
+_VALIDATION_STAGE_HINTS: tuple[str, ...] = (
+    "qa",
+    "test",
+    "verify",
+    "validation",
+    "regression",
+    "bugfix",
+    "release",
+    "ship",
+    "handoff",
+    "document",
+    "docs",
+    "checklist",
+)
+
 
 def _ordered_unique(values: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -2354,8 +2397,29 @@ def _configured_agent_name(agent_id: str, config: dict) -> str:
     return get_agent_display_name(agent_id)
 
 
-def _infer_support_agents(user_message: str, *, intent: dict[str, Any] | None = None) -> list[str]:
-    """Infer specialist involvement with conservative delegation defaults."""
+def _is_validation_stage(
+    user_message: str,
+    *,
+    intent_class: str,
+    project: dict | None = None,
+) -> bool:
+    if intent_class == "review":
+        return True
+    status = str((project or {}).get("status", "") or "").strip().lower()
+    if status in _VALIDATION_PROJECT_STATUSES:
+        return True
+    text = (user_message or "").lower()
+    return any(keyword in text for keyword in _VALIDATION_STAGE_HINTS)
+
+
+def _infer_support_agents(
+    user_message: str,
+    *,
+    intent: dict[str, Any] | None = None,
+    project: dict | None = None,
+    config: dict | None = None,
+) -> list[str]:
+    """Infer specialist involvement using stage-aware delegation defaults."""
     text = (user_message or "").lower()
     profile = intent or _classify_execution_intent(user_message)
     intent_class = str(profile.get("class", "") or "")
@@ -2364,20 +2428,63 @@ def _infer_support_agents(user_message: str, *, intent: dict[str, Any] | None = 
     if intent_class in {"greeting", "clarification", "status"} or not actionable or not delegate_allowed:
         return []
 
-    inferred: list[str] = []
+    chat_policy = config.get("chat_policy", {}) if isinstance(config, dict) and isinstance(config.get("chat_policy"), dict) else {}
+    strategy = str(chat_policy.get("delegation_strategy", "executive_first") or "executive_first").strip().lower()
+    if strategy not in {"executive_first", "balanced", "direct"}:
+        strategy = "executive_first"
+    include_qa_docs_early = bool(chat_policy.get("delegation_include_qa_docs_early", False))
+    try:
+        max_agents = int(chat_policy.get("delegation_max_agents", 4) or 4)
+    except (TypeError, ValueError):
+        max_agents = 4
+    max_agents = max(1, min(6, max_agents))
+
+    keyword_inferred: list[str] = []
     for keywords, agent_id in _SUPPORT_AGENT_HINTS:
         if any(keyword in text for keyword in keywords):
-            inferred.append(agent_id)
+            keyword_inferred.append(agent_id)
+
+    inferred: list[str] = []
 
     if intent_class == "planning":
-        inferred.extend(["chief-researcher", "cto", "vp-engineering"])
+        inferred.extend(_EXECUTIVE_ALIGNMENT_AGENTS)
+        inferred.extend(keyword_inferred)
 
     if str(profile.get("intent", "")) == "execution":
-        # Add delivery defaults only for real implementation turns.
-        if not any(agent in inferred for agent in ("lead-frontend", "lead-backend")):
-            inferred.append("vp-engineering")
-        inferred.append("qa-lead")
-        inferred.append("tech-writer")
+        status = str((project or {}).get("status", "") or "").strip().lower()
+        early_stage = status in _EARLY_PROJECT_STATUSES
+        validation_stage = _is_validation_stage(
+            user_message,
+            intent_class=intent_class,
+            project=project,
+        )
+        plan_approved = bool((project or {}).get("plan_approved"))
+        alignment_stage = strategy == "executive_first" and not validation_stage and (not plan_approved or early_stage)
+
+        if strategy == "direct":
+            inferred.extend(keyword_inferred)
+        elif alignment_stage:
+            # First pass on new/scoping projects: executive alignment before
+            # pushing implementation/QA/doc handoffs to execution leads.
+            inferred.extend(_EXECUTIVE_ALIGNMENT_AGENTS)
+            inferred.extend(keyword_inferred)
+            if include_qa_docs_early:
+                inferred.extend(["qa-lead", "tech-writer"])
+        elif validation_stage:
+            inferred.extend(keyword_inferred)
+            inferred.extend(["qa-lead", "tech-writer"])
+            if strategy == "balanced":
+                inferred.append("vp-engineering")
+        else:
+            inferred.extend(keyword_inferred)
+            # Delivery stage defaults: route through implementation leadership.
+            if not any(agent in inferred for agent in ("lead-frontend", "lead-backend", "devops")):
+                inferred.append("vp-engineering")
+            if strategy == "balanced":
+                inferred.append("qa-lead")
+                inferred.append("tech-writer")
+    elif intent_class != "planning":
+        inferred.extend(keyword_inferred)
 
     ordered = [
         agent_id
@@ -2385,7 +2492,7 @@ def _infer_support_agents(user_message: str, *, intent: dict[str, Any] | None = 
         if agent_id in AGENT_REGISTRY and agent_id != "ceo"
     ]
     # Cap concurrent delegation to reduce noise and over-orchestration.
-    return ordered[:4]
+    return ordered[:max_agents]
 
 
 def _agent_task_summary(agent_id: str, user_message: str) -> str:
@@ -4450,7 +4557,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 no_delegation_mode = True
             if intent_class in {"greeting", "status"}:
                 no_delegation_mode = True
-            support_agents = [] if micro_project_mode else _infer_support_agents(user_message, intent=intent)
+            support_agents = [] if micro_project_mode else _infer_support_agents(
+                user_message,
+                intent=intent,
+                project=active_project,
+                config=config,
+            )
             is_execution_turn = str(intent.get("intent", "")) == "execution" and bool(intent.get("actionable"))
             if active_project_id and is_execution_turn and (
                 not bool(intent.get("needs_planning"))

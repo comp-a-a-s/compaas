@@ -756,12 +756,13 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
       for (const [rawId] of liveAgents) {
         const slug = toAgentSlug(rawId);
         const canonicalId = aliasToId.get(slug) || aliasToId.get(rawId) || slug;
+        if (!agentMap.has(canonicalId)) continue;
         if (microProjectMode && canonicalId !== 'ceo') continue;
         s.add(canonicalId);
       }
     }
     return s;
-  }, [agents, scopedEvents, microProjectMode, liveAgents, aliasToId]);
+  }, [agents, scopedEvents, microProjectMode, liveAgents, aliasToId, agentMap]);
 
   // Broader active set to drive connector highlights even when events are sparse.
   const activeIds = useMemo(() => {
@@ -1036,7 +1037,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     { title: 'Specialists', ids: ['security-engineer', 'data-engineer'] },
   ] as const;
 
-  const activeAgentCount = activeIds.size;
+  const activeAgentCount = recentActiveIds.size;
 
   return (
     <div ref={chartContainerRef} style={{ maxWidth: '100%', overflow: 'hidden' }}>

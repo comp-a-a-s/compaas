@@ -483,17 +483,20 @@ function StepAiProvider({
       <p style={{ fontSize: '13px', color: C.textSecondary, marginBottom: '20px' }}>
         Choose how your AI agents communicate. You can change this later in Settings.
       </p>
+      <p style={{ fontSize: '11px', color: C.textMuted, margin: '-10px 0 16px', lineHeight: 1.5 }}>
+        Recommended for best orchestration reliability: Claude Code CLI or Codex CLI. Local self-hosted providers are supported but less recommended.
+      </p>
 
       {/* ── Anthropic ── */}
       <ProviderCard
         icon={<MaterialIcon path={ICON_PATHS.anthropic} />} selected={llmProvider === 'anthropic'}
         title="Anthropic"
-        description="Claude Opus 4 / Sonnet 4 / Haiku 4.5 — world's best reasoning and tool-use. Via CLI or direct API key."
+        description="Claude Opus 4 / Sonnet 4 / Haiku 4.5 — via Claude Code CLI (recommended) or direct API key."
         onClick={() => setLlmProvider('anthropic')}
       >
         {/* Sub-mode tabs */}
         <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
-          <SubTab label="Claude Code CLI" active={anthropicMode === 'cli'} onClick={() => setAnthropicMode('cli')} />
+          <SubTab label="Claude Code CLI (Recommended)" active={anthropicMode === 'cli'} onClick={() => setAnthropicMode('cli')} />
           <SubTab label="API Key (direct)" active={anthropicMode === 'apikey'} onClick={() => setAnthropicMode('apikey')} />
         </div>
 
@@ -616,7 +619,7 @@ function StepAiProvider({
       <ProviderCard
         icon={<MaterialIcon path={ICON_PATHS.openai} />} selected={llmProvider === 'openai'}
         title="OpenAI"
-        description="GPT-4o, o3-mini, o1 — cloud models. Works via API key or the Codex CLI."
+        description="GPT-4o, o3-mini, o1 — cloud models via Codex CLI (recommended) or API key."
         onClick={() => {
           setLlmProvider('openai');
           setLlmApiKey('');
@@ -636,7 +639,7 @@ function StepAiProvider({
             }}
           />
           <SubTab
-            label="Codex CLI"
+            label="Codex CLI (Recommended)"
             active={openaiMode === 'codex'}
             onClick={() => {
               setOpenaiMode('codex');
@@ -771,7 +774,7 @@ function StepAiProvider({
       <ProviderCard
         icon={<MaterialIcon path={ICON_PATHS.local} />} selected={llmProvider === 'openai_compat'}
         title="Local / Self-Hosted"
-        description="Ollama, LM Studio, llama.cpp, Jan, vLLM — run models on your own machine. Free, private, no cloud."
+        description="Ollama, LM Studio, llama.cpp, Jan, vLLM — supported for self-hosting, but generally less recommended for orchestration reliability."
         onClick={() => setLlmProvider('openai_compat')}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
