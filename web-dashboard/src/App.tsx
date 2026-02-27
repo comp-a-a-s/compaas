@@ -311,6 +311,11 @@ export default function App() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const previousTabRef = useRef<string>('overview');
+  const loadProjectsInFlightRef = useRef<Promise<void> | null>(null);
+  const pendingProjectLoadRef = useRef(false);
+  const pendingProjectLoadWithTasksRef = useRef(false);
+  const projectDetailAbortRef = useRef<AbortController | null>(null);
+  const projectRefreshTimestampsRef = useRef<number[]>([]);
 
   // ---- Config check ----
   useEffect(() => {
@@ -370,41 +375,78 @@ export default function App() {
   }, []);
 
   const loadProjects = useCallback(async (includeTasks: boolean = true) => {
-    try {
-      const projectList = await fetchProjects();
-      const list = Array.isArray(projectList) ? projectList : [];
-      setProjects(list);
-      if (activeProjectId && !list.some((p) => p.id === activeProjectId)) {
-        setActiveProjectId('');
-      }
+    pendingProjectLoadRef.current = true;
+    pendingProjectLoadWithTasksRef.current = pendingProjectLoadWithTasksRef.current || includeTasks;
+    if (loadProjectsInFlightRef.current) {
+      return loadProjectsInFlightRef.current;
+    }
 
-      if (includeTasks) {
-        // Fetch task details only when needed to keep UI responsive on larger project sets.
-        setLoadingTasks(true);
-        const results = await Promise.allSettled(
-          list.map((p) => fetchProjectDetail(p.id).then((r) => ({ id: p.id, tasks: r.tasks ?? [] })))
-        );
+    const runner = (async () => {
+      while (pendingProjectLoadRef.current) {
+        const runIncludeTasks = pendingProjectLoadWithTasksRef.current;
+        pendingProjectLoadRef.current = false;
+        pendingProjectLoadWithTasksRef.current = false;
+        try {
+          const now = Date.now();
+          const recent = projectRefreshTimestampsRef.current.filter((ts) => now - ts < 60_000);
+          recent.push(now);
+          projectRefreshTimestampsRef.current = recent;
+          if (recent.length > 24) {
+            console.warn('[COMPaaS] High /api/projects refresh rate detected', { countLastMinute: recent.length });
+          }
+          const projectList = await fetchProjects();
+          const list = Array.isArray(projectList) ? projectList : [];
+          setProjects(list);
+          if (activeProjectId && !list.some((p) => p.id === activeProjectId)) {
+            setActiveProjectId('');
+          }
 
-        const byProject: Record<string, Task[]> = {};
-        const merged: Task[] = [];
-        for (const result of results) {
-          if (result.status === 'fulfilled') {
-            byProject[result.value.id] = result.value.tasks;
-            merged.push(...result.value.tasks);
+          if (runIncludeTasks) {
+            // Fetch task details only when needed. Abort stale detail fetches on newer refreshes.
+            projectDetailAbortRef.current?.abort();
+            const controller = new AbortController();
+            projectDetailAbortRef.current = controller;
+            setLoadingTasks(true);
+
+            const results = await Promise.allSettled(
+              list.map((p) => (
+                fetchProjectDetail(p.id, { signal: controller.signal })
+                  .then((r) => ({ id: p.id, tasks: r.tasks ?? [] }))
+              ))
+            );
+            if (!controller.signal.aborted) {
+              const byProject: Record<string, Task[]> = {};
+              const merged: Task[] = [];
+              for (const result of results) {
+                if (result.status === 'fulfilled') {
+                  byProject[result.value.id] = result.value.tasks;
+                  merged.push(...result.value.tasks);
+                }
+              }
+              setTasksByProject(byProject);
+              setAllTasks(merged);
+            }
+          }
+        } catch {
+          // keep previous
+        } finally {
+          setLoadingProjects(false);
+          if (runIncludeTasks) {
+            setLoadingTasks(false);
           }
         }
-        setTasksByProject(byProject);
-        setAllTasks(merged);
       }
-    } catch {
-      // keep previous
-    } finally {
-      setLoadingProjects(false);
-      if (includeTasks) {
-        setLoadingTasks(false);
-      }
-    }
+    })().finally(() => {
+      loadProjectsInFlightRef.current = null;
+    });
+
+    loadProjectsInFlightRef.current = runner;
+    return runner;
   }, [activeProjectId]);
+
+  useEffect(() => () => {
+    projectDetailAbortRef.current?.abort();
+  }, []);
 
   const handleCreateProjectFromHeader = useCallback(() => {
     const defaultMode = config?.integrations?.workspace_mode === 'github' ? 'github' : 'local';
@@ -521,7 +563,7 @@ export default function App() {
     const shouldRefreshAgents = activeTab === 'overview' || activeTab === 'agents';
     const shouldRefreshMetrics = false; // metrics polling removed
     const shouldRefreshProjectSummaries =
-      chatOpen || activeTab === 'overview' || activeTab === 'projects' || activeTab === 'activity';
+      chatOpen || activeTab === 'overview' || activeTab === 'activity';
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
@@ -541,7 +583,7 @@ export default function App() {
       if (activeTab === 'overview' || activeTab === 'agents') {
         loadAgents();
       }
-      if (chatOpen || activeTab === 'overview' || activeTab === 'projects' || activeTab === 'activity') {
+      if (chatOpen || activeTab === 'overview' || activeTab === 'activity') {
         loadProjects(false);
       }
       // metrics polling removed

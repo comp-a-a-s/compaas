@@ -14,10 +14,15 @@ const BASE = '/api';
 const FETCH_TIMEOUT_MS = 15_000;
 
 async function safeFetch<T>(url: string, fallback: T, options?: RequestInit): Promise<T> {
+  const externalSignal = options?.signal;
+  const restOptions: RequestInit = { ...(options ?? {}) };
+  delete (restOptions as { signal?: AbortSignal }).signal;
   const controller = new AbortController();
+  const abortForwarder = () => controller.abort();
+  externalSignal?.addEventListener('abort', abortForwarder, { once: true });
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
+    const res = await fetch(url, { ...restOptions, signal: controller.signal });
     if (!res.ok) return fallback;
     const data: T = await res.json();
     return data;
@@ -25,6 +30,7 @@ async function safeFetch<T>(url: string, fallback: T, options?: RequestInit): Pr
     return fallback;
   } finally {
     clearTimeout(timeoutId);
+    externalSignal?.removeEventListener('abort', abortForwarder);
   }
 }
 
@@ -58,9 +64,12 @@ export async function fetchProjects(): Promise<Project[]> {
   return safeFetch<Project[]>(`${BASE}/projects`, []);
 }
 
-export async function fetchProjectDetail(id: string): Promise<{ project: Project; tasks: Task[] }> {
+export async function fetchProjectDetail(
+  id: string,
+  options?: { signal?: AbortSignal },
+): Promise<{ project: Project; tasks: Task[] }> {
   const fallback = { project: { id, name: '', status: '' }, tasks: [] };
-  return safeFetch(`${BASE}/projects/${encodeURIComponent(id)}`, fallback);
+  return safeFetch(`${BASE}/projects/${encodeURIComponent(id)}`, fallback, options);
 }
 
 export async function fetchProjectDecisions(id: string): Promise<Decision[]> {

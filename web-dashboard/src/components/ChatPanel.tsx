@@ -977,6 +977,8 @@ export default function ChatPanel({
   const projectsRef = useRef(projects);
   const onActiveProjectChangeRef = useRef(onActiveProjectChange);
   const onNewCeoMessageRef = useRef(onNewCeoMessage);
+  const onAgentActivityRef = useRef(onAgentActivity);
+  const onAgentRemoveRef = useRef(onAgentRemove);
   const streamingAccumRef = useRef('');
   const turnErroredRef = useRef(false);
   const isWaitingRef = useRef(false);
@@ -990,6 +992,8 @@ export default function ChatPanel({
   useEffect(() => { projectsRef.current = projects; }, [projects]);
   useEffect(() => { onActiveProjectChangeRef.current = onActiveProjectChange; }, [onActiveProjectChange]);
   useEffect(() => { onNewCeoMessageRef.current = onNewCeoMessage; }, [onNewCeoMessage]);
+  useEffect(() => { onAgentActivityRef.current = onAgentActivity; }, [onAgentActivity]);
+  useEffect(() => { onAgentRemoveRef.current = onAgentRemove; }, [onAgentRemove]);
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
 
@@ -1293,20 +1297,20 @@ export default function ChatPanel({
                 const detailSource = String(payload.source_agent || payload.actor || '').trim().toLowerCase();
                 const detailTask = String(payload.task || '').trim();
                 if (detailFlow === 'down' && detailTarget && detailTarget !== 'ceo') {
-                  onAgentActivity?.(detailTarget, detailTask, 'down');
+                  onAgentActivityRef.current?.(detailTarget, detailTask, 'down');
                 } else if (detailFlow === 'up' && detailSource && detailSource !== 'ceo') {
-                  onAgentActivity?.(detailSource, detailTask, 'up');
+                  onAgentActivityRef.current?.(detailSource, detailTask, 'up');
                 }
                 // On completion: transition agent to 'up' flow instead of removing,
                 // keeping the org chart node lit for the full expiry window.
                 if (detailState === 'completed' || detailState === 'failed') {
                   const finishedAgent = detailSource !== 'ceo' ? detailSource : (detailTarget !== 'ceo' ? detailTarget : '');
-                  if (finishedAgent) onAgentActivity?.(finishedAgent, detailTask || 'Completed', 'up');
+                  if (finishedAgent) onAgentActivityRef.current?.(finishedAgent, detailTask || 'Completed', 'up');
                 }
                 // Only hard-remove on explicit failure flow (timed-out delegations)
                 if (detailFlow === 'failed') {
                   const failedAgent = detailSource !== 'ceo' ? detailSource : (detailTarget !== 'ceo' ? detailTarget : '');
-                  if (failedAgent) onAgentRemove?.(failedAgent);
+                  if (failedAgent) onAgentRemoveRef.current?.(failedAgent);
                 }
 
                 if (detailState === 'started') {

@@ -140,12 +140,20 @@ export default function FloatingSelect({
     const initialIndex = filteredOptions.findIndex((opt) => !opt.disabled && opt.value === value);
     const fallbackIndex = filteredOptions.findIndex((opt) => !opt.disabled);
     const nextIndex = initialIndex >= 0 ? initialIndex : fallbackIndex;
-    setHighlightedIndex(nextIndex);
-    if (searchable) {
-      setTimeout(() => searchRef.current?.focus(), 0);
-    } else {
-      setTimeout(() => menuRef.current?.focus(), 0);
-    }
+    const frame = window.requestAnimationFrame(() => {
+      setHighlightedIndex(nextIndex);
+    });
+    const focusTimer = window.setTimeout(() => {
+      if (searchable) {
+        searchRef.current?.focus();
+      } else {
+        menuRef.current?.focus();
+      }
+    }, 0);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(focusTimer);
+    };
   }, [open, filteredOptions, searchable, updateMenuPosition, value]);
 
   useEffect(() => () => {

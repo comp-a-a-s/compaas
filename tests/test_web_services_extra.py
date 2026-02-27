@@ -348,6 +348,7 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
 
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
+    (repo_dir / ".git").mkdir()
     (repo_dir / "main.py").write_text("key = 'sk-abcdefghijklmnopqrstuvwxyz123456'\n", encoding="utf-8")
     scan = service.pre_push_secret_scan(str(repo_dir))
     assert scan["status"] == "ok"
@@ -505,3 +506,40 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
     )
     assert deploy_saved["status"] == "ok"
     assert deploy_saved["deployment_url"] == "https://compaas-preview.vercel.app"
+
+
+def test_integration_service_repo_path_guard_allows_valid_repo(monkeypatch, tmp_path):
+    workspace_root = tmp_path / "workspace"
+    repo_dir = workspace_root / "demo-repo"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / ".git").mkdir()
+
+    service = IntegrationService(str(tmp_path), workspace_root=str(workspace_root))
+    monkeypatch.setattr(
+        IntegrationService,
+        "_run_git",
+        staticmethod(lambda _repo_path, _args: (True, "ok")),
+    )
+
+    result = service.sync_remote(str(repo_dir), default_branch="main")
+    assert result["status"] == "ok"
+    assert "fetch" in result
+
+
+def test_integration_service_repo_path_guard_rejects_invalid_paths(tmp_path):
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True)
+    service = IntegrationService(str(tmp_path), workspace_root=str(workspace_root))
+
+    outside = tmp_path / "outside-repo"
+    outside.mkdir(parents=True)
+    (outside / ".git").mkdir()
+    blocked_outside = service.sync_remote(str(outside), default_branch="main")
+    assert blocked_outside["status"] == "error"
+    assert blocked_outside["code"] == "invalid_repo_path"
+
+    non_repo = workspace_root / "plain-folder"
+    non_repo.mkdir(parents=True)
+    blocked_non_repo = service.sync_remote(str(non_repo), default_branch="main")
+    assert blocked_non_repo["status"] == "error"
+    assert blocked_non_repo["code"] == "invalid_repo_path"

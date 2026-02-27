@@ -25,8 +25,26 @@ def _utcnow_iso() -> str:
 class IntegrationService:
     """Best-effort integration actions for GitHub/Vercel workflows."""
 
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, workspace_root: str = ""):
         self.data_dir = data_dir
+        self.workspace_root = os.path.realpath(str(workspace_root).strip()) if str(workspace_root).strip() else ""
+
+    def _validate_repo_path(self, repo_path: str) -> tuple[bool, str, str]:
+        """Validate a repo path for git operations and return canonical path."""
+        raw = str(repo_path or "").strip()
+        if not raw:
+            return False, "repo_path is required.", ""
+        normalized = os.path.realpath(os.path.abspath(raw))
+        if self.workspace_root:
+            root = self.workspace_root
+            if normalized != root and not normalized.startswith(root + os.sep):
+                return False, "repo_path must be inside the configured workspace root.", ""
+        if not os.path.isdir(normalized):
+            return False, "repo_path does not exist or is not a directory.", ""
+        git_marker = os.path.join(normalized, ".git")
+        if not os.path.exists(git_marker):
+            return False, "repo_path is not a git repository.", ""
+        return True, "", normalized
 
     @staticmethod
     def _request_ssl_context() -> ssl.SSLContext:
@@ -201,10 +219,13 @@ class IntegrationService:
         }
 
     def create_branch(self, repo_path: str, *, base_branch: str, new_branch: str) -> dict[str, Any]:
-        ok, out = self._run_git(repo_path, ["fetch", "origin", base_branch])
+        valid, message, normalized_path = self._validate_repo_path(repo_path)
+        if not valid:
+            return {"status": "error", "code": "invalid_repo_path", "message": message}
+        ok, out = self._run_git(normalized_path, ["fetch", "origin", base_branch])
         if not ok:
             return {"status": "error", "message": out}
-        ok, out = self._run_git(repo_path, ["checkout", "-B", new_branch, f"origin/{base_branch}"])
+        ok, out = self._run_git(normalized_path, ["checkout", "-B", new_branch, f"origin/{base_branch}"])
         if not ok:
             return {"status": "error", "message": out}
         return {"status": "ok", "branch": new_branch, "message": out}
@@ -238,6 +259,9 @@ class IntegrationService:
         )
 
     def pre_push_secret_scan(self, repo_path: str) -> dict[str, Any]:
+        valid, message, normalized_path = self._validate_repo_path(repo_path)
+        if not valid:
+            return {"status": "error", "code": "invalid_repo_path", "message": message}
         patterns = {
             "OpenAI API key": re.compile(r"sk-[a-zA-Z0-9_-]{20,}"),
             "GitHub token": re.compile(r"ghp_[a-zA-Z0-9]{20,}"),
@@ -245,7 +269,7 @@ class IntegrationService:
             "Private key": re.compile(r"-----BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY-----"),
         }
         findings: list[dict[str, Any]] = []
-        for root, _, files in os.walk(repo_path):
+        for root, _, files in os.walk(normalized_path):
             if ".git" in root.split(os.sep):
                 continue
             for name in files:
@@ -260,7 +284,7 @@ class IntegrationService:
                         findings.append(
                             {
                                 "rule": label,
-                                "file": os.path.relpath(path, repo_path),
+                                "file": os.path.relpath(path, normalized_path),
                                 "snippet": match.group(0)[:60],
                             }
                         )
@@ -271,13 +295,16 @@ class IntegrationService:
         return {"status": "ok", "findings": findings, "clean": len(findings) == 0}
 
     def sync_remote(self, repo_path: str, default_branch: str = "master") -> dict[str, Any]:
-        ok, fetch_out = self._run_git(repo_path, ["fetch", "--all", "--prune"])
+        valid, message, normalized_path = self._validate_repo_path(repo_path)
+        if not valid:
+            return {"status": "error", "code": "invalid_repo_path", "message": message}
+        ok, fetch_out = self._run_git(normalized_path, ["fetch", "--all", "--prune"])
         if not ok:
             return {"status": "error", "message": fetch_out}
-        ok, status_out = self._run_git(repo_path, ["status", "--short", "--branch"])
+        ok, status_out = self._run_git(normalized_path, ["status", "--short", "--branch"])
         if not ok:
             return {"status": "error", "message": status_out}
-        ok, rebase_out = self._run_git(repo_path, ["pull", "--rebase", "origin", default_branch])
+        ok, rebase_out = self._run_git(normalized_path, ["pull", "--rebase", "origin", default_branch])
         return {
             "status": "ok" if ok else "warning",
             "fetch": fetch_out,
@@ -286,10 +313,13 @@ class IntegrationService:
         }
 
     def detect_drift(self, repo_path: str, default_branch: str = "master") -> dict[str, Any]:
-        ok, _ = self._run_git(repo_path, ["fetch", "origin", default_branch])
+        valid, message, normalized_path = self._validate_repo_path(repo_path)
+        if not valid:
+            return {"status": "error", "code": "invalid_repo_path", "message": message}
+        ok, _ = self._run_git(normalized_path, ["fetch", "origin", default_branch])
         if not ok:
             return {"status": "error", "message": "Failed to fetch origin state"}
-        ok, out = self._run_git(repo_path, ["rev-list", "--left-right", "--count", f"HEAD...origin/{default_branch}"])
+        ok, out = self._run_git(normalized_path, ["rev-list", "--left-right", "--count", f"HEAD...origin/{default_branch}"])
         if not ok:
             return {"status": "error", "message": out}
         parts = out.strip().split()
@@ -298,7 +328,10 @@ class IntegrationService:
         return {"status": "ok", "ahead": ahead, "behind": behind, "drifted": ahead > 0 or behind > 0}
 
     def rollback_commit(self, repo_path: str, commit_sha: str) -> dict[str, Any]:
-        ok, out = self._run_git(repo_path, ["revert", "--no-edit", commit_sha])
+        valid, message, normalized_path = self._validate_repo_path(repo_path)
+        if not valid:
+            return {"status": "error", "code": "invalid_repo_path", "message": message}
+        ok, out = self._run_git(normalized_path, ["revert", "--no-edit", commit_sha])
         if not ok:
             return {"status": "error", "message": out}
         return {"status": "ok", "message": out}

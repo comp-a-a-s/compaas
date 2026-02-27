@@ -691,6 +691,10 @@ class TestIntegrationSecurity:
         with open(api_module.CONFIG_PATH, "w") as f:
             yaml.safe_dump({
                 "setup_complete": True,
+                "llm": {
+                    "provider": "openai",
+                    "api_key": "sk-test-secret",
+                },
                 "integrations": {
                     "github_token": "ghp_secret",
                     "vercel_token": "vercel_secret",
@@ -702,10 +706,125 @@ class TestIntegrationSecurity:
         response = client.get("/api/config")
         assert response.status_code == 200
         data = response.json()
+        assert data["llm"]["api_key"] == api_module.REDACTED_SECRET
         assert data["integrations"]["github_token"] == api_module.REDACTED_SECRET
         assert data["integrations"]["vercel_token"] == api_module.REDACTED_SECRET
         assert data["integrations"]["slack_token"] == api_module.REDACTED_SECRET
         assert data["integrations"]["webhook_url"] == "https://example.com/hook"
+
+    def test_v1_feature_flags_blocks_remote_mutation_without_admin_token(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "_is_loopback_client", lambda _request: False)
+        monkeypatch.delenv("COMPAAS_ADMIN_TOKEN", raising=False)
+
+        response = client.patch("/api/v1/feature-flags", json={"diff_summary": False})
+        assert response.status_code == 403
+
+    def test_v1_feature_flags_allows_remote_mutation_with_admin_token(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "_is_loopback_client", lambda _request: False)
+        monkeypatch.setenv("COMPAAS_ADMIN_TOKEN", "test-admin-token")
+
+        blocked = client.patch("/api/v1/feature-flags", json={"diff_summary": False})
+        assert blocked.status_code == 401
+
+        allowed = client.patch(
+            "/api/v1/feature-flags",
+            json={"diff_summary": False},
+            headers={"Authorization": "Bearer test-admin-token"},
+        )
+        assert allowed.status_code == 200
+        assert allowed.json()["feature_flags"]["diff_summary"] is False
+
+    def test_v1_github_sync_rejects_repo_path_outside_workspace_root(self, client):
+        response = client.post("/api/v1/github/sync", json={"repo_path": "/tmp", "default_branch": "main"})
+        assert response.status_code == 400
+        assert "workspace root" in str(response.json().get("detail", "")).lower()
+
+    def test_v1_github_sync_rejects_non_repo_path(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        sandbox_root = os.path.join(temp_data_dir, "workspace")
+        os.makedirs(sandbox_root, exist_ok=True)
+        plain_dir = os.path.join(sandbox_root, "plain-folder")
+        os.makedirs(plain_dir, exist_ok=True)
+        monkeypatch.setattr(api_module.integration_service, "workspace_root", os.path.realpath(sandbox_root))
+
+        response = client.post("/api/v1/github/sync", json={"repo_path": plain_dir, "default_branch": "main"})
+        assert response.status_code == 400
+        assert "git repository" in str(response.json().get("detail", "")).lower()
+
+    def test_llm_test_blocks_private_non_loopback_hosts(self, client, monkeypatch):
+        async def fake_probe_connection(**_kwargs):
+            return True, "ok"
+
+        monkeypatch.setattr("src.llm_provider.probe_connection", fake_probe_connection)
+        response = client.post("/api/llm/test", json={
+            "base_url": "http://10.1.2.3:11434/v1",
+            "model": "llama3",
+            "api_key": "local",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "error"
+        assert "blocked" in payload["message"].lower()
+
+    def test_llm_test_allows_loopback_hosts(self, client, monkeypatch):
+        called = {"count": 0}
+
+        async def fake_probe_connection(**_kwargs):
+            called["count"] += 1
+            return True, "ok"
+
+        monkeypatch.setattr("src.llm_provider.probe_connection", fake_probe_connection)
+        response = client.post("/api/llm/test", json={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "model": "llama3",
+            "api_key": "local",
+        })
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+        assert called["count"] == 1
+
+    def test_llm_test_allowlist_overrides_private_host_block(self, client, monkeypatch):
+        called = {"count": 0}
+
+        async def fake_probe_connection(**_kwargs):
+            called["count"] += 1
+            return True, "ok"
+
+        monkeypatch.setenv("COMPAAS_LLM_TEST_ALLOWLIST", "10.1.2.3")
+        monkeypatch.setattr("src.llm_provider.probe_connection", fake_probe_connection)
+        response = client.post("/api/llm/test", json={
+            "base_url": "http://10.1.2.3:11434/v1",
+            "model": "llama3",
+            "api_key": "local",
+        })
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+        assert called["count"] == 1
+
+    def test_setup_config_requires_auth_after_setup_complete(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({"setup_complete": True, "user": {"name": "Existing"}}, f)
+
+        monkeypatch.setattr(api_module, "_is_loopback_client", lambda _request: False)
+        monkeypatch.setenv("COMPAAS_ADMIN_TOKEN", "test-admin-token")
+
+        blocked = client.post("/api/config/setup", json={"user": {"name": "Blocked"}})
+        assert blocked.status_code == 401
+
+        allowed = client.post(
+            "/api/config/setup",
+            json={"user": {"name": "Allowed"}},
+            headers={"X-COMPAAS-ADMIN-TOKEN": "test-admin-token"},
+        )
+        assert allowed.status_code == 200
 
     def test_save_integrations_ignores_redacted_placeholder(self, client, monkeypatch, temp_data_dir):
         import src.web.api as api_module

@@ -1223,6 +1223,8 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [integrationOpsStatus, setIntegrationOpsStatus] = useState('');
   const [integrationOpsBusy, setIntegrationOpsBusy] = useState(false);
   const [quickVerifyBusy, setQuickVerifyBusy] = useState<'' | 'github' | 'vercel'>('');
+  const [githubInlineStatus, setGithubInlineStatus] = useState('');
+  const [vercelInlineStatus, setVercelInlineStatus] = useState('');
   const [showAdvancedIntegrationControls, setShowAdvancedIntegrationControls] = useState(false);
   const [repoPathForOps, setRepoPathForOps] = useState('');
   const [rollbackCommit, setRollbackCommit] = useState('');
@@ -1366,15 +1368,19 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const handleQuickVerifyGithub = async () => {
     const repo = githubRepo.trim();
     const tokenForVerify = githubTokenMasked ? undefined : githubToken.trim();
+    setGithubInlineStatus('');
     if (!repo) {
+      setGithubInlineStatus('Repository is required (owner/repo).');
       setIntegrationOpsStatus('GitHub verification requires a repository in owner/repo format.');
       return;
     }
     if (!tokenForVerify && !githubTokenMasked) {
+      setGithubInlineStatus('Token is required for verification.');
       setIntegrationOpsStatus('GitHub verification requires a token.');
       return;
     }
     setQuickVerifyBusy('github');
+    setGithubInlineStatus('Saving connector settings...');
     setIntegrationOpsStatus('Saving GitHub connector settings...');
     const saved = await saveIntegrations({
       workspace_mode: workspaceMode,
@@ -1387,16 +1393,19 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     if (!saved) {
       setQuickVerifyBusy('');
       setGithubVerified(false);
+      setGithubInlineStatus('Failed to save settings before verification.');
       setIntegrationOpsStatus('Failed to save GitHub settings before verification.');
       return;
     }
 
+    setGithubInlineStatus('Verifying connector...');
     setIntegrationOpsStatus('Verifying GitHub connector...');
     const result = await githubVerifyIntegration({ token: tokenForVerify, repo });
     if (!result) {
       setQuickVerifyBusy('');
       setGithubVerified(false);
       setGithubLastError('Network error during GitHub verification.');
+      setGithubInlineStatus('Verification failed due to a network error.');
       setIntegrationOpsStatus('GitHub verification failed due to a network error.');
       return;
     }
@@ -1406,6 +1415,7 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     setGithubVerified(verified);
     setGithubVerifiedAt(verifiedAt);
     setGithubLastError(verified ? '' : result.message || 'GitHub verification failed.');
+    setGithubInlineStatus(result.message || (verified ? 'GitHub connector verified.' : 'GitHub verification failed.'));
     setIntegrationOpsStatus(result.message || (verified ? 'GitHub connector verified.' : 'GitHub verification failed.'));
     setQuickVerifyBusy('');
   };
@@ -1413,15 +1423,19 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const handleQuickVerifyVercel = async () => {
     const projectName = vercelProjectName.trim();
     const tokenForVerify = vercelTokenMasked ? undefined : vercelToken.trim();
+    setVercelInlineStatus('');
     if (!projectName) {
+      setVercelInlineStatus('Project name is required.');
       setIntegrationOpsStatus('Vercel verification requires a project name.');
       return;
     }
     if (!tokenForVerify && !vercelTokenMasked) {
+      setVercelInlineStatus('Token is required for verification.');
       setIntegrationOpsStatus('Vercel verification requires a token.');
       return;
     }
     setQuickVerifyBusy('vercel');
+    setVercelInlineStatus('Saving connector settings...');
     setIntegrationOpsStatus('Saving Vercel connector settings...');
     const saved = await saveIntegrations({
       vercel_token: vercelTokenMasked ? REDACTED_SECRET : vercelToken.trim(),
@@ -1432,10 +1446,12 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     if (!saved) {
       setQuickVerifyBusy('');
       setVercelVerified(false);
+      setVercelInlineStatus('Failed to save settings before verification.');
       setIntegrationOpsStatus('Failed to save Vercel settings before verification.');
       return;
     }
 
+    setVercelInlineStatus('Verifying connector...');
     setIntegrationOpsStatus('Verifying Vercel connector...');
     const result = await vercelVerifyIntegration({
       token: tokenForVerify,
@@ -1446,6 +1462,7 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       setQuickVerifyBusy('');
       setVercelVerified(false);
       setVercelLastError('Network error during Vercel verification.');
+      setVercelInlineStatus('Verification failed due to a network error.');
       setIntegrationOpsStatus('Vercel verification failed due to a network error.');
       return;
     }
@@ -1455,6 +1472,7 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     setVercelVerified(verified);
     setVercelVerifiedAt(verifiedAt);
     setVercelLastError(verified ? '' : result.message || 'Vercel verification failed.');
+    setVercelInlineStatus(result.message || (verified ? 'Vercel connector verified.' : 'Vercel verification failed.'));
     setIntegrationOpsStatus(result.message || (verified ? 'Vercel connector verified.' : 'Vercel verification failed.'));
     setQuickVerifyBusy('');
   };
@@ -1620,6 +1638,16 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
 
   const activeTabMeta = SETTINGS_TABS.find((tab) => tab.id === activeTab) ?? SETTINGS_TABS[0];
   const showGlobalSave = activeTab === 'general' || activeTab === 'integrations';
+  const githubVerifyDisabledReason = (quickVerifyBusy.length > 0 && quickVerifyBusy !== 'github')
+    ? 'Another connector verification is in progress.'
+    : (!githubRepo.trim()
+      ? 'Repository is required (owner/repo).'
+      : ((!githubTokenMasked && !githubToken.trim()) ? 'Token is required for verification.' : ''));
+  const vercelVerifyDisabledReason = (quickVerifyBusy.length > 0 && quickVerifyBusy !== 'vercel')
+    ? 'Another connector verification is in progress.'
+    : (!vercelProjectName.trim()
+      ? 'Project name is required.'
+      : ((!vercelTokenMasked && !vercelToken.trim()) ? 'Token is required for verification.' : ''));
 
   return (
     <div style={{ maxWidth: '720px', margin: '0 auto' }} className="animate-fade-in">
@@ -1893,7 +1921,7 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <button
                       onClick={() => { void handleQuickVerifyGithub(); }}
-                      disabled={quickVerifyBusy.length > 0}
+                      disabled={quickVerifyBusy.length > 0 || Boolean(githubVerifyDisabledReason)}
                       style={{
                         padding: '6px 10px',
                         borderRadius: '7px',
@@ -1901,7 +1929,8 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                         backgroundColor: githubVerified ? 'rgba(63,185,80,0.12)' : C.accentDim,
                         color: githubVerified ? C.success : C.accent,
                         fontSize: '12px',
-                        cursor: quickVerifyBusy.length > 0 ? 'wait' : 'pointer',
+                        cursor: (quickVerifyBusy.length > 0 || githubVerifyDisabledReason) ? 'not-allowed' : 'pointer',
+                        opacity: (quickVerifyBusy.length > 0 || githubVerifyDisabledReason) ? 0.75 : 1,
                       }}
                     >
                       {quickVerifyBusy === 'github' ? 'Verifying…' : githubVerified ? 'Verified' : 'Connect & Verify'}
@@ -1912,6 +1941,16 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                       </span>
                     )}
                   </div>
+                  {githubVerifyDisabledReason && (
+                    <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>
+                      {githubVerifyDisabledReason}
+                    </p>
+                  )}
+                  {!githubVerifyDisabledReason && githubInlineStatus && (
+                    <p style={{ margin: 0, fontSize: '11px', color: githubVerified ? C.success : C.textSecondary }}>
+                      {githubInlineStatus}
+                    </p>
+                  )}
                   {!githubVerified && githubLastError && (
                     <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>{githubLastError}</p>
                   )}
@@ -2023,7 +2062,7 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                     />
                     <button
                       onClick={() => { void handleQuickVerifyVercel(); }}
-                      disabled={quickVerifyBusy.length > 0}
+                      disabled={quickVerifyBusy.length > 0 || Boolean(vercelVerifyDisabledReason)}
                       style={{
                         padding: '6px 10px',
                         borderRadius: '7px',
@@ -2031,7 +2070,8 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                         backgroundColor: vercelVerified ? 'rgba(63,185,80,0.12)' : C.accentDim,
                         color: vercelVerified ? C.success : C.accent,
                         fontSize: '12px',
-                        cursor: quickVerifyBusy.length > 0 ? 'wait' : 'pointer',
+                        cursor: (quickVerifyBusy.length > 0 || vercelVerifyDisabledReason) ? 'not-allowed' : 'pointer',
+                        opacity: (quickVerifyBusy.length > 0 || vercelVerifyDisabledReason) ? 0.75 : 1,
                       }}
                     >
                       {quickVerifyBusy === 'vercel' ? 'Verifying…' : vercelVerified ? 'Verified' : 'Connect & Verify'}
@@ -2042,6 +2082,16 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                       </span>
                     )}
                   </div>
+                  {vercelVerifyDisabledReason && (
+                    <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>
+                      {vercelVerifyDisabledReason}
+                    </p>
+                  )}
+                  {!vercelVerifyDisabledReason && vercelInlineStatus && (
+                    <p style={{ margin: 0, fontSize: '11px', color: vercelVerified ? C.success : C.textSecondary }}>
+                      {vercelInlineStatus}
+                    </p>
+                  )}
                   {!vercelVerified && vercelLastError && (
                     <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>{vercelLastError}</p>
                   )}

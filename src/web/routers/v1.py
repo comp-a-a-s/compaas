@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.utils import emit_activity
@@ -25,6 +25,7 @@ class V1Context:
     run_service: RunService
     project_service: ProjectService
     integration_service: IntegrationService
+    require_write_auth: Callable[[Request], None] | None = None
 
 
 class RunCreateRequest(BaseModel):
@@ -137,6 +138,16 @@ def _classify_intent(message: str) -> dict[str, Any]:
 def create_v1_router(ctx: V1Context) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["v1"])
 
+    def _require_mutation_auth(request: Request) -> None:
+        if ctx.require_write_auth is not None:
+            ctx.require_write_auth(request)
+
+    def _raise_invalid_repo_path(result: dict[str, Any]) -> None:
+        if result.get("status") != "error":
+            return
+        if str(result.get("code", "")).startswith("invalid_repo_path"):
+            raise HTTPException(status_code=400, detail=str(result.get("message", "Invalid repo_path.")))
+
     @router.get("/health")
     def v1_health() -> dict[str, Any]:
         cfg = ctx.load_config()
@@ -154,7 +165,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "feature_flags": flags.model_dump()}
 
     @router.patch("/feature-flags")
-    def v1_update_feature_flags(updates: dict[str, Any]) -> dict[str, Any]:
+    def v1_update_feature_flags(request: Request, updates: dict[str, Any]) -> dict[str, Any]:
+        _require_mutation_auth(request)
         cfg = ctx.load_config()
         existing = cfg.get("feature_flags", {})
         if not isinstance(existing, dict):
@@ -225,7 +237,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         }
 
     @router.patch("/chat/memory-policy")
-    def v1_update_memory_policy(body: dict[str, Any]) -> dict[str, Any]:
+    def v1_update_memory_policy(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+        _require_mutation_auth(request)
         cfg = ctx.load_config()
         policy = cfg.get("chat_policy", {})
         if not isinstance(policy, dict):
@@ -249,9 +262,11 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
 
     @router.post("/projects")
     def v1_create_project(
+        request: Request,
         body: ProjectCreateRequest,
         idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     ) -> dict[str, Any]:
+        _require_mutation_auth(request)
         project, created = ctx.project_service.create_project(
             name=body.name,
             description=body.description,
@@ -283,7 +298,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "metadata": metadata}
 
     @router.patch("/projects/{project_id}/metadata")
-    def v1_project_metadata_update(project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    def v1_project_metadata_update(request: Request, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        _require_mutation_auth(request)
         try:
             metadata = ctx.project_service.update_metadata(project_id, body)
         except ValueError as exc:
@@ -296,7 +312,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "metadata": metadata}
 
     @router.post("/projects/{project_id}/clone")
-    def v1_clone_project(project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    def v1_clone_project(request: Request, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        _require_mutation_auth(request)
         new_name = str(body.get("name", "") or "")
         try:
             cloned = ctx.project_service.clone_project(project_id, new_name=new_name)
@@ -310,7 +327,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "project": cloned}
 
     @router.post("/projects/{project_id}/archive")
-    def v1_archive_project(project_id: str) -> dict[str, Any]:
+    def v1_archive_project(request: Request, project_id: str) -> dict[str, Any]:
+        _require_mutation_auth(request)
         try:
             meta = ctx.project_service.set_archived(project_id, True)
         except ValueError as exc:
@@ -323,7 +341,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "metadata": meta}
 
     @router.post("/projects/{project_id}/restore")
-    def v1_restore_project(project_id: str) -> dict[str, Any]:
+    def v1_restore_project(request: Request, project_id: str) -> dict[str, Any]:
+        _require_mutation_auth(request)
         try:
             project = ctx.project_service.restore_project(project_id)
         except ValueError as exc:
@@ -376,7 +395,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "artifacts": artifacts if isinstance(artifacts, list) else []}
 
     @router.post("/projects/{project_id}/artifacts")
-    def v1_register_artifact(project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    def v1_register_artifact(request: Request, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        _require_mutation_auth(request)
         file_path = str(body.get("file_path", "") or "").strip()
         action = str(body.get("action", "created") or "created").strip()
         if not file_path:
@@ -397,9 +417,11 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
 
     @router.post("/runs")
     def v1_create_run(
+        request: Request,
         body: RunCreateRequest,
         idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     ) -> dict[str, Any]:
+        _require_mutation_auth(request)
         try:
             run, created = ctx.run_service.create_run(
                 project_id=body.project_id,
@@ -436,7 +458,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "run": run}
 
     @router.post("/runs/{run_id}/cancel")
-    def v1_cancel_run(run_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    def v1_cancel_run(request: Request, run_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        _require_mutation_auth(request)
         reason = str(body.get("reason", "Cancelled by user") or "Cancelled by user")
         run = ctx.run_service.cancel_run(run_id, reason=reason)
         if not run:
@@ -473,7 +496,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "guardrails": guardrails}
 
     @router.post("/runs/{run_id}/retry-step")
-    def v1_retry_step(run_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    def v1_retry_step(request: Request, run_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        _require_mutation_auth(request)
         step_label = str(body.get("step", "manual retry") or "manual retry").strip()
         run = ctx.run_service.transition_run(
             run_id,
@@ -509,7 +533,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return ctx.integration_service.list_github_repos(token)
 
     @router.post("/github/verify")
-    def v1_github_verify(body: GithubVerifyRequest) -> dict[str, Any]:
+    def v1_github_verify(request: Request, body: GithubVerifyRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
         cfg = ctx.load_config()
         integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
         token = body.token.strip() or str(integrations.get("github_token", "") or "").strip()
@@ -539,7 +564,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         }
 
     @router.post("/github/repo/create")
-    def v1_github_repo_create(body: GithubRepoCreateRequest) -> dict[str, Any]:
+    def v1_github_repo_create(request: Request, body: GithubRepoCreateRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
         return ctx.integration_service.create_github_repo(
             body.token,
             name=body.name,
@@ -548,12 +574,15 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         )
 
     @router.post("/github/branch/create")
-    def v1_github_branch_create(body: GithubBranchRequest) -> dict[str, Any]:
-        return ctx.integration_service.create_branch(
+    def v1_github_branch_create(request: Request, body: GithubBranchRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        result = ctx.integration_service.create_branch(
             body.repo_path,
             base_branch=body.base_branch,
             new_branch=body.new_branch,
         )
+        _raise_invalid_repo_path(result)
+        return result
 
     @router.post("/github/pr/template")
     def v1_github_pr_template(body: dict[str, Any]) -> dict[str, Any]:
@@ -571,26 +600,39 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "label": label, "template": template}
 
     @router.post("/github/prepush/scan")
-    def v1_github_secret_scan(body: dict[str, Any]) -> dict[str, Any]:
+    def v1_github_secret_scan(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+        _require_mutation_auth(request)
         repo_path = str(body.get("repo_path", "") or "").strip()
         if not repo_path:
             raise HTTPException(status_code=400, detail="repo_path is required")
-        return ctx.integration_service.pre_push_secret_scan(repo_path)
+        result = ctx.integration_service.pre_push_secret_scan(repo_path)
+        _raise_invalid_repo_path(result)
+        return result
 
     @router.post("/github/sync")
-    def v1_github_sync(body: GithubSyncRequest) -> dict[str, Any]:
-        return ctx.integration_service.sync_remote(body.repo_path, default_branch=body.default_branch)
+    def v1_github_sync(request: Request, body: GithubSyncRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        result = ctx.integration_service.sync_remote(body.repo_path, default_branch=body.default_branch)
+        _raise_invalid_repo_path(result)
+        return result
 
     @router.post("/github/drift")
-    def v1_github_drift(body: GithubSyncRequest) -> dict[str, Any]:
-        return ctx.integration_service.detect_drift(body.repo_path, default_branch=body.default_branch)
+    def v1_github_drift(request: Request, body: GithubSyncRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        result = ctx.integration_service.detect_drift(body.repo_path, default_branch=body.default_branch)
+        _raise_invalid_repo_path(result)
+        return result
 
     @router.post("/github/rollback")
-    def v1_github_rollback(body: GithubRollbackRequest) -> dict[str, Any]:
-        return ctx.integration_service.rollback_commit(body.repo_path, body.commit_sha)
+    def v1_github_rollback(request: Request, body: GithubRollbackRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        result = ctx.integration_service.rollback_commit(body.repo_path, body.commit_sha)
+        _raise_invalid_repo_path(result)
+        return result
 
     @router.post("/github/issues/sync")
-    def v1_github_issue_sync(body: dict[str, Any]) -> dict[str, Any]:
+    def v1_github_issue_sync(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+        _require_mutation_auth(request)
         project_id = str(body.get("project_id", "") or "").strip()
         if not project_id:
             raise HTTPException(status_code=400, detail="project_id is required")
@@ -622,12 +664,14 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         )
 
     @router.post("/vercel/link")
-    def v1_vercel_link(body: VercelLinkRequest) -> dict[str, Any]:
+    def v1_vercel_link(request: Request, body: VercelLinkRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
         token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
         return ctx.integration_service.vercel_link_project(token, name=project_name, team_id=team_id)
 
     @router.post("/vercel/verify")
-    def v1_vercel_verify(body: VercelVerifyRequest) -> dict[str, Any]:
+    def v1_vercel_verify(request: Request, body: VercelVerifyRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
         cfg = ctx.load_config()
         integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
         token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
@@ -662,7 +706,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         }
 
     @router.post("/vercel/deploy")
-    def v1_vercel_deploy(body: VercelDeployRequest) -> dict[str, Any]:
+    def v1_vercel_deploy(request: Request, body: VercelDeployRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
         token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
         target = body.target.lower().strip() or "preview"
         if target not in {"preview", "production"}:
@@ -676,7 +721,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         )
 
     @router.post("/vercel/domain")
-    def v1_vercel_domain(body: VercelDomainRequest) -> dict[str, Any]:
+    def v1_vercel_domain(request: Request, body: VercelDomainRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
         token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
         return ctx.integration_service.vercel_assign_domain(
             token,
@@ -686,7 +732,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         )
 
     @router.post("/vercel/env")
-    def v1_vercel_env(body: VercelEnvRequest) -> dict[str, Any]:
+    def v1_vercel_env(request: Request, body: VercelEnvRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
         token, project_name, team_id = _resolve_vercel_creds(body.token, body.project_name, body.team_id)
         return ctx.integration_service.vercel_set_env(
             token,
@@ -698,7 +745,8 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         )
 
     @router.post("/projects/{project_id}/deploy/vercel")
-    def v1_project_vercel_deploy(project_id: str, body: ProjectVercelDeployRequest) -> dict[str, Any]:
+    def v1_project_vercel_deploy(request: Request, project_id: str, body: ProjectVercelDeployRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
         project = ctx.project_service.state_manager.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found.")
