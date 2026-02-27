@@ -113,11 +113,28 @@ def test_infer_support_agents_execution_uses_delivery_defaults_on_active_stage()
     agents = api._infer_support_agents(
         "Build frontend UI and backend API endpoints.",
         intent=intent,
-        project={"status": "active"},
+        project={"status": "active", "plan_approved": True},
         config={"chat_policy": {"delegation_strategy": "executive_first"}},
     )
     assert "lead-frontend" in agents
     assert "lead-backend" in agents
+    assert "qa-lead" not in agents
+    assert "tech-writer" not in agents
+
+
+def test_infer_support_agents_execution_adds_qa_docs_for_validation_stage():
+    intent = {
+        "intent": "execution",
+        "class": "execution",
+        "actionable": True,
+        "delegate_allowed": True,
+    }
+    agents = api._infer_support_agents(
+        "Run QA regression, verify auth flow, and prepare handoff docs.",
+        intent=intent,
+        project={"status": "active"},
+        config={"chat_policy": {"delegation_strategy": "executive_first"}},
+    )
     assert "qa-lead" in agents
     assert "tech-writer" in agents
 

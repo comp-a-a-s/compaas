@@ -26,6 +26,7 @@ Leadership  Engineering  On-Demand     Dashboards
 
 ## Prerequisites
 
+- **Supported OS**: macOS and Linux
 - **Python 3.10+** (required)
 - **Node.js 18+** (optional, for web dashboard)
 - **Claude Code CLI** (`npm install -g @anthropic-ai/claude-code`) for Anthropic CLI runtime mode

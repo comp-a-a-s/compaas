@@ -2350,6 +2350,32 @@ _EARLY_PROJECT_STATUSES: set[str] = {
     "scoping",
 }
 
+_VALIDATION_PROJECT_STATUSES: set[str] = {
+    "review",
+    "qa",
+    "validation",
+    "release",
+    "handoff",
+    "ready-for-release",
+    "stabilization",
+    "done",
+}
+
+_VALIDATION_STAGE_HINTS: tuple[str, ...] = (
+    "qa",
+    "test",
+    "verify",
+    "validation",
+    "regression",
+    "bugfix",
+    "release",
+    "ship",
+    "handoff",
+    "document",
+    "docs",
+    "checklist",
+)
+
 
 def _ordered_unique(values: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -2369,6 +2395,21 @@ def _configured_agent_name(agent_id: str, config: dict) -> str:
     if value:
         return value
     return get_agent_display_name(agent_id)
+
+
+def _is_validation_stage(
+    user_message: str,
+    *,
+    intent_class: str,
+    project: dict | None = None,
+) -> bool:
+    if intent_class == "review":
+        return True
+    status = str((project or {}).get("status", "") or "").strip().lower()
+    if status in _VALIDATION_PROJECT_STATUSES:
+        return True
+    text = (user_message or "").lower()
+    return any(keyword in text for keyword in _VALIDATION_STAGE_HINTS)
 
 
 def _infer_support_agents(
@@ -2412,19 +2453,34 @@ def _infer_support_agents(
     if str(profile.get("intent", "")) == "execution":
         status = str((project or {}).get("status", "") or "").strip().lower()
         early_stage = status in _EARLY_PROJECT_STATUSES
-        if strategy == "executive_first" and early_stage:
+        validation_stage = _is_validation_stage(
+            user_message,
+            intent_class=intent_class,
+            project=project,
+        )
+        plan_approved = bool((project or {}).get("plan_approved"))
+        alignment_stage = strategy == "executive_first" and not validation_stage and (not plan_approved or early_stage)
+
+        if strategy == "direct":
+            inferred.extend(keyword_inferred)
+        elif alignment_stage:
             # First pass on new/scoping projects: executive alignment before
             # pushing implementation/QA/doc handoffs to execution leads.
             inferred.extend(_EXECUTIVE_ALIGNMENT_AGENTS)
             inferred.extend(keyword_inferred)
             if include_qa_docs_early:
                 inferred.extend(["qa-lead", "tech-writer"])
+        elif validation_stage:
+            inferred.extend(keyword_inferred)
+            inferred.extend(["qa-lead", "tech-writer"])
+            if strategy == "balanced":
+                inferred.append("vp-engineering")
         else:
             inferred.extend(keyword_inferred)
-            # Add delivery defaults only for real implementation turns.
-            if not any(agent in inferred for agent in ("lead-frontend", "lead-backend")):
+            # Delivery stage defaults: route through implementation leadership.
+            if not any(agent in inferred for agent in ("lead-frontend", "lead-backend", "devops")):
                 inferred.append("vp-engineering")
-            if strategy != "direct":
+            if strategy == "balanced":
                 inferred.append("qa-lead")
                 inferred.append("tech-writer")
     elif intent_class != "planning":
