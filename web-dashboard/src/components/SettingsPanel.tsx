@@ -805,9 +805,9 @@ function AiProviderSection({
       {/* Provider radio cards */}
       {(['anthropic', 'openai', 'openai_compat'] as LlmConfig['provider'][]).map((p) => {
         const meta: Record<string, { icon: string; title: string; desc: string }> = {
-          anthropic:    { icon: 'AN', title: 'Anthropic Cloud', desc: 'Claude via Claude Code CLI. Requires ANTHROPIC_API_KEY.' },
-          openai:       { icon: 'OA', title: 'OpenAI',          desc: 'Use API key mode or local Codex CLI mode.' },
-          openai_compat:{ icon: 'LM', title: 'Local Model',     desc: 'Ollama, LM Studio, llama.cpp, or any OpenAI-compatible server.' },
+          anthropic:    { icon: 'AN', title: 'Anthropic Cloud', desc: 'Claude Code CLI (recommended) or API key mode.' },
+          openai:       { icon: 'OA', title: 'OpenAI',          desc: 'Codex CLI (recommended) or API key mode.' },
+          openai_compat:{ icon: 'LM', title: 'Local Model',     desc: 'OpenAI-compatible local server (less recommended for orchestration reliability).' },
         };
         const m = meta[p];
         const selected = provider === p;
@@ -874,7 +874,7 @@ function AiProviderSection({
                   color: anthropicMode === 'cli' ? C.accent : C.textSecondary,
                 }}
               >
-                Claude CLI
+                Claude CLI (Recommended)
               </button>
               <button
                 onClick={() => setAnthropicMode('apikey')}
@@ -956,7 +956,7 @@ function AiProviderSection({
                   color: openaiMode === 'codex' ? C.accent : C.textSecondary,
                 }}
               >
-                Codex CLI
+                Codex CLI (Recommended)
               </button>
             </div>
           </div>
@@ -1012,6 +1012,9 @@ function AiProviderSection({
       {/* Local model fields */}
       {provider === 'openai_compat' && (
         <div style={{ ...rowStyle, marginTop: '4px' }}>
+          <p style={{ margin: '0 0 10px', fontSize: '11px', color: C.textMuted, lineHeight: 1.5 }}>
+            Local runtimes are supported, but CLI-backed cloud runtimes are generally more reliable for multi-agent delegation and tool use.
+          </p>
           <div style={{ marginBottom: '10px' }}>
             <label style={labelStyle}>Server Preset</label>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>

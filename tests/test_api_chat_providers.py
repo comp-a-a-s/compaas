@@ -83,6 +83,79 @@ class _FakeProcess:
             self.returncode = -9
 
 
+def test_infer_support_agents_execution_uses_executive_first_on_early_stage():
+    intent = {
+        "intent": "execution",
+        "class": "execution",
+        "actionable": True,
+        "delegate_allowed": True,
+    }
+    agents = api._infer_support_agents(
+        "Build a tiny notes app with auth.",
+        intent=intent,
+        project={"status": "planning"},
+        config={"chat_policy": {"delegation_strategy": "executive_first"}},
+    )
+    assert "chief-researcher" in agents
+    assert "cto" in agents
+    assert "vp-engineering" in agents
+    assert "qa-lead" not in agents
+    assert "tech-writer" not in agents
+
+
+def test_infer_support_agents_execution_uses_delivery_defaults_on_active_stage():
+    intent = {
+        "intent": "execution",
+        "class": "execution",
+        "actionable": True,
+        "delegate_allowed": True,
+    }
+    agents = api._infer_support_agents(
+        "Build frontend UI and backend API endpoints.",
+        intent=intent,
+        project={"status": "active"},
+        config={"chat_policy": {"delegation_strategy": "executive_first"}},
+    )
+    assert "lead-frontend" in agents
+    assert "lead-backend" in agents
+    assert "qa-lead" in agents
+    assert "tech-writer" in agents
+
+
+def test_infer_support_agents_direct_strategy_skips_default_qa_docs():
+    intent = {
+        "intent": "execution",
+        "class": "execution",
+        "actionable": True,
+        "delegate_allowed": True,
+    }
+    agents = api._infer_support_agents(
+        "Implement backend auth endpoint.",
+        intent=intent,
+        project={"status": "active"},
+        config={"chat_policy": {"delegation_strategy": "direct"}},
+    )
+    assert "lead-backend" in agents
+    assert "qa-lead" not in agents
+    assert "tech-writer" not in agents
+
+
+def test_infer_support_agents_respects_configured_max_agents():
+    intent = {
+        "intent": "execution",
+        "class": "execution",
+        "actionable": True,
+        "delegate_allowed": True,
+    }
+    agents = api._infer_support_agents(
+        "Build frontend and backend, run QA tests, and write docs.",
+        intent=intent,
+        project={"status": "active"},
+        config={"chat_policy": {"delegation_strategy": "balanced", "delegation_max_agents": 2}},
+    )
+    assert len(agents) == 2
+
+
 @pytest.mark.asyncio
 async def test_handle_ceo_claude_apikey_mode_requires_key():
     ws = _FakeWebSocket()

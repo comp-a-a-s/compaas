@@ -623,11 +623,21 @@ export default function App() {
 
   // ---- Live agent activity for TeamPulse + org chart ----
   const LIVE_AGENT_EXPIRY_MS = 120_000; // 2 minutes — delegations often run longer
+  const knownAgentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const agent of agents) {
+      ids.add(agent.id.toLowerCase().trim().replace(/\s+/g, '-'));
+    }
+    return ids;
+  }, [agents]);
 
   const handleAgentActivity = useCallback((agentId: string, task: string, flow: 'down' | 'up' | 'working') => {
     // Always normalize to slug format (spaces → dashes) so keys match ORG_TREE IDs
     const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
     if (!normalized) return;
+    // Ignore transient/non-org actors (for example "workspace") so active
+    // counts and highlights only reflect real agents in the org chart.
+    if (!knownAgentIds.has(normalized)) return;
     setLiveAgents((prev) => {
       const existing = prev.get(normalized);
       // Deduplicate: skip if same agent+flow was updated within 2 seconds
@@ -645,7 +655,7 @@ export default function App() {
       });
       return next;
     });
-  }, []);
+  }, [knownAgentIds]);
 
   const removeLiveAgent = useCallback((agentId: string) => {
     const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
