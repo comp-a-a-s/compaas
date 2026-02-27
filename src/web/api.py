@@ -1952,11 +1952,13 @@ def _classify_execution_intent(user_message: str) -> dict[str, Any]:
     planning_terms = ("plan", "architecture", "roadmap", "strategy", "research", "tradeoff", "scope")
     complex_terms = ("production", "security", "scalable", "migration", "ci/cd", "end-to-end", "compliance")
     review_terms = ("review", "qa", "test", "regression", "validate", "verify")
+    discovery_terms = _DISCOVERY_SCOPING_HINTS
 
     execution_hits = sum(1 for t in execution_terms if _contains_keyword(text, (t,)))
     planning_hits = sum(1 for t in planning_terms if _contains_keyword(text, (t,)))
     complex_hits = sum(1 for t in complex_terms if _contains_keyword(text, (t,)))
     review_hits = sum(1 for t in review_terms if _contains_keyword(text, (t,)))
+    discovery_hits = sum(1 for t in discovery_terms if _contains_keyword(text, (t,)))
     is_greeting = _contains_keyword(text, _GREETING_HINTS) and len(text.split()) <= 6 and execution_hits == 0 and planning_hits == 0
     is_status = _contains_keyword(text, _STATUS_HINTS) and execution_hits == 0 and planning_hits == 0
     is_question = "?" in text or _contains_keyword(text, _CLARIFICATION_HINTS)
@@ -1979,8 +1981,8 @@ def _classify_execution_intent(user_message: str) -> dict[str, Any]:
             "actionable": False,
             "delegate_allowed": False,
         }
-    if planning_hits > execution_hits:
-        confidence = min(0.98, 0.62 + planning_hits * 0.08)
+    if planning_hits > execution_hits or (execution_hits > 0 and discovery_hits > 0):
+        confidence = min(0.98, 0.62 + (planning_hits + discovery_hits) * 0.08)
         return {
             "intent": "planning",
             "class": "planning",
@@ -1990,7 +1992,7 @@ def _classify_execution_intent(user_message: str) -> dict[str, Any]:
             "delegate_allowed": True,
         }
     if execution_hits > 0:
-        needs_planning = complex_hits > 0 or planning_hits > 0 or (len(text.split()) > 45)
+        needs_planning = complex_hits > 0 or planning_hits > 0 or discovery_hits > 0 or (len(text.split()) > 45)
         confidence = min(0.98, 0.64 + execution_hits * 0.07)
         # Always allow delegation for execution intents — the CEO template
         # decides whether delegation is appropriate based on complexity tiers.
@@ -2376,6 +2378,19 @@ _VALIDATION_STAGE_HINTS: tuple[str, ...] = (
     "checklist",
 )
 
+_DISCOVERY_SCOPING_HINTS: tuple[str, ...] = (
+    "understand",
+    "difficulty",
+    "difficult",
+    "effort",
+    "estimate",
+    "feasibility",
+    "feasible",
+    "complexity",
+    "how long",
+    "how hard",
+)
+
 
 def _ordered_unique(values: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -2409,7 +2424,7 @@ def _is_validation_stage(
     if status in _VALIDATION_PROJECT_STATUSES:
         return True
     text = (user_message or "").lower()
-    return any(keyword in text for keyword in _VALIDATION_STAGE_HINTS)
+    return _contains_keyword(text, _VALIDATION_STAGE_HINTS)
 
 
 def _infer_support_agents(
@@ -2441,7 +2456,7 @@ def _infer_support_agents(
 
     keyword_inferred: list[str] = []
     for keywords, agent_id in _SUPPORT_AGENT_HINTS:
-        if any(keyword in text for keyword in keywords):
+        if _contains_keyword(text, keywords):
             keyword_inferred.append(agent_id)
 
     inferred: list[str] = []

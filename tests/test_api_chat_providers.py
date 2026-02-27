@@ -83,6 +83,31 @@ class _FakeProcess:
             self.returncode = -9
 
 
+def test_classify_execution_intent_treats_difficulty_question_as_planning():
+    intent = api._classify_execution_intent(
+        "id like to understand how difficult will be to build a career growth tracker"
+    )
+    assert intent["intent"] == "planning"
+    assert intent["class"] == "planning"
+    assert intent["needs_planning"] is True
+
+
+def test_infer_support_agents_avoids_substring_false_positive_from_build():
+    message = "id like to understand how difficult will be to build a career growth tracker"
+    intent = api._classify_execution_intent(message)
+    agents = api._infer_support_agents(
+        message,
+        intent=intent,
+        project={"status": "active", "plan_approved": True},
+        config={"chat_policy": {"delegation_strategy": "executive_first"}},
+    )
+    assert "chief-researcher" in agents
+    assert "cto" in agents
+    assert "vp-engineering" in agents
+    assert "lead-frontend" not in agents
+    assert "qa-lead" not in agents
+
+
 def test_infer_support_agents_execution_uses_executive_first_on_early_stage():
     intent = {
         "intent": "execution",
