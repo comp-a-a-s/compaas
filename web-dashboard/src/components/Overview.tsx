@@ -999,6 +999,17 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     };
   }, [layoutMode, agents.length, scopedEvents.length]);
 
+  // Build a short list of active agent names for the status badge.
+  // Use recentActiveIds (not broader activeIds) so the header matches the glowing nodes.
+  const activeAgentNames = useMemo(() => {
+    const names: string[] = [];
+    for (const id of recentActiveIds) {
+      const a = agentMap.get(id);
+      if (a) names.push(a.name);
+    }
+    return names;
+  }, [recentActiveIds, agentMap]);
+
   if (loading) {
     return (
       <div className="space-y-2 py-4">
@@ -1026,17 +1037,6 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   ] as const;
 
   const activeAgentCount = activeIds.size;
-
-  // Build a short list of active agent names for the status badge.
-  // Use recentActiveIds (not broader activeIds) so the header matches the glowing nodes.
-  const activeAgentNames = useMemo(() => {
-    const names: string[] = [];
-    for (const id of recentActiveIds) {
-      const a = agentMap.get(id);
-      if (a) names.push(a.name);
-    }
-    return names;
-  }, [recentActiveIds, agentMap]);
 
   return (
     <div ref={chartContainerRef} style={{ maxWidth: '100%', overflow: 'hidden' }}>

@@ -16,6 +16,7 @@ import hmac
 import ipaddress
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import yaml
 from typing import Any, AsyncGenerator
@@ -55,7 +56,7 @@ state_manager = ProjectStateManager(DATA_DIR, workspace_root=WORKSPACE_ROOT)
 task_board = TaskBoard(DATA_DIR)
 run_service = RunService(DATA_DIR, runtime_settings)
 project_service = ProjectService(DATA_DIR, state_manager, task_board)
-integration_service = IntegrationService(DATA_DIR)
+integration_service = IntegrationService(DATA_DIR, workspace_root=WORKSPACE_ROOT)
 
 # ---------------------------------------------------------------------------
 # App
@@ -121,6 +122,11 @@ def _redact_config_for_response(config: dict) -> dict:
             value = integrations.get(key)
             if isinstance(value, str) and value:
                 integrations[key] = REDACTED_SECRET
+    llm = safe.get("llm")
+    if isinstance(llm, dict):
+        api_key = llm.get("api_key")
+        if isinstance(api_key, str) and api_key:
+            llm["api_key"] = REDACTED_SECRET
     return safe
 
 
@@ -151,8 +157,8 @@ def _is_loopback_client(request: Request) -> bool:
         return False
 
 
-def _require_integrations_write_auth(request: Request) -> None:
-    """Protect integration mutation endpoints from unauthorised remote writes."""
+def _require_write_auth(request: Request) -> None:
+    """Protect mutation endpoints from unauthorised remote writes."""
     admin_token = _env_first("COMPAAS_ADMIN_TOKEN")
     provided = request.headers.get("X-COMPAAS-ADMIN-TOKEN", "").strip()
     auth_header = request.headers.get("Authorization", "").strip()
@@ -171,6 +177,88 @@ def _require_integrations_write_auth(request: Request) -> None:
             status_code=403,
             detail="Remote integration updates require COMPAAS_ADMIN_TOKEN.",
         )
+
+
+def _require_integrations_write_auth(request: Request) -> None:
+    """Backwards-compatible alias for integration mutation auth."""
+    _require_write_auth(request)
+
+
+def _hostname_matches_allowlist(hostname: str, allowlist: set[str]) -> bool:
+    """Return True when hostname matches an explicit allowlist entry."""
+    if not hostname or not allowlist:
+        return False
+    normalized = hostname.strip().lower().rstrip(".")
+    for entry in allowlist:
+        token = entry.strip().lower().rstrip(".")
+        if not token:
+            continue
+        if token.startswith("*.") and normalized.endswith(token[1:]):
+            return True
+        if token.startswith(".") and normalized.endswith(token):
+            return True
+        if normalized == token:
+            return True
+    return False
+
+
+def _llm_test_allowlist() -> set[str]:
+    """Return explicit host allowlist for /api/llm/test URL checks."""
+    raw = _env_first("COMPAAS_LLM_TEST_ALLOWLIST")
+    if not raw:
+        return set()
+    parsed: set[str] = set()
+    for item in raw.split(","):
+        token = item.strip()
+        if not token:
+            continue
+        if "://" in token:
+            host = urllib.parse.urlparse(token).hostname or ""
+            if host:
+                parsed.add(host)
+            continue
+        parsed.add(token)
+    return parsed
+
+
+def _validate_llm_test_base_url(base_url: str) -> tuple[bool, str]:
+    """Validate /api/llm/test base URL to reduce SSRF risk."""
+    raw = str(base_url or "").strip()
+    if not raw:
+        return False, "base_url is required."
+
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError:
+        return False, "Invalid base_url."
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        return False, "Only http/https base_url values are allowed."
+
+    hostname = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not hostname:
+        return False, "base_url must include a hostname."
+
+    allowlist = _llm_test_allowlist()
+    if _hostname_matches_allowlist(hostname, allowlist):
+        return True, ""
+
+    if hostname == "localhost":
+        return True, ""
+
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        # Block common internal-only DNS suffixes by default unless allowlisted.
+        if hostname.endswith(".local") or hostname.endswith(".internal"):
+            return False, "base_url host is blocked by default policy."
+        return True, ""
+
+    if ip.is_loopback:
+        return True, ""
+    if ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+        return False, "base_url host is blocked by default policy."
+    return True, ""
 
 
 def _require_github_signature(request: Request, body: bytes) -> None:
@@ -755,7 +843,10 @@ def get_config() -> dict:
 
 
 @app.post("/api/config/setup", summary="Save initial setup configuration")
-def setup_config(config: dict) -> dict:
+def setup_config(request: Request, config: dict) -> dict:
+    existing = _load_config()
+    if bool(existing.get("setup_complete")):
+        _require_write_auth(request)
     config["setup_complete"] = True
     merged = _deep_merge(DEFAULT_CONFIG, config)
     merged["setup_complete"] = True
@@ -792,6 +883,7 @@ app.include_router(
             run_service=run_service,
             project_service=project_service,
             integration_service=integration_service,
+            require_write_auth=_require_write_auth,
         )
     )
 )
@@ -813,6 +905,9 @@ async def test_llm_connection(body: dict) -> dict:
     base_url = body.get("base_url") or saved.get("base_url", "https://api.openai.com/v1")
     model    = body.get("model")    or saved.get("model", "gpt-4o")
     api_key  = body.get("api_key")  or saved.get("api_key", "local")
+    allowed, reason = _validate_llm_test_base_url(str(base_url))
+    if not allowed:
+        return {"status": "error", "message": reason}
 
     try:
         from src.llm_provider import probe_connection

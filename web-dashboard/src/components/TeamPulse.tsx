@@ -57,8 +57,10 @@ export default function TeamPulse({ agents, liveAgents, isMobile = false }: Team
 
   // Close expanded mobile sheet when no agents are active
   useEffect(() => {
-    if (activeList.length === 0) setExpanded(false);
-  }, [activeList.length]);
+    if (activeList.length !== 0 || !expanded) return;
+    const timer = window.setTimeout(() => setExpanded(false), 0);
+    return () => window.clearTimeout(timer);
+  }, [activeList.length, expanded]);
 
   if (activeList.length === 0) return null;
 

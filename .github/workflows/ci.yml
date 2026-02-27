@@ -71,5 +71,14 @@ jobs:
       - name: Guard against native selectors
         run: npm run check:no-native-select
 
+      - name: Lint frontend
+        run: npm run lint
+
       - name: Build frontend
         run: npm run build
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run frontend E2E smoke
+        run: npm run test:e2e:smoke
