@@ -988,7 +988,7 @@ class TestIntegrationSecurity:
                 "status": "ok",
                 "ok": True,
                 "repo_ok": True,
-                "account": {"login": "idan"},
+                "account": {"login": "test-user"},
                 "message": f"Verified {repo}",
             },
         )
@@ -1001,7 +1001,7 @@ class TestIntegrationSecurity:
         payload = response.json()
         assert payload["ok"] is True
         assert payload["repo_ok"] is True
-        assert payload["account"]["login"] == "idan"
+        assert payload["account"]["login"] == "test-user"
 
         with open(api_module.CONFIG_PATH) as f:
             cfg = yaml.safe_load(f) or {}
@@ -1023,7 +1023,7 @@ class TestIntegrationSecurity:
                 "status": "ok",
                 "ok": True,
                 "project_ok": True,
-                "account": {"username": "idan"},
+                "account": {"username": "test-user"},
                 "message": f"Verified {project_name}",
             },
         )
@@ -1037,7 +1037,7 @@ class TestIntegrationSecurity:
         payload = response.json()
         assert payload["ok"] is True
         assert payload["project_ok"] is True
-        assert payload["account"]["username"] == "idan"
+        assert payload["account"]["username"] == "test-user"
 
         with open(api_module.CONFIG_PATH) as f:
             cfg = yaml.safe_load(f) or {}
