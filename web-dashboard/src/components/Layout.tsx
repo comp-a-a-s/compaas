@@ -3,8 +3,7 @@ import Tooltip from './Tooltip';
 import CompassRoseLogo from './CompassRoseLogo';
 import FloatingSelect from './ui/FloatingSelect';
 import TeamPulse from './TeamPulse';
-import type { ActiveAgentInfo } from './TeamPulse';
-import type { Agent, Project } from '../types';
+import type { Agent, Project, WorkforceLiveSnapshot } from '../types';
 
 interface LayoutProps {
   activeTab: string;
@@ -28,7 +27,7 @@ interface LayoutProps {
   onToggleTelegramMirror?: () => void;
   onRequestMicroToggle?: () => void;
   agents?: Agent[];
-  liveAgents?: Map<string, ActiveAgentInfo>;
+  workforceLive?: WorkforceLiveSnapshot;
 }
 
 const NAV_ITEMS = [
@@ -305,7 +304,7 @@ export default function Layout({
   onToggleTelegramMirror,
   onRequestMicroToggle,
   agents = [],
-  liveAgents = new Map(),
+  workforceLive,
 }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getStoredBoolean(SIDEBAR_COLLAPSED_KEY));
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -657,7 +656,7 @@ export default function Layout({
           </div>
 
           <div className="flex items-center gap-3">
-            <TeamPulse agents={agents} liveAgents={liveAgents} isMobile={isMobileViewport} />
+            <TeamPulse agents={agents} workforceLive={workforceLive} isMobile={isMobileViewport} />
             <HeaderControls
             searchExpanded={searchExpanded}
             setSearchExpanded={setSearchExpanded}

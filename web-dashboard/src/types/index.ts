@@ -90,6 +90,35 @@ export interface ActivityEvent {
   metadata?: Record<string, unknown>;
 }
 
+export type WorkforceState = 'assigned' | 'working' | 'reporting' | 'blocked';
+
+export interface WorkforceWorker {
+  work_item_id?: string;
+  agent_id: string;
+  agent_name: string;
+  state: WorkforceState;
+  project_id?: string;
+  run_id?: string;
+  task?: string;
+  source?: 'real' | 'synthetic' | string;
+  started_at: string;
+  updated_at: string;
+  elapsed_seconds: number;
+}
+
+export interface WorkforceLiveSnapshot {
+  status: 'ok' | string;
+  as_of: string;
+  project_id?: string | null;
+  counts: {
+    assigned: number;
+    working: number;
+    reporting: number;
+    blocked: number;
+  };
+  workers: WorkforceWorker[];
+}
+
 export interface ChatMessage {
   role: 'user' | 'ceo' | 'system';
   content: string;

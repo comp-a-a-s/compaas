@@ -14,6 +14,7 @@ from src.web.problem import problem_http_exception
 from src.web.services.integration_service import IntegrationService
 from src.web.services.project_service import ProjectService
 from src.web.services.run_service import RunService
+from src.web.services.workforce_presence import WorkforcePresenceService
 from src.web.settings import FeatureFlags, merge_feature_flags, resolve_sandbox_profile
 
 
@@ -25,6 +26,7 @@ class V1Context:
     run_service: RunService
     project_service: ProjectService
     integration_service: IntegrationService
+    workforce_presence_service: WorkforcePresenceService
     require_write_auth: Callable[[Request], None] | None = None
 
 
@@ -445,6 +447,19 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
     def v1_list_runs(project_id: str = Query(default=""), limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
         return {"status": "ok", "runs": ctx.run_service.list_runs(project_id=project_id, limit=limit)}
 
+    @router.get("/workforce/live")
+    def v1_workforce_live(
+        project_id: str = Query(default=""),
+        include_assigned: bool = Query(default=True),
+        include_reporting: bool = Query(default=True),
+    ) -> dict[str, Any]:
+        scoped_project_id = str(project_id or "").strip()
+        return ctx.workforce_presence_service.snapshot(
+            project_id=scoped_project_id or None,
+            include_assigned=include_assigned,
+            include_reporting=include_reporting,
+        )
+
     @router.get("/runs/{run_id}")
     def v1_get_run(run_id: str) -> dict[str, Any]:
         run = ctx.run_service.get_run(run_id)
@@ -469,6 +484,11 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
                 detail=f"Run '{run_id}' does not exist.",
                 type_="https://compaas.dev/problems/run-not-found",
             )
+        ctx.workforce_presence_service.mark_run_terminal(
+            run_id=str(run.get("id", "") or run_id),
+            project_id=str(run.get("project_id", "") or ""),
+            terminal_state="cancelled",
+        )
         return {"status": "ok", "run": run}
 
     @router.get("/runs/{run_id}/replay")

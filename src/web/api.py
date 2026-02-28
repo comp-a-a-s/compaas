@@ -38,6 +38,7 @@ from src.web.settings import get_runtime_settings
 from src.web.services.run_service import RunService
 from src.web.services.project_service import ProjectService
 from src.web.services.integration_service import IntegrationService
+from src.web.services.workforce_presence import WorkforcePresenceService
 from src.web.routers.v1 import V1Context, create_v1_router
 
 
@@ -57,6 +58,14 @@ task_board = TaskBoard(DATA_DIR)
 run_service = RunService(DATA_DIR, runtime_settings)
 project_service = ProjectService(DATA_DIR, state_manager, task_board)
 integration_service = IntegrationService(DATA_DIR, workspace_root=WORKSPACE_ROOT)
+workforce_presence_service = WorkforcePresenceService(DATA_DIR, run_service=run_service)
+try:
+    workforce_presence_service.rebuild_from_activity_log_and_runs(
+        activity_log_path=os.path.join(DATA_DIR, "activity.log"),
+        runs=run_service.list_runs(limit=5000),
+    )
+except Exception:
+    logger.warning("Failed to rebuild workforce presence snapshot at startup.", exc_info=True)
 
 # ---------------------------------------------------------------------------
 # App
@@ -886,6 +895,7 @@ app.include_router(
             run_service=run_service,
             project_service=project_service,
             integration_service=integration_service,
+            workforce_presence_service=workforce_presence_service,
             require_write_auth=_require_write_auth,
         )
     )
@@ -1231,6 +1241,20 @@ def recent_activity(limit: int = Query(default=100, ge=1, le=500)) -> list[dict]
     return events[-limit:]
 
 
+@app.get("/api/workforce/live", summary="Get canonical live workforce presence state")
+def workforce_live(
+    project_id: str = Query(default="", description="Optional project scope"),
+    include_assigned: bool = Query(default=True, description="Include assigned (not yet working) entries"),
+    include_reporting: bool = Query(default=True, description="Include reporting entries"),
+) -> dict[str, Any]:
+    scoped_project_id = _normalize_project_id(project_id)
+    return workforce_presence_service.snapshot(
+        project_id=scoped_project_id or None,
+        include_assigned=include_assigned,
+        include_reporting=include_reporting,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Project plan and approval
 # ---------------------------------------------------------------------------
@@ -1288,7 +1312,25 @@ def approve_project_plan(project_id: str) -> dict:
     ok = state_manager.update_project(project_id, {"plan_approved": True, "status": "active"})
     if not ok:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
-    return {"status": "approved", "plan_packet": plan_packet}
+
+    # Unblock chat execution after approval: prior planning-gate runs may still
+    # be left in "planning" state, which would otherwise trip concurrency guard.
+    released_runs: list[str] = []
+    for run in run_service.list_runs(project_id=project_id, limit=200):
+        run_id = str(run.get("id", "") or "")
+        if not run_id:
+            continue
+        if str(run.get("status", "") or "") != "planning":
+            continue
+        transitioned = _transition_run_state(
+            run_id,
+            state="done",
+            label="Planning approved; waiting for execution follow-up.",
+            metadata={"reason": "planning_approved"},
+        )
+        if transitioned:
+            released_runs.append(run_id)
+    return {"status": "approved", "plan_packet": plan_packet, "released_runs": released_runs}
 
 
 # ---------------------------------------------------------------------------
@@ -2312,9 +2354,59 @@ def _normalize_chat_activity_metadata(
     if not str(normalized.get("task", "") or "").strip():
         task = str(detail or "").strip()
         normalized["task"] = task[:280] if task else action.title()
+    task_text = str(normalized.get("task", "") or "").strip()
+
+    run_id = str(normalized.get("run_id", "") or "").strip()
+    if run_id:
+        normalized["run_id"] = run_id
 
     if project_id and not normalized.get("project_id"):
         normalized["project_id"] = project_id
+    scoped_project_id = str(normalized.get("project_id", "") or "").strip()
+
+    source = str(normalized.get("source", "") or "").strip().lower()
+    if source not in {"real", "synthetic"}:
+        source = "synthetic" if str(normalized.get("tool", "") or "").strip().lower() == "synthetic_delegation" else "real"
+    normalized["source"] = source
+
+    work_state = str(normalized.get("work_state", "") or "").strip().lower()
+    if work_state not in {"assigned", "working", "reporting", "blocked", "completed", "failed"}:
+        if action_upper in {"BLOCKED", "ERROR", "FAILED"} or state == "failed":
+            work_state = "blocked"
+        elif action_upper in {"COMPLETED", "DONE"} or state == "completed":
+            work_state = "completed"
+        elif action_upper == "UPDATED" and flow == "up" and source_agent and source_agent != "ceo":
+            work_state = "reporting"
+        elif action_upper in {"DELEGATED", "ASSIGNED"}:
+            work_state = "assigned"
+        elif state == "started":
+            if source_agent and source_agent not in {"ceo", "system", "workspace"}:
+                work_state = "working"
+            else:
+                work_state = "assigned" if flow == "down" else "working"
+        elif flow == "up" and source_agent and source_agent != "ceo":
+            work_state = "reporting"
+        else:
+            work_state = "working"
+    normalized["work_state"] = work_state
+
+    work_item_id = str(normalized.get("work_item_id", "") or "").strip()
+    if not work_item_id:
+        preferred_agent = ""
+        if work_state == "assigned":
+            preferred_agent = target_agent
+        elif work_state in {"working", "reporting", "blocked", "completed", "failed"}:
+            preferred_agent = source_agent
+        if not preferred_agent:
+            preferred_agent = source_agent or target_agent or str(agent or "").strip().lower()
+        preferred_agent = preferred_agent.replace(" ", "-")
+        if run_id and preferred_agent:
+            work_item_id = f"{run_id}:{preferred_agent}"
+        elif scoped_project_id and preferred_agent:
+            task_hash = hashlib.sha1(task_text.encode("utf-8")).hexdigest()[:12] if task_text else "notask"
+            work_item_id = f"{scoped_project_id}:{preferred_agent}:{task_hash}"
+    if work_item_id:
+        normalized["work_item_id"] = work_item_id
 
     return normalized
 
@@ -2335,14 +2427,47 @@ def _emit_chat_activity(
         project_id=normalized_project_id,
         metadata=metadata,
     )
+    event_payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "agent": str(agent or ""),
+        "action": str(action or ""),
+        "detail": str(detail or ""),
+        "project_id": normalized_project_id,
+        "metadata": normalized_metadata,
+    }
     emit_activity(
         DATA_DIR,
-        agent,
-        action,
-        detail,
+        event_payload["agent"],
+        event_payload["action"],
+        event_payload["detail"],
         project_id=normalized_project_id,
         metadata=normalized_metadata,
     )
+    workforce_presence_service.ingest_event(event_payload)
+
+
+def _transition_run_state(
+    run_id: str,
+    *,
+    state: str,
+    label: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Transition run state and keep workforce presence in sync."""
+    transitioned = run_service.transition_run(
+        run_id,
+        state=state,
+        label=label,
+        metadata=metadata,
+    )
+    normalized_state = str(state or "").strip().lower()
+    if transitioned and normalized_state in {"done", "failed", "cancelled"}:
+        workforce_presence_service.mark_run_terminal(
+            str(transitioned.get("id", "") or run_id),
+            project_id=str(transitioned.get("project_id", "") or ""),
+            terminal_state=normalized_state,
+        )
+    return transitioned
 
 
 def _should_trigger_execution_bridge(
@@ -2954,6 +3079,53 @@ def _build_synthetic_delegation_plan(
     return plan
 
 
+def _emit_planning_stage_assignments(
+    *,
+    project_id: str,
+    run_id: str,
+    user_message: str,
+    support_agents: list[str],
+    config: dict,
+    delegation_stage: str = "",
+) -> None:
+    """Emit synthetic assignment evidence for planning-gated turns.
+
+    Planning-gated runs stop before provider runtime handlers execute, so
+    support-agent selection would otherwise be invisible in live workforce UI.
+    These entries are "assigned" only and clear when the run reaches a
+    terminal state.
+    """
+    normalized_project_id = _normalize_project_id(project_id)
+    if not normalized_project_id:
+        return
+
+    for agent_id in _ordered_unique(list(support_agents or [])):
+        if agent_id not in AGENT_REGISTRY or agent_id == "ceo":
+            continue
+        task = _agent_task_summary(agent_id, user_message)[:280]
+        agent_name = _configured_agent_name(agent_id, config)
+        work_item_id = f"{run_id}:{agent_id}" if run_id else ""
+        detail = f"Delegating to {agent_name}: {task[:140]}"
+        _emit_chat_activity(
+            "ceo",
+            "DELEGATED",
+            detail,
+            project_id=normalized_project_id,
+            metadata={
+                "run_id": run_id,
+                "source_agent": "ceo",
+                "target_agent": agent_id,
+                "flow": "down",
+                "task": task,
+                "source": "synthetic",
+                "tool": "synthetic_delegation",
+                "work_state": "assigned",
+                "work_item_id": work_item_id,
+                "delegation_stage": delegation_stage,
+            },
+        )
+
+
 async def _emit_synthetic_delegation_start(
     websocket: WebSocket,
     *,
@@ -2966,6 +3138,7 @@ async def _emit_synthetic_delegation_start(
         agent_id = step.get("agent_id", "")
         agent_name = step.get("agent_name", agent_id)
         task = step.get("task", "").strip() or "Delegated task started."
+        work_item_id = f"{run_id}:{agent_id}" if run_id and agent_id else ""
         label = f"Delegating to {agent_name}: {task[:140]}"
         await websocket.send_json({"type": "action", "content": label})
         await websocket.send_json({
@@ -2981,6 +3154,9 @@ async def _emit_synthetic_delegation_start(
                 "target": agent_id,
                 "flow": "down",
                 "task": task[:280],
+                "source": "synthetic",
+                "work_state": "assigned",
+                "work_item_id": work_item_id,
                 **runtime_metadata,
             },
         })
@@ -2994,19 +3170,9 @@ async def _emit_synthetic_delegation_start(
                 "target_agent": agent_id,
                 "flow": "down",
                 "task": task[:280],
-                **runtime_metadata,
-            },
-        )
-        _emit_chat_activity(
-            agent_id,
-            "STARTED",
-            task[:280],
-            project_id=project_id,
-            metadata={
-                "source_agent": "ceo",
-                "target_agent": agent_id,
-                "flow": "down",
-                "task": task[:280],
+                "source": "synthetic",
+                "work_state": "assigned",
+                "work_item_id": work_item_id,
                 **runtime_metadata,
             },
         )
@@ -3228,6 +3394,8 @@ async def _handle_ceo_claude(
         "runtime": "claude_cli",
         "model": str(llm_cfg.get("model", "claude") or "claude"),
     }
+    if run_id:
+        runtime_metadata["run_id"] = run_id
     anthropic_api_key = str(llm_cfg.get("api_key", "") or "").strip()
     if llm_cfg.get("proxy_enabled") and llm_cfg.get("proxy_url"):
         env["ANTHROPIC_BASE_URL"] = llm_cfg["proxy_url"]
@@ -3241,7 +3409,7 @@ async def _handle_ceo_claude(
                 "content": "Anthropic API-key mode is selected but no API key is configured.",
             })
             if run_id:
-                run_service.transition_run(
+                _transition_run_state(
                     run_id,
                     state="failed",
                     label="Anthropic API-key mode selected without configured key",
@@ -3282,7 +3450,7 @@ async def _handle_ceo_claude(
             metadata=runtime_metadata,
         )
         if run_id:
-            run_service.transition_run(
+            _transition_run_state(
                 run_id,
                 state="executing",
                 label="Launching Claude CEO runtime",
@@ -3308,13 +3476,13 @@ async def _handle_ceo_claude(
                 run_state = run_service.get_run(run_id)
                 if run_state and bool(run_state.get("cancel_requested")):
                     await websocket.send_json({"type": "error", "content": "Run cancelled by user."})
-                    run_service.transition_run(run_id, state="cancelled", label="Run cancelled by user")
+                    _transition_run_state(run_id, state="cancelled", label="Run cancelled by user")
                     return None
                 guardrails = run_service.guardrail_status(run_id)
                 if guardrails and guardrails.get("over_budget"):
                     violation_message = _guardrail_violation_message(guardrails)
                     await websocket.send_json({"type": "error", "content": violation_message})
-                    run_service.transition_run(run_id, state="failed", label=violation_message)
+                    _transition_run_state(run_id, state="failed", label=violation_message)
                     return None
             try:
                 raw = await asyncio.wait_for(process.stdout.readline(), timeout=30.0)
@@ -3427,6 +3595,7 @@ async def _handle_ceo_claude(
                             tool_use_id = str(block.get("id", "") or "").strip()
                             if delegated_agent:
                                 is_delegation = True
+                                delegation_work_item = f"{run_id}:{delegated_agent}" if run_id else f"{project_id}:{delegated_agent}"
                                 if tool_use_id:
                                     pending_delegate_agents[tool_use_id] = delegated_agent
                                 else:
@@ -3438,6 +3607,9 @@ async def _handle_ceo_claude(
                                     "flow": "down",
                                     "task": delegated_task[:280],
                                     "tool": tool_name,
+                                    "source": "real",
+                                    "work_state": "assigned",
+                                    "work_item_id": delegation_work_item,
                                     **runtime_metadata,
                                 }
                                 # Send delegation-specific action_detail so ChatPanel
@@ -3455,6 +3627,9 @@ async def _handle_ceo_claude(
                                         "target_agent": delegated_agent,
                                         "flow": "down",
                                         "task": delegated_task[:280],
+                                        "source": "real",
+                                        "work_state": "assigned",
+                                        "work_item_id": delegation_work_item,
                                         **runtime_metadata,
                                     },
                                 })
@@ -3470,7 +3645,17 @@ async def _handle_ceo_claude(
                                     "STARTED",
                                     delegated_task[:280] or "Delegated task started",
                                     project_id=project_id,
-                                    metadata=delegation_metadata,
+                                    metadata={
+                                        "source_agent": delegated_agent,
+                                        "target_agent": delegated_agent,
+                                        "flow": "internal",
+                                        "task": delegated_task[:280],
+                                        "tool": tool_name,
+                                        "source": "real",
+                                        "work_state": "working",
+                                        "work_item_id": delegation_work_item,
+                                        **runtime_metadata,
+                                    },
                                 )
                         # Skip redundant CEO "STARTED" when work was delegated
                         # to avoid the activity stream showing CEO doing everything
@@ -3507,10 +3692,14 @@ async def _handle_ceo_claude(
                                 delegated_agent = pending_delegate_agents.pop(first_key)
                             result_metadata: dict[str, Any] = {}
                             if delegated_agent:
+                                result_work_item = f"{run_id}:{delegated_agent}" if run_id else f"{project_id}:{delegated_agent}"
                                 result_metadata = {
                                     "source_agent": delegated_agent,
                                     "target_agent": "ceo",
                                     "flow": "up",
+                                    "source": "real",
+                                    "work_state": "completed",
+                                    "work_item_id": result_work_item,
                                     **runtime_metadata,
                                 }
                             else:
@@ -3541,7 +3730,7 @@ async def _handle_ceo_claude(
                                     "UPDATED",
                                     f"Received update from {delegated_agent}: {preview}",
                                     project_id=project_id,
-                                    metadata=result_metadata,
+                                    metadata={**result_metadata, "work_state": "reporting"},
                                 )
                             else:
                                 # Only emit generic CEO COMPLETED when no agent
@@ -3565,10 +3754,14 @@ async def _handle_ceo_claude(
                 _emit_chat_activity("ceo", "ERROR", str(err), project_id=project_id, metadata=runtime_metadata)
                 # Emit FAILED for any agents whose results never arrived
                 for _tid, agent_name in list(pending_delegate_agents.items()):
+                    fail_work_item = f"{run_id}:{agent_name}" if run_id else f"{project_id}:{agent_name}"
                     fail_meta = {
                         "source_agent": agent_name,
                         "target_agent": "ceo",
                         "flow": "failed",
+                        "source": "real",
+                        "work_state": "blocked",
+                        "work_item_id": fail_work_item,
                         **runtime_metadata,
                     }
                     await websocket.send_json({
@@ -3592,7 +3785,7 @@ async def _handle_ceo_claude(
                     )
                 pending_delegate_agents.clear()
                 if run_id:
-                    run_service.transition_run(run_id, state="failed", label=str(err))
+                    _transition_run_state(run_id, state="failed", label=str(err))
                 return None
 
         if full_response is None:
@@ -3645,7 +3838,7 @@ async def _handle_ceo_claude(
             await websocket.send_json({"type": "error", "content": error_msg})
             _emit_chat_activity("ceo", "ERROR", error_msg, project_id=project_id, metadata=runtime_metadata)
             if run_id:
-                run_service.transition_run(run_id, state="failed", label=error_msg)
+                _transition_run_state(run_id, state="failed", label=error_msg)
             return None
 
         if not full_response:
@@ -3686,7 +3879,7 @@ async def _handle_ceo_claude(
             metadata={"micro_project_mode": micro_project_mode, "tool_use_detected": saw_tool_use, **runtime_metadata},
         )
         if run_id:
-            run_service.transition_run(
+            _transition_run_state(
                 run_id,
                 state="done",
                 label="CEO response generated",
@@ -3705,7 +3898,7 @@ async def _handle_ceo_claude(
             metadata=runtime_metadata,
         )
         if run_id:
-            run_service.transition_run(run_id, state="failed", label=f"Failed to start CEO agent: {exc}")
+            _transition_run_state(run_id, state="failed", label=f"Failed to start CEO agent: {exc}")
         return None
     except Exception as exc:
         await websocket.send_json({"type": "error", "content": f"Chat error: {str(exc)[:200]}"})
@@ -3717,7 +3910,7 @@ async def _handle_ceo_claude(
             metadata=runtime_metadata,
         )
         if run_id:
-            run_service.transition_run(run_id, state="failed", label=f"Chat error: {str(exc)[:200]}")
+            _transition_run_state(run_id, state="failed", label=f"Chat error: {str(exc)[:200]}")
         return None
     finally:
         if process and process.returncode is None:
@@ -3748,7 +3941,7 @@ async def _handle_ceo_codex(
         await websocket.send_json({"type": "error", "content": message})
         _emit_chat_activity("ceo", "ERROR", message, project_id=project_id)
         if run_id:
-            run_service.transition_run(run_id, state="failed", label=message)
+            _transition_run_state(run_id, state="failed", label=message)
         return None
 
     env = _sanitize_subprocess_env(os.environ.copy())
@@ -3764,6 +3957,8 @@ async def _handle_ceo_codex(
         "runtime": "codex_cli",
         "model": "codex",
     }
+    if run_id:
+        runtime_metadata["run_id"] = run_id
     effective_config = config if isinstance(config, dict) else _load_config()
     delegation_plan = (
         _build_synthetic_delegation_plan(
@@ -3820,7 +4015,7 @@ async def _handle_ceo_codex(
         metadata={"cwd": run_cwd, **runtime_metadata},
     )
     if run_id:
-        run_service.transition_run(
+        _transition_run_state(
             run_id,
             state="executing",
             label=f"Codex executor started ({activity_context})",
@@ -3861,13 +4056,13 @@ async def _handle_ceo_codex(
                 run_state = run_service.get_run(run_id)
                 if run_state and bool(run_state.get("cancel_requested")):
                     await websocket.send_json({"type": "error", "content": "Run cancelled by user."})
-                    run_service.transition_run(run_id, state="cancelled", label="Run cancelled by user")
+                    _transition_run_state(run_id, state="cancelled", label="Run cancelled by user")
                     return None
                 guardrails = run_service.guardrail_status(run_id)
                 if guardrails and guardrails.get("over_budget"):
                     violation_message = _guardrail_violation_message(guardrails)
                     await websocket.send_json({"type": "error", "content": violation_message})
-                    run_service.transition_run(run_id, state="failed", label=violation_message)
+                    _transition_run_state(run_id, state="failed", label=violation_message)
                     return None
             try:
                 raw = await asyncio.wait_for(process.stdout.readline(), timeout=30.0)
@@ -4162,7 +4357,7 @@ async def _handle_ceo_codex(
                 metadata=runtime_metadata,
             )
             if run_id:
-                run_service.transition_run(
+                _transition_run_state(
                     run_id,
                     state="failed",
                     label=error_message,
@@ -4191,14 +4386,6 @@ async def _handle_ceo_codex(
             else:
                 final_response = f"{fallback_note}\n\nWorkspace: {run_cwd}"
         if final_response:
-            if delegation_plan:
-                await _emit_synthetic_delegation_completion(
-                    websocket,
-                    delegation_plan=delegation_plan,
-                    project_id=project_id,
-                    runtime_metadata=runtime_metadata,
-                    run_id=run_id,
-                )
             if project_id:
                 try:
                     metadata = project_service.get_metadata(project_id)
@@ -4222,7 +4409,7 @@ async def _handle_ceo_codex(
                 metadata={"cwd": run_cwd, **runtime_metadata},
             )
             if run_id:
-                run_service.transition_run(
+                _transition_run_state(
                     run_id,
                     state="done",
                     label=f"Codex execution completed ({activity_context})",
@@ -4234,7 +4421,7 @@ async def _handle_ceo_codex(
         await websocket.send_json({"type": "error", "content": message})
         _emit_chat_activity("ceo", "ERROR", message, project_id=project_id, metadata=runtime_metadata)
         if run_id:
-            run_service.transition_run(run_id, state="failed", label=message)
+            _transition_run_state(run_id, state="failed", label=message)
         return None
     except Exception as exc:
         message = _humanize_llm_runtime_error(
@@ -4246,7 +4433,7 @@ async def _handle_ceo_codex(
         await websocket.send_json({"type": "error", "content": message})
         _emit_chat_activity("ceo", "ERROR", message, project_id=project_id, metadata=runtime_metadata)
         if run_id:
-            run_service.transition_run(run_id, state="failed", label=message)
+            _transition_run_state(run_id, state="failed", label=message)
         return None
     finally:
         if process and process.returncode is None:
@@ -4292,6 +4479,8 @@ async def _handle_ceo_openai(
         "model": str(model or ""),
         "base_url": str(base_url or ""),
     }
+    if run_id:
+        runtime_metadata["run_id"] = run_id
 
     response_parts: list[str] = []
     first_token = True
@@ -4327,7 +4516,7 @@ async def _handle_ceo_openai(
         metadata=runtime_metadata,
     )
     if run_id:
-        run_service.transition_run(
+        _transition_run_state(
             run_id,
             state="executing",
             label=f"Connecting to {model} via OpenAI-compatible API",
@@ -4374,13 +4563,13 @@ async def _handle_ceo_openai(
                 run_state = run_service.get_run(run_id)
                 if run_state and bool(run_state.get("cancel_requested")):
                     await websocket.send_json({"type": "error", "content": "Run cancelled by user."})
-                    run_service.transition_run(run_id, state="cancelled", label="Run cancelled by user")
+                    _transition_run_state(run_id, state="cancelled", label="Run cancelled by user")
                     return None
                 guardrails = run_service.guardrail_status(run_id)
                 if guardrails and guardrails.get("over_budget"):
                     violation_message = _guardrail_violation_message(guardrails)
                     await websocket.send_json({"type": "error", "content": violation_message})
-                    run_service.transition_run(run_id, state="failed", label=violation_message)
+                    _transition_run_state(run_id, state="failed", label=violation_message)
                     return None
             try:
                 timeout_s = first_token_timeout_s if first_token else inter_token_timeout_s
@@ -4421,7 +4610,7 @@ async def _handle_ceo_openai(
                     metadata=runtime_metadata,
                 )
                 if run_id:
-                    run_service.transition_run(run_id, state="failed", label=f"LLM timeout: {stream_warning}")
+                    _transition_run_state(run_id, state="failed", label=f"LLM timeout: {stream_warning}")
                 return None
 
             if first_token:
@@ -4457,7 +4646,7 @@ async def _handle_ceo_openai(
             await websocket.send_json({"type": "error", "content": str(exc)})
             _emit_chat_activity("ceo", "ERROR", str(exc), project_id=project_id, metadata=runtime_metadata)
             if run_id:
-                run_service.transition_run(run_id, state="failed", label=str(exc))
+                _transition_run_state(run_id, state="failed", label=str(exc))
             return None
     except Exception as exc:
         stream_warning = str(exc)[:300]
@@ -4490,7 +4679,7 @@ async def _handle_ceo_openai(
                 metadata=runtime_metadata,
             )
             if run_id:
-                run_service.transition_run(run_id, state="failed", label=friendly_error)
+                _transition_run_state(run_id, state="failed", label=friendly_error)
             return None
     finally:
         thinking_event.set()
@@ -4577,7 +4766,7 @@ async def _handle_ceo_openai(
         },
     )
     if run_id:
-        run_service.transition_run(
+        _transition_run_state(
             run_id,
             state="done",
             label="OpenAI-compatible response completed",
@@ -4620,7 +4809,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
         run_state = run_service.get_run(inflight_run_id)
         status = str((run_state or {}).get("status", "") or "")
         if status in {"queued", "planning", "executing", "verifying"}:
-            run_service.transition_run(
+            _transition_run_state(
                 inflight_run_id,
                 state="failed",
                 label=reason,
@@ -4787,7 +4976,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             run_id = str(run_record.get("id", "") or "")
             inflight_run_id = run_id
             inflight_project_id = active_project_id
-            run_service.transition_run(
+            _transition_run_state(
                 run_id,
                 state="planning",
                 label="Turn accepted and queued for planning",
@@ -4867,6 +5056,15 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 and not planning_approved
                 and not bool((active_project or {}).get("plan_approved"))
             ):
+                if support_agents and not no_delegation_mode and not micro_project_mode:
+                    _emit_planning_stage_assignments(
+                        project_id=active_project_id,
+                        run_id=run_id,
+                        user_message=user_message,
+                        support_agents=support_agents,
+                        config=config,
+                        delegation_stage=str(delegation_reasoning.get("stage", "") or ""),
+                    )
                 if not bool(plan_packet_status.get("ready")):
                     plan_packet_status = _generate_planning_packet(
                         active_project_id,
@@ -4886,7 +5084,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         project_id=active_project_id,
                         metadata={"intent": intent, "plan_packet": plan_packet_status},
                     )
-                run_service.transition_run(
+                _transition_run_state(
                     run_id,
                     state="planning",
                     label="Planning approval required before execution",
@@ -4915,7 +5113,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if micro_project_mode:
                 complexity_reason = _micro_project_complexity_reason(user_message)
                 if complexity_reason and not micro_project_override:
-                    run_service.transition_run(
+                    _transition_run_state(
                         run_id,
                         state="cancelled",
                         label="Micro project complexity warning blocked execution",
@@ -4941,7 +5139,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             )
             if lightweight_response and no_delegation_mode:
                 full_response = lightweight_response
-                run_service.transition_run(
+                _transition_run_state(
                     run_id,
                     state="done",
                     label="Lightweight conversational response generated",
@@ -4989,7 +5187,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             else:
                 claude_path = shutil.which("claude")
                 if not claude_path:
-                    run_service.transition_run(
+                    _transition_run_state(
                         run_id,
                         state="failed",
                         label="Claude CLI not found",
@@ -5038,11 +5236,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         })
                 run_state = run_service.get_run(run_id)
                 if run_state and str(run_state.get("status", "")) in {"queued", "planning", "executing", "verifying"}:
-                    run_service.transition_run(run_id, state="done", label="Chat response completed")
+                    _transition_run_state(run_id, state="done", label="Chat response completed")
             else:
                 run_state = run_service.get_run(run_id)
                 if run_state and str(run_state.get("status", "")) in {"queued", "planning", "executing", "verifying"}:
-                    run_service.transition_run(run_id, state="failed", label="Provider returned no response")
+                    _transition_run_state(run_id, state="failed", label="Provider returned no response")
             structured_enabled = bool(feature_flags.get("structured_ceo_response", True) or data.get("structured_response"))
             if active_project_id:
                 try:

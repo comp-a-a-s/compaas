@@ -1,13 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { fetchAgentDetail } from '../api/client';
-import type { Agent, ActivityEvent, TaskWithProject } from '../types';
-import type { ActiveAgentInfo } from './TeamPulse';
+import type { Agent, ActivityEvent, TaskWithProject, WorkforceLiveSnapshot, WorkforceState, WorkforceWorker } from '../types';
 
 interface AgentPanelProps {
   agents: Agent[];
   loading: boolean;
   microProjectMode?: boolean;
-  liveAgents?: Map<string, ActiveAgentInfo>;
+  workforceLive?: WorkforceLiveSnapshot;
 }
 
 // ---- Helpers ----
@@ -50,6 +49,59 @@ function statusStyle(status: string): { dot: string; label: string } {
   return { dot: 'var(--tf-text-muted)', label: status };
 }
 
+function liveStateStyle(state?: WorkforceState): { dot: string; label: string; border: string; glow: string; bg: string } {
+  switch (state) {
+    case 'working':
+      return {
+        dot: 'var(--tf-success)',
+        label: 'Working',
+        border: 'var(--tf-success)',
+        glow: 'rgba(63,185,80,0.16)',
+        bg: 'rgba(63,185,80,0.06)',
+      };
+    case 'assigned':
+      return {
+        dot: 'var(--tf-warning)',
+        label: 'Assigned',
+        border: 'var(--tf-warning)',
+        glow: 'rgba(240,170,74,0.18)',
+        bg: 'rgba(240,170,74,0.08)',
+      };
+    case 'reporting':
+      return {
+        dot: 'var(--tf-accent-blue)',
+        label: 'Reporting',
+        border: 'var(--tf-accent-blue)',
+        glow: 'rgba(59,142,255,0.18)',
+        bg: 'rgba(59,142,255,0.08)',
+      };
+    case 'blocked':
+      return {
+        dot: 'var(--tf-error)',
+        label: 'Blocked',
+        border: 'var(--tf-error)',
+        glow: 'rgba(234,114,103,0.18)',
+        bg: 'rgba(234,114,103,0.08)',
+      };
+    default:
+      return {
+        dot: 'var(--tf-text-muted)',
+        label: 'Idle',
+        border: 'var(--tf-border)',
+        glow: 'transparent',
+        bg: 'var(--tf-surface)',
+      };
+  }
+}
+
+function formatElapsed(seconds: number): string {
+  const safe = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  if (mins > 0) return `${mins}m ${secs.toString().padStart(2, '0')}s`;
+  return `${secs}s`;
+}
+
 function priorityBadge(priority: string): { bg: string; text: string } {
   const p = priority.toUpperCase();
   if (p === 'P0') return { bg: '#2d1519', text: 'var(--tf-error)' };
@@ -89,7 +141,7 @@ interface AgentCardProps {
   selected: boolean;
   onSelect: () => void;
   disabled?: boolean;
-  liveInfo?: ActiveAgentInfo;
+  liveInfo?: WorkforceWorker;
 }
 function AgentCard({ agent, selected, onSelect, disabled = false, liveInfo }: AgentCardProps) {
   const model = effectiveModel(agent);
@@ -98,7 +150,10 @@ function AgentCard({ agent, selected, onSelect, disabled = false, liveInfo }: Ag
   const color = avatarColor(model);
   const status = statusStyle(agent.status);
   const initial = agent.name.charAt(0).toUpperCase();
-  const isWorking = Boolean(liveInfo) && !disabled;
+  const liveState = !disabled ? liveInfo?.state : undefined;
+  const liveStyle = liveStateStyle(liveState);
+  const hasLiveState = Boolean(liveState);
+  const isWorking = liveState === 'working';
 
   return (
     <button
@@ -109,15 +164,15 @@ function AgentCard({ agent, selected, onSelect, disabled = false, liveInfo }: Ag
       style={{
         backgroundColor: selected
           ? 'var(--tf-surface-raised)'
-          : isWorking
-          ? 'rgba(63,185,80,0.06)'
+          : hasLiveState
+          ? liveStyle.bg
           : 'var(--tf-surface)',
-        border: `1px solid ${selected ? 'var(--tf-accent)' : isWorking ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+        border: `1px solid ${selected ? 'var(--tf-accent)' : hasLiveState ? liveStyle.border : 'var(--tf-border)'}`,
         opacity: disabled ? 0.48 : 1,
         filter: disabled ? 'grayscale(35%)' : 'none',
         cursor: disabled ? 'not-allowed' : 'pointer',
         outline: 'none',
-        boxShadow: isWorking && !selected ? '0 0 12px rgba(63,185,80,0.15)' : 'none',
+        boxShadow: hasLiveState && !selected ? `0 0 12px ${liveStyle.glow}` : 'none',
       }}
       onMouseEnter={(e) => {
         if (!selected && !disabled) {
@@ -126,7 +181,7 @@ function AgentCard({ agent, selected, onSelect, disabled = false, liveInfo }: Ag
       }}
       onMouseLeave={(e) => {
         if (!selected && !disabled) {
-          (e.currentTarget as HTMLButtonElement).style.borderColor = isWorking ? 'var(--tf-success)' : 'var(--tf-border)';
+          (e.currentTarget as HTMLButtonElement).style.borderColor = hasLiveState ? liveStyle.border : 'var(--tf-border)';
         }
       }}
     >
@@ -143,13 +198,22 @@ function AgentCard({ agent, selected, onSelect, disabled = false, liveInfo }: Ag
               animation: 'pulse-ring 1.8s ease-out infinite',
             }} />
           )}
+          {hasLiveState && !isWorking && (
+            <div style={{
+              position: 'absolute',
+              inset: '-4px',
+              borderRadius: '50%',
+              border: `2px solid ${liveStyle.border}`,
+              opacity: 0.45,
+            }} />
+          )}
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
             style={{ backgroundColor: color, color: 'var(--tf-bg)', position: 'relative' }}
           >
             {initial}
           </div>
-          {isWorking && (
+          {hasLiveState && (
             <div style={{
               position: 'absolute',
               bottom: -1,
@@ -157,21 +221,21 @@ function AgentCard({ agent, selected, onSelect, disabled = false, liveInfo }: Ag
               width: '10px',
               height: '10px',
               borderRadius: '50%',
-              backgroundColor: 'var(--tf-success)',
+              backgroundColor: liveStyle.dot,
               border: '2px solid var(--tf-surface)',
             }} />
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          {isWorking ? (
+          {hasLiveState ? (
             <>
               <span
                 className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: 'var(--tf-success)', animation: 'pulse-dot 1.4s ease-in-out infinite' }}
+                style={{ backgroundColor: liveStyle.dot, animation: isWorking ? 'pulse-dot 1.4s ease-in-out infinite' : undefined }}
                 aria-hidden="true"
               />
-              <span className="text-xs font-medium" style={{ color: 'var(--tf-success)' }}>
-                Working
+              <span className="text-xs font-medium" style={{ color: liveStyle.dot }}>
+                {liveStyle.label}
               </span>
             </>
           ) : (
@@ -200,11 +264,11 @@ function AgentCard({ agent, selected, onSelect, disabled = false, liveInfo }: Ag
       </div>
 
       {/* Live task label */}
-      {isWorking && liveInfo?.task && (
+      {hasLiveState && liveInfo?.task && (
         <p
-          className="text-xs leading-tight animate-pulse-dot"
+          className={`text-xs leading-tight${isWorking ? ' animate-pulse-dot' : ''}`}
           style={{
-            color: 'var(--tf-success)',
+            color: liveStyle.dot,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -249,7 +313,7 @@ function AgentCard({ agent, selected, onSelect, disabled = false, liveInfo }: Ag
 interface DetailPanelProps {
   agent: Agent;
   onClose: () => void;
-  liveInfo?: ActiveAgentInfo;
+  liveInfo?: WorkforceWorker;
 }
 function DetailPanel({ agent, onClose, liveInfo }: DetailPanelProps) {
   const model = effectiveModel(agent);
@@ -257,6 +321,7 @@ function DetailPanel({ agent, onClose, liveInfo }: DetailPanelProps) {
   const badge = modelBadge(model);
   const color = avatarColor(model);
   const status = statusStyle(agent.status);
+  const liveStyle = liveStateStyle(liveInfo?.state);
   const initial = agent.name.charAt(0).toUpperCase();
 
   // Parse tools from comma-separated string
@@ -299,10 +364,23 @@ function DetailPanel({ agent, onClose, liveInfo }: DetailPanelProps) {
               >
                 {badge.label}
               </span>
-              <span className="flex items-center gap-1 text-xs" style={{ color: status.dot }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: status.dot }} />
-                {status.label}
-              </span>
+              {liveInfo ? (
+                <span className="flex items-center gap-1 text-xs" style={{ color: liveStyle.dot }}>
+                  <span
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{
+                      backgroundColor: liveStyle.dot,
+                      animation: liveInfo.state === 'working' ? 'pulse-dot 1.4s ease-in-out infinite' : undefined,
+                    }}
+                  />
+                  Live State: {liveStyle.label}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs" style={{ color: status.dot }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: status.dot }} />
+                  {status.label}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -331,26 +409,28 @@ function DetailPanel({ agent, onClose, liveInfo }: DetailPanelProps) {
           <section
             className="rounded-lg px-4 py-3"
             style={{
-              backgroundColor: 'rgba(63,185,80,0.08)',
-              border: '1px solid rgba(63,185,80,0.25)',
+              backgroundColor: liveStyle.bg,
+              border: `1px solid ${liveStyle.border}`,
             }}
           >
             <div className="flex items-center gap-2 mb-1.5">
               <span
                 className="w-2 h-2 rounded-full flex-shrink-0"
-                style={{ backgroundColor: 'var(--tf-success)', animation: 'pulse-dot 1.4s ease-in-out infinite' }}
+                style={{
+                  backgroundColor: liveStyle.dot,
+                  animation: liveInfo.state === 'working' ? 'pulse-dot 1.4s ease-in-out infinite' : undefined,
+                }}
               />
-              <h4 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--tf-success)' }}>
-                Currently Working On
+              <h4 className="text-xs font-semibold uppercase tracking-widest" style={{ color: liveStyle.dot }}>
+                Live State: {liveStyle.label}
               </h4>
             </div>
             <p className="text-xs leading-relaxed" style={{ color: 'var(--tf-text)' }}>
-              {liveInfo.task || 'Active (no task detail)'}
+              {liveInfo.task || 'No active task detail provided.'}
             </p>
             <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-              Since {new Date(liveInfo.since).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-              {' '}&middot;{' '}
-              {liveInfo.flow === 'down' ? 'Delegated' : liveInfo.flow === 'up' ? 'Reporting back' : 'Working'}
+              Since {new Date(liveInfo.started_at || liveInfo.updated_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+              {' '}&middot;{' '}Elapsed {formatElapsed(liveInfo.elapsed_seconds)}
             </p>
           </section>
         )}
@@ -523,7 +603,7 @@ function DetailPanel({ agent, onClose, liveInfo }: DetailPanelProps) {
 }
 
 // ---- Main AgentPanel ----
-export default function AgentPanel({ agents, loading, microProjectMode = false, liveAgents }: AgentPanelProps) {
+export default function AgentPanel({ agents, loading, microProjectMode = false, workforceLive }: AgentPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailedAgent, setDetailedAgent] = useState<Agent | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -554,6 +634,36 @@ export default function AgentPanel({ agents, loading, microProjectMode = false, 
           : agents.find((a) => a.id === effectiveSelectedId) ?? null
       )
     : null;
+
+  const liveByAgent = useMemo(() => {
+    const byAgent = new Map<string, WorkforceWorker>();
+    const workers = workforceLive?.workers || [];
+    const stateRank: Record<WorkforceState, number> = {
+      working: 4,
+      blocked: 3,
+      reporting: 2,
+      assigned: 1,
+    };
+    for (const worker of workers) {
+      const agentId = String(worker.agent_id || '').trim().toLowerCase().replace(/\\s+/g, '-');
+      if (!agentId) continue;
+      const existing = byAgent.get(agentId);
+      if (!existing) {
+        byAgent.set(agentId, worker);
+        continue;
+      }
+      const workerRank = stateRank[worker.state] || 0;
+      const existingRank = stateRank[existing.state] || 0;
+      if (workerRank > existingRank) {
+        byAgent.set(agentId, worker);
+        continue;
+      }
+      if (workerRank === existingRank && String(worker.updated_at || '') > String(existing.updated_at || '')) {
+        byAgent.set(agentId, worker);
+      }
+    }
+    return byAgent;
+  }, [workforceLive?.workers]);
 
   // Filter agents by search query
   const filteredAgents = agents.filter((a) => {
@@ -670,7 +780,7 @@ export default function AgentPanel({ agents, loading, microProjectMode = false, 
                     selected={effectiveSelectedId === agent.id}
                     disabled={disabled}
                     onSelect={() => handleSelect(agent.id)}
-                    liveInfo={liveAgents?.get(agent.id)}
+                    liveInfo={liveByAgent.get(agent.id)}
                   />
                 );
               })}
@@ -683,7 +793,7 @@ export default function AgentPanel({ agents, loading, microProjectMode = false, 
           <div className="flex-1 overflow-hidden" style={{ minWidth: 0, minHeight: isNarrowViewport ? '420px' : 0 }}>
             <DetailPanel
               agent={selectedAgent}
-              liveInfo={liveAgents?.get(selectedAgent.id)}
+              liveInfo={liveByAgent.get(selectedAgent.id)}
               onClose={() => {
                 setSelectedId(null);
                 setDetailedAgent(null);

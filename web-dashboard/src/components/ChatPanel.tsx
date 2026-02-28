@@ -941,6 +941,7 @@ interface ChatPanelProps {
   microToggleRequestToken?: number;
   onAgentActivity?: (agentId: string, task: string, flow: 'down' | 'up' | 'working') => void;
   onAgentRemove?: (agentId: string) => void;
+  onWorkforceRefreshRequest?: () => void;
 }
 
 export default function ChatPanel({
@@ -962,6 +963,7 @@ export default function ChatPanel({
   microToggleRequestToken = 0,
   onAgentActivity,
   onAgentRemove,
+  onWorkforceRefreshRequest,
 }: ChatPanelProps) {
   // Core state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1024,6 +1026,7 @@ export default function ChatPanel({
   const onNewCeoMessageRef = useRef(onNewCeoMessage);
   const onAgentActivityRef = useRef(onAgentActivity);
   const onAgentRemoveRef = useRef(onAgentRemove);
+  const onWorkforceRefreshRequestRef = useRef(onWorkforceRefreshRequest);
   const streamingAccumRef = useRef('');
   const turnErroredRef = useRef(false);
   const isWaitingRef = useRef(false);
@@ -1039,6 +1042,7 @@ export default function ChatPanel({
   useEffect(() => { onNewCeoMessageRef.current = onNewCeoMessage; }, [onNewCeoMessage]);
   useEffect(() => { onAgentActivityRef.current = onAgentActivity; }, [onAgentActivity]);
   useEffect(() => { onAgentRemoveRef.current = onAgentRemove; }, [onAgentRemove]);
+  useEffect(() => { onWorkforceRefreshRequestRef.current = onWorkforceRefreshRequest; }, [onWorkforceRefreshRequest]);
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
 
@@ -1287,6 +1291,7 @@ export default function ChatPanel({
                 if (!payload) break;
                 const rid = String(payload.id || '');
                 if (rid) setLatestRunId(rid);
+                onWorkforceRefreshRequestRef.current?.();
                 const stage = String(payload.delegation_stage || '');
                 const summary = String(payload.delegation_summary || '');
                 const reasonsRaw = Array.isArray(payload.delegation_reasons)
@@ -1391,6 +1396,7 @@ export default function ChatPanel({
                     return [...prev.slice(0, -1), { ...last, text: nextText }];
                   });
                 }
+                onWorkforceRefreshRequestRef.current?.();
               }
               break;
             case 'action_result':
@@ -1455,9 +1461,11 @@ export default function ChatPanel({
               }
               if (!turnErroredRef.current && finalContent.trim()) {
                 typewriteAndCommit(finalContent, projectId);
+                onWorkforceRefreshRequestRef.current?.();
                 break;
               }
               completeAssistantTurn();
+              onWorkforceRefreshRequestRef.current?.();
               break;
             }
             case 'error':
@@ -1476,6 +1484,7 @@ export default function ChatPanel({
               setDelegationContext(null);
               setIsWaiting(false);
               setDeployOffer(null);
+              onWorkforceRefreshRequestRef.current?.();
               break;
             case 'warning':
               setMessages((prev) => [...prev, {

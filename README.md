@@ -130,6 +130,7 @@ compaas-web
 
 Features:
 - Org chart with team hierarchy
+- Live workforce presence states (`working`, `assigned`, `reporting`, `blocked`) sourced from a canonical backend snapshot
 - Project list with progress tracking
 - Task boards per project
 - Real-time activity feed (SSE)
@@ -162,6 +163,18 @@ The web backend now includes a versioned orchestration API at `/api/v1` with:
 - GitHub controls (repo/branch/template/scan/sync/drift/rollback/issue projection)
 - Vercel controls (link/deploy/domain/env)
 - Deployment live feed stream source (from activity log)
+- Live workforce endpoint (`GET /api/v1/workforce/live`) with project/filter query support
+
+### Live Workforce Presence
+
+COMPaaS exposes canonical workforce presence via:
+
+- `GET /api/workforce/live`
+- `GET /api/v1/workforce/live`
+
+`working` is the only state counted as active in badges/highlights. `assigned` and `reporting` are visible as secondary states.
+
+See [docs/live-workforce.md](docs/live-workforce.md) for state semantics, synthetic vs real evidence rules, and troubleshooting.
 
 ### TUI Dashboard
 
@@ -169,7 +182,7 @@ The web backend now includes a versioned orchestration API at `/api/v1` with:
 compaas-tui
 ```
 
-A terminal-based dashboard with org chart, project summary, task board, and activity feed. Refreshes every 3 seconds. Press `r` to force refresh, `q` to quit.
+A terminal-based dashboard with live workforce panel, project summary, task board, and activity feed. Refreshes every 3 seconds. Press `r` to force refresh, `q` to quit.
 
 ## Agent Roster
 

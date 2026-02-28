@@ -6,41 +6,68 @@ from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Static, DataTable, RichLog
 
 from src.utils import resolve_data_dir
-from src.agents import AGENT_REGISTRY
 
 
 DATA_DIR = resolve_data_dir()
 ACTIVITY_LOG = os.path.join(DATA_DIR, "activity.log")
+WORKFORCE_SNAPSHOT = os.path.join(DATA_DIR, "workforce_presence.yaml")
 
 
-class OrgChartPanel(Static):
-    """Shows the company org chart with agent statuses."""
+class LiveWorkforcePanel(Static):
+    """Shows canonical live workforce state from backend snapshot."""
 
-    BORDER_TITLE = "Organization"
+    BORDER_TITLE = "Live Workforce"
 
     def compose(self) -> ComposeResult:
-        yield DataTable(id="org-table")
+        yield DataTable(id="workforce-table")
 
     def on_mount(self) -> None:
-        table = self.query_one("#org-table", DataTable)
-        table.add_columns("Agent", "Model", "Team", "Status")
-        for slug, info in AGENT_REGISTRY.items():
-            display = f"{info['name']} ({info['role']})"
-            table.add_row(display, info["model"], info["team"], info["status"])
-        self._load_hires(table)
+        table = self.query_one("#workforce-table", DataTable)
+        table.add_columns("Agent", "State", "Project", "Task", "Elapsed")
+        self.refresh_presence()
 
-    def _load_hires(self, table: DataTable) -> None:
-        path = os.path.join(DATA_DIR, "hiring_log.yaml")
-        if not os.path.exists(path):
+    def refresh_presence(self) -> None:
+        table = self.query_one("#workforce-table", DataTable)
+        table.clear()
+
+        if not os.path.exists(WORKFORCE_SNAPSHOT):
+            table.add_row("—", "idle", "—", "No live workforce snapshot yet", "—")
             return
+
         try:
-            with open(path) as f:
-                log = yaml.safe_load(f) or {"hired": []}
-            for h in log["hired"]:
-                if h.get("status") == "active":
-                    table.add_row(h["role"], h.get("model", "sonnet"), "hired", "idle")
+            with open(WORKFORCE_SNAPSHOT) as f:
+                snapshot = yaml.safe_load(f) or {}
         except Exception:
-            pass
+            table.add_row("—", "error", "—", "Unable to parse workforce snapshot", "—")
+            return
+
+        workers = snapshot.get("workers", [])
+        if not isinstance(workers, list) or len(workers) == 0:
+            table.add_row("—", "idle", "—", "No agents currently assigned or working", "—")
+            return
+
+        for row in workers:
+            if not isinstance(row, dict):
+                continue
+            agent_name = str(row.get("agent_name", "") or row.get("agent_id", "unknown"))
+            state = str(row.get("state", "unknown") or "unknown")
+            project = str(row.get("project_id", "") or "global")
+            task = str(row.get("task", "") or "—")
+            elapsed_seconds = row.get("elapsed_seconds", 0)
+            try:
+                elapsed_int = max(0, int(elapsed_seconds))
+            except Exception:
+                elapsed_int = 0
+            mins = elapsed_int // 60
+            secs = elapsed_int % 60
+            elapsed = f"{mins}m {secs:02d}s" if mins > 0 else f"{secs}s"
+            table.add_row(
+                agent_name,
+                state,
+                project,
+                task[:44],
+                elapsed,
+            )
 
 
 class TaskBoardPanel(Static):
@@ -193,7 +220,7 @@ class VirtualCompanyDashboard(App):
         grid-rows: 1fr 1fr 2fr;
     }
 
-    OrgChartPanel {
+    LiveWorkforcePanel {
         border: solid $success;
         height: 100%;
     }
@@ -215,7 +242,7 @@ class VirtualCompanyDashboard(App):
         column-span: 2;
     }
 
-    #org-table, #task-table, #project-table {
+    #workforce-table, #task-table, #project-table {
         height: 100%;
     }
 
@@ -233,7 +260,7 @@ class VirtualCompanyDashboard(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield OrgChartPanel()
+        yield LiveWorkforcePanel()
         yield ProjectSummaryPanel()
         yield ActivityFeedPanel()
         yield TaskBoardPanel()
@@ -246,6 +273,10 @@ class VirtualCompanyDashboard(App):
 
     def _do_refresh(self) -> None:
         """Refresh all panels safely."""
+        try:
+            self.query_one(LiveWorkforcePanel).refresh_presence()
+        except Exception:
+            pass
         try:
             self.query_one(TaskBoardPanel).refresh_tasks()
         except Exception:
