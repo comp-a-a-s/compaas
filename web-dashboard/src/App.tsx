@@ -24,9 +24,11 @@ import {
   createActivityStream,
   fetchConfig,
   createProject,
+  fetchWorkforceLive,
+  emptyWorkforceLiveSnapshot,
 } from './api/client';
 
-import type { Agent, Project, Task, ActivityEvent, AppConfig } from './types';
+import type { Agent, Project, Task, ActivityEvent, AppConfig, WorkforceLiveSnapshot } from './types';
 
 const MAX_EVENTS = 200;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
@@ -305,6 +307,7 @@ export default function App() {
   const [showProjectRequired, setShowProjectRequired] = useState(false);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
   const [liveAgents, setLiveAgents] = useState<Map<string, ActiveAgentInfo>>(new Map());
+  const [workforceLive, setWorkforceLive] = useState<WorkforceLiveSnapshot>(() => emptyWorkforceLiveSnapshot(''));
 
   // Loading states
   const [loadingAgents, setLoadingAgents] = useState(true);
@@ -316,6 +319,9 @@ export default function App() {
   const pendingProjectLoadWithTasksRef = useRef(false);
   const projectDetailAbortRef = useRef<AbortController | null>(null);
   const projectRefreshTimestampsRef = useRef<number[]>([]);
+  const loadWorkforceInFlightRef = useRef<Promise<void> | null>(null);
+  const pendingWorkforceLoadRef = useRef(false);
+  const workforceAbortRef = useRef<AbortController | null>(null);
 
   // ---- Config check ----
   useEffect(() => {
@@ -444,8 +450,41 @@ export default function App() {
     return runner;
   }, [activeProjectId]);
 
+  const loadWorkforce = useCallback(async () => {
+    pendingWorkforceLoadRef.current = true;
+    if (loadWorkforceInFlightRef.current) {
+      return loadWorkforceInFlightRef.current;
+    }
+
+    const runner = (async () => {
+      while (pendingWorkforceLoadRef.current) {
+        pendingWorkforceLoadRef.current = false;
+        try {
+          workforceAbortRef.current?.abort();
+          const controller = new AbortController();
+          workforceAbortRef.current = controller;
+          const snapshot = await fetchWorkforceLive(activeProjectId, { signal: controller.signal });
+          if (!controller.signal.aborted) {
+            setWorkforceLive(snapshot);
+          }
+        } catch (err) {
+          const isAbort = err instanceof DOMException && err.name === 'AbortError';
+          if (!isAbort) {
+            setWorkforceLive(emptyWorkforceLiveSnapshot(activeProjectId));
+          }
+        }
+      }
+    })().finally(() => {
+      loadWorkforceInFlightRef.current = null;
+    });
+
+    loadWorkforceInFlightRef.current = runner;
+    return runner;
+  }, [activeProjectId]);
+
   useEffect(() => () => {
     projectDetailAbortRef.current?.abort();
+    workforceAbortRef.current?.abort();
   }, []);
 
   const handleCreateProjectFromHeader = useCallback(() => {
@@ -501,6 +540,7 @@ export default function App() {
 
     loadAgents();
     loadProjects(true);
+    loadWorkforce();
     loadMetrics();
 
     // Seed recent activity (deduplicated to avoid duplicates with SSE stream)
@@ -554,7 +594,7 @@ export default function App() {
       // no recent activity endpoint
     });
 
-  }, [loadAgents, loadMetrics, loadProjects, showWizard]);
+  }, [loadAgents, loadMetrics, loadProjects, loadWorkforce, showWizard]);
 
   // ---- Tab-aware polling ----
   useEffect(() => {
@@ -564,16 +604,18 @@ export default function App() {
     const shouldRefreshMetrics = false; // metrics polling removed
     const shouldRefreshProjectSummaries =
       chatOpen || activeTab === 'overview' || activeTab === 'activity';
+    const shouldRefreshWorkforce = true;
 
     const interval = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       if (shouldRefreshAgents) loadAgents();
       if (shouldRefreshProjectSummaries) loadProjects(false);
+      if (shouldRefreshWorkforce) loadWorkforce();
       if (shouldRefreshMetrics) loadMetrics();
     }, pollIntervalMs);
 
     return () => clearInterval(interval);
-  }, [activeTab, chatOpen, loadAgents, loadMetrics, loadProjects, pollIntervalMs, showWizard]);
+  }, [activeTab, chatOpen, loadAgents, loadMetrics, loadProjects, loadWorkforce, pollIntervalMs, showWizard]);
 
   // Fast refresh after tab visibility returns
   useEffect(() => {
@@ -586,11 +628,12 @@ export default function App() {
       if (chatOpen || activeTab === 'overview' || activeTab === 'activity') {
         loadProjects(false);
       }
+      loadWorkforce();
       // metrics polling removed
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [activeTab, chatOpen, loadAgents, loadProjects, loadMetrics, showWizard]);
+  }, [activeTab, chatOpen, loadAgents, loadProjects, loadWorkforce, showWizard]);
 
   // Refresh detailed task boards only on project-focused views.
   useEffect(() => {
@@ -613,6 +656,7 @@ export default function App() {
 
   // ---- Debounced project refresh on activity events ----
   const pendingRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingWorkforceRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debouncedRefreshProjects = useCallback(() => {
     if (pendingRefreshRef.current) return; // already scheduled
     pendingRefreshRef.current = setTimeout(() => {
@@ -620,6 +664,13 @@ export default function App() {
       loadProjects(true);
     }, 2000);
   }, [loadProjects]);
+  const requestWorkforceRefresh = useCallback((delayMs: number = 300) => {
+    if (pendingWorkforceRefreshRef.current) return;
+    pendingWorkforceRefreshRef.current = setTimeout(() => {
+      pendingWorkforceRefreshRef.current = null;
+      loadWorkforce();
+    }, Math.max(100, delayMs));
+  }, [loadWorkforce]);
 
   // ---- Live agent activity for TeamPulse + org chart ----
   const LIVE_AGENT_EXPIRY_MS = 120_000; // 2 minutes — delegations often run longer
@@ -655,7 +706,8 @@ export default function App() {
       });
       return next;
     });
-  }, [knownAgentIds]);
+    requestWorkforceRefresh(120);
+  }, [knownAgentIds, requestWorkforceRefresh]);
 
   const removeLiveAgent = useCallback((agentId: string) => {
     const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
@@ -666,7 +718,8 @@ export default function App() {
       next.delete(normalized);
       return next;
     });
-  }, []);
+    requestWorkforceRefresh(120);
+  }, [requestWorkforceRefresh]);
 
   // ---- SSE activity stream ----
   useEffect(() => {
@@ -744,6 +797,7 @@ export default function App() {
         // Trigger reactive project refresh on data-changing events
         if (['COMPLETED', 'ASSIGNED', 'UPDATED', 'CREATED', 'STARTED', 'BLOCKED'].includes(action)) {
           debouncedRefreshProjects();
+          requestWorkforceRefresh(180);
         }
       });
     } catch {
@@ -756,8 +810,12 @@ export default function App() {
         clearTimeout(pendingRefreshRef.current);
         pendingRefreshRef.current = null;
       }
+      if (pendingWorkforceRefreshRef.current) {
+        clearTimeout(pendingWorkforceRefreshRef.current);
+        pendingWorkforceRefreshRef.current = null;
+      }
     };
-  }, [showWizard, handleAgentActivity, removeLiveAgent, debouncedRefreshProjects]);
+  }, [showWizard, handleAgentActivity, removeLiveAgent, debouncedRefreshProjects, requestWorkforceRefresh]);
 
   // Auto-expire stale live agents
   useEffect(() => {
@@ -940,6 +998,7 @@ export default function App() {
               loadingProjects={loadingProjects}
               loadingTasks={loadingTasks}
               liveAgents={liveAgents}
+              workforceLive={workforceLive}
             />
           );
 
@@ -959,7 +1018,7 @@ export default function App() {
               agents={filteredAgents}
               loading={loadingAgents}
               microProjectMode={microProjectMode}
-              liveAgents={liveAgents}
+              workforceLive={workforceLive}
             />
           );
 
@@ -1043,6 +1102,7 @@ export default function App() {
               loadingProjects={loadingProjects}
               loadingTasks={loadingTasks}
               liveAgents={liveAgents}
+              workforceLive={workforceLive}
             />
           );
       }
@@ -1107,7 +1167,7 @@ export default function App() {
         onToggleTelegramMirror={handleToggleTelegramMirror}
         onRequestMicroToggle={requestMicroToggle}
         agents={agents}
-        liveAgents={liveAgents}
+        workforceLive={workforceLive}
         chatPanel={
           <Suspense fallback={null}>
             <ChatPanel
@@ -1131,6 +1191,7 @@ export default function App() {
               microToggleRequestToken={microToggleRequestToken}
               onAgentActivity={handleAgentActivity}
               onAgentRemove={removeLiveAgent}
+              onWorkforceRefreshRequest={() => requestWorkforceRefresh(120)}
             />
           </Suspense>
         }

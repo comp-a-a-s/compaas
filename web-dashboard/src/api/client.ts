@@ -8,6 +8,7 @@ import type {
   AppConfig,
   FeatureFlags,
   PlanningPacketStatus,
+  WorkforceLiveSnapshot,
 } from '../types';
 
 const BASE = '/api';
@@ -78,6 +79,36 @@ export async function fetchProjectDecisions(id: string): Promise<Decision[]> {
 
 export async function fetchRecentActivity(limit = 50): Promise<ActivityEvent[]> {
   return safeFetch<ActivityEvent[]>(`${BASE}/activity/recent?limit=${limit}`, []);
+}
+
+export function emptyWorkforceLiveSnapshot(projectId = ''): WorkforceLiveSnapshot {
+  return {
+    status: 'ok',
+    as_of: new Date(0).toISOString(),
+    project_id: projectId || null,
+    counts: {
+      assigned: 0,
+      working: 0,
+      reporting: 0,
+      blocked: 0,
+    },
+    workers: [],
+  };
+}
+
+export async function fetchWorkforceLive(
+  projectId = '',
+  options?: { signal?: AbortSignal; include_assigned?: boolean; include_reporting?: boolean },
+): Promise<WorkforceLiveSnapshot> {
+  const params = new URLSearchParams();
+  if (projectId) params.set('project_id', projectId);
+  params.set('include_assigned', String(options?.include_assigned ?? true));
+  params.set('include_reporting', String(options?.include_reporting ?? true));
+  return safeFetch<WorkforceLiveSnapshot>(
+    `${BASE}/workforce/live?${params.toString()}`,
+    emptyWorkforceLiveSnapshot(projectId),
+    options?.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export function createActivityStream(onMessage: (line: string) => void): EventSource {

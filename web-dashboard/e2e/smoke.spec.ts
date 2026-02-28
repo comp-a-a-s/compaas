@@ -46,6 +46,72 @@ const projectsPayload = [
   },
 ];
 
+const agentsPayload = [
+  {
+    id: 'ceo',
+    name: 'Marcus',
+    role: 'CEO',
+    model: 'gpt-4o',
+    status: 'active',
+    team: 'leadership',
+    recent_activity: [],
+  },
+  {
+    id: 'cto',
+    name: 'Elena',
+    role: 'Chief Technology Officer',
+    model: 'opus',
+    status: 'available',
+    team: 'leadership',
+    recent_activity: [],
+  },
+  {
+    id: 'vp-engineering',
+    name: 'David',
+    role: 'VP of Engineering',
+    model: 'sonnet',
+    status: 'available',
+    team: 'leadership',
+    recent_activity: [],
+  },
+  {
+    id: 'vp-product',
+    name: 'Olivia',
+    role: 'Chief Product Officer',
+    model: 'sonnet',
+    status: 'available',
+    team: 'leadership',
+    recent_activity: [],
+  },
+  {
+    id: 'lead-frontend',
+    name: 'Priya',
+    role: 'Lead Frontend Engineer',
+    model: 'sonnet',
+    status: 'available',
+    team: 'engineering',
+    recent_activity: [],
+  },
+  {
+    id: 'qa-lead',
+    name: 'Carlos',
+    role: 'QA Lead',
+    model: 'sonnet',
+    status: 'available',
+    team: 'engineering',
+    recent_activity: [],
+  },
+  {
+    id: 'tech-writer',
+    name: 'Tom',
+    role: 'Technical Writer',
+    model: 'sonnet',
+    status: 'available',
+    team: 'on-demand',
+    recent_activity: [],
+  },
+];
+
 const projectDetailPayload = {
   project: projectsPayload[0],
   tasks: [
@@ -60,7 +126,64 @@ const projectDetailPayload = {
   ],
 };
 
+const workforcePayload = {
+  status: 'ok',
+  as_of: '2026-02-28T10:20:00.000Z',
+  project_id: null,
+  counts: {
+    assigned: 1,
+    working: 1,
+    reporting: 1,
+    blocked: 0,
+  },
+  workers: [
+    {
+      work_item_id: 'run-smoke:lead-frontend',
+      agent_id: 'lead-frontend',
+      agent_name: 'Priya',
+      state: 'working',
+      project_id: 'smoke_project',
+      run_id: 'run-smoke',
+      task: 'Implement signup form validation',
+      source: 'real',
+      started_at: '2026-02-28T10:18:00.000Z',
+      updated_at: '2026-02-28T10:19:45.000Z',
+      elapsed_seconds: 105,
+    },
+    {
+      work_item_id: 'run-smoke:qa-lead',
+      agent_id: 'qa-lead',
+      agent_name: 'Carlos',
+      state: 'assigned',
+      project_id: 'smoke_project',
+      run_id: 'run-smoke',
+      task: 'Prepare regression checklist',
+      source: 'real',
+      started_at: '2026-02-28T10:19:10.000Z',
+      updated_at: '2026-02-28T10:19:50.000Z',
+      elapsed_seconds: 40,
+    },
+    {
+      work_item_id: 'run-smoke:tech-writer',
+      agent_id: 'tech-writer',
+      agent_name: 'Tom',
+      state: 'reporting',
+      project_id: 'smoke_project',
+      run_id: 'run-smoke',
+      task: 'Reporting API contract notes',
+      source: 'real',
+      started_at: '2026-02-28T10:18:30.000Z',
+      updated_at: '2026-02-28T10:19:55.000Z',
+      elapsed_seconds: 85,
+    },
+  ],
+};
+
+let projectsRequestCount = 0;
+
 test.beforeEach(async ({ page }) => {
+  projectsRequestCount = 0;
+
   await page.route('**/api/config', async (route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({ json: configPayload });
@@ -70,27 +193,46 @@ test.beforeEach(async ({ page }) => {
   });
 
   await page.route('**/api/agents', async (route) => {
-    await route.fulfill({
-      json: [
-        {
-          id: 'ceo',
-          name: 'Marcus',
-          role: 'CEO',
-          model: 'gpt-4o',
-          status: 'active',
-          team: 'leadership',
-          recent_activity: [],
-        },
-      ],
-    });
+    await route.fulfill({ json: agentsPayload });
+  });
+
+  await page.route('**/api/agents/*', async (route) => {
+    const url = new URL(route.request().url());
+    const id = url.pathname.split('/').pop() || '';
+    const match = agentsPayload.find((agent) => agent.id === id) || agentsPayload[0];
+    await route.fulfill({ json: match });
   });
 
   await page.route('**/api/projects', async (route) => {
+    projectsRequestCount += 1;
     if (route.request().method() === 'GET') {
       await route.fulfill({ json: projectsPayload });
       return;
     }
     await route.fulfill({ json: { status: 'ok', project: projectsPayload[0] } });
+  });
+
+  await page.route('**/api/workforce/live**', async (route) => {
+    const url = new URL(route.request().url());
+    const requestedProjectId = url.searchParams.get('project_id') || '';
+    if (!requestedProjectId || requestedProjectId === 'smoke_project') {
+      await route.fulfill({
+        json: {
+          ...workforcePayload,
+          project_id: requestedProjectId || null,
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        as_of: workforcePayload.as_of,
+        project_id: requestedProjectId,
+        counts: { assigned: 0, working: 0, reporting: 0, blocked: 0 },
+        workers: [],
+      },
+    });
   });
 
   await page.route('**/api/projects/*', async (route) => {
@@ -158,4 +300,20 @@ test('dashboard navigation and connector validation @smoke', async ({ page }) =>
 
   const githubVerifyButton = page.getByRole('button', { name: 'Connect & Verify' }).first();
   await expect(githubVerifyButton).toBeEnabled();
+
+  expect(projectsRequestCount).toBeLessThan(20);
+});
+
+test('workforce states stay consistent across overview and agents @smoke', async ({ page }) => {
+  await page.goto('/');
+
+  await expect(page.getByText('1 working — collaborating')).toBeVisible();
+  await expect(page.getByText('1 assigned')).toBeVisible();
+  await expect(page.getByText('1 reporting')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Agents' }).click();
+  await page.getByRole('button', { name: /Priya/i }).first().click();
+
+  await expect(page.getByRole('heading', { name: 'Live State: Working' })).toBeVisible();
+  await expect(page.getByText('Implement signup form validation').first()).toBeVisible();
 });

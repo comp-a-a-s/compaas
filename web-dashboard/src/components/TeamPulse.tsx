@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import type { Agent } from '../types';
+import type { Agent, WorkforceLiveSnapshot, WorkforceWorker } from '../types';
 import Tooltip from './Tooltip';
 
-/** Info about an actively-working agent, maintained by App.tsx. */
+/** Legacy optimistic hint shape (still emitted by ChatPanel/App as a fallback signal). */
 export interface ActiveAgentInfo {
   agentId: string;
   task: string;
@@ -12,7 +12,7 @@ export interface ActiveAgentInfo {
 
 interface TeamPulseProps {
   agents: Agent[];
-  liveAgents: Map<string, ActiveAgentInfo>;
+  workforceLive?: WorkforceLiveSnapshot;
   isMobile?: boolean;
 }
 
@@ -27,44 +27,40 @@ function modelColor(model: string): string {
   return 'var(--tf-text-secondary)';
 }
 
-function flowLabel(flow: string): string {
-  if (flow === 'down') return 'Delegated';
-  if (flow === 'up') return 'Reporting';
-  return 'Working';
-}
-
 const MAX_VISIBLE = 6;
 
-export default function TeamPulse({ agents, liveAgents, isMobile = false }: TeamPulseProps) {
+interface WorkingItem {
+  agent: Agent | null;
+  worker: WorkforceWorker;
+}
+
+export default function TeamPulse({ agents, workforceLive, isMobile = false }: TeamPulseProps) {
   const [expanded, setExpanded] = useState(false);
 
-  // Build list of active agents with their info
-  const activeList = useMemo(() => {
+  const workingList = useMemo<WorkingItem[]>(() => {
     const agentMap = new Map(agents.map((a) => [a.id, a]));
-    const result: Array<{ agent: Agent; info: ActiveAgentInfo }> = [];
-    for (const [rawId, info] of liveAgents) {
-      // Normalize key: spaces → dashes to match agent.id format
-      const slug = rawId.trim().toLowerCase().replace(/\s+/g, '-');
-      const agent = agentMap.get(slug) || agentMap.get(rawId);
-      if (agent) {
-        result.push({ agent, info });
-      }
-    }
-    // Sort: most recent first
-    result.sort((a, b) => b.info.since.localeCompare(a.info.since));
-    return result;
-  }, [agents, liveAgents]);
+    const workers = (workforceLive?.workers || [])
+      .filter((worker) => worker.state === 'working')
+      .slice()
+      .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
 
-  // Close expanded mobile sheet when no agents are active
+    return workers.map((worker) => {
+      const canonicalId = String(worker.agent_id || '').trim().toLowerCase().replace(/\s+/g, '-');
+      return {
+        agent: agentMap.get(canonicalId) || null,
+        worker,
+      };
+    });
+  }, [agents, workforceLive?.workers]);
+
   useEffect(() => {
-    if (activeList.length !== 0 || !expanded) return;
+    if (workingList.length !== 0 || !expanded) return;
     const timer = window.setTimeout(() => setExpanded(false), 0);
     return () => window.clearTimeout(timer);
-  }, [activeList.length, expanded]);
+  }, [workingList.length, expanded]);
 
-  if (activeList.length === 0) return null;
+  if (workingList.length === 0) return null;
 
-  // Mobile: compact badge
   if (isMobile) {
     return (
       <div style={{ position: 'relative' }}>
@@ -91,7 +87,7 @@ export default function TeamPulse({ agents, liveAgents, isMobile = false }: Team
               animation: 'pulse-ring 1.8s ease-out infinite',
             }}
           />
-          {activeList.length} working
+          {workingList.length} working
         </button>
 
         {expanded && (
@@ -123,13 +119,14 @@ export default function TeamPulse({ agents, liveAgents, isMobile = false }: Team
                 marginBottom: '4px',
               }}
             >
-              Active Team
+              Working Now
             </p>
-            {activeList.map(({ agent, info }) => {
-              const color = modelColor(agent.runtime_model || agent.model || '');
+            {workingList.map(({ agent, worker }) => {
+              const color = modelColor(agent?.runtime_model || agent?.model || '');
+              const displayName = agent?.name || worker.agent_name || worker.agent_id;
               return (
                 <div
-                  key={agent.id}
+                  key={worker.work_item_id || `${worker.agent_id}-${worker.updated_at}`}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -154,11 +151,11 @@ export default function TeamPulse({ agents, liveAgents, isMobile = false }: Team
                       boxShadow: '0 0 0 2px var(--tf-success)',
                     }}
                   >
-                    {agent.name.charAt(0).toUpperCase()}
+                    {displayName.charAt(0).toUpperCase()}
                   </div>
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <p style={{ fontSize: '12px', fontWeight: 600, color: 'var(--tf-text)' }}>
-                      {agent.name}
+                      {displayName}
                     </p>
                     <p
                       style={{
@@ -169,7 +166,7 @@ export default function TeamPulse({ agents, liveAgents, isMobile = false }: Team
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {info.task || flowLabel(info.flow)}
+                      {worker.task || 'Working'}
                     </p>
                   </div>
                 </div>
@@ -181,17 +178,17 @@ export default function TeamPulse({ agents, liveAgents, isMobile = false }: Team
     );
   }
 
-  // Desktop: avatar row
-  const visible = activeList.slice(0, MAX_VISIBLE);
-  const overflow = activeList.length - MAX_VISIBLE;
+  const visible = workingList.slice(0, MAX_VISIBLE);
+  const overflow = workingList.length - MAX_VISIBLE;
 
   return (
     <div className="flex items-center gap-1" style={{ height: '34px' }}>
-      {visible.map(({ agent, info }) => {
-        const color = modelColor(agent.runtime_model || agent.model || '');
-        const tooltipText = `${agent.name} — ${info.task || flowLabel(info.flow)}`;
+      {visible.map(({ agent, worker }) => {
+        const color = modelColor(agent?.runtime_model || agent?.model || '');
+        const displayName = agent?.name || worker.agent_name || worker.agent_id;
+        const tooltipText = `${displayName} — ${worker.task || 'Working'}`;
         return (
-          <Tooltip key={agent.id} content={tooltipText} position="bottom">
+          <Tooltip key={worker.work_item_id || `${worker.agent_id}-${worker.updated_at}`} content={tooltipText} position="bottom">
             <div
               className="team-pulse-avatar"
               style={{
@@ -210,7 +207,6 @@ export default function TeamPulse({ agents, liveAgents, isMobile = false }: Team
                 animation: 'team-pulse-in 0.25s ease-out both',
               }}
             >
-              {/* Pulse ring */}
               <div
                 style={{
                   position: 'absolute',
@@ -221,14 +217,14 @@ export default function TeamPulse({ agents, liveAgents, isMobile = false }: Team
                   animation: 'pulse-ring 2s ease-out infinite',
                 }}
               />
-              {agent.name.charAt(0).toUpperCase()}
+              {displayName.charAt(0).toUpperCase()}
             </div>
           </Tooltip>
         );
       })}
       {overflow > 0 && (
         <Tooltip
-          content={activeList.slice(MAX_VISIBLE).map(({ agent }) => agent.name).join(', ')}
+          content={workingList.slice(MAX_VISIBLE).map(({ agent, worker }) => agent?.name || worker.agent_name || worker.agent_id).join(', ')}
           position="bottom"
         >
           <div

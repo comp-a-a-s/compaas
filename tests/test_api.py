@@ -205,6 +205,53 @@ class TestCreateProjectEndpoint:
         assert detail["settings_target"] == "github"
 
 
+class TestApproveProjectPlanEndpoint:
+    def test_approve_releases_active_planning_runs(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        from src.web.services.project_service import ProjectService
+        from src.web.services.run_service import RunService
+        from src.web.settings import RuntimeSettings
+
+        runtime_settings = RuntimeSettings(data_dir=temp_data_dir, project_root=temp_data_dir)
+        run_service = RunService(temp_data_dir, runtime_settings)
+        monkeypatch.setattr(api_module, "run_service", run_service)
+        monkeypatch.setattr(
+            api_module,
+            "project_service",
+            ProjectService(temp_data_dir, api_module.state_manager, api_module.task_board),
+        )
+
+        pid = _create_project(client, name="Approval Gate Project")
+        api_module._generate_planning_packet(
+            pid,
+            user_message="Prepare implementation plan for a task tracker app.",
+            user_name="Idan",
+            ceo_name="Marcus",
+        )
+
+        run, _ = run_service.create_run(
+            project_id=pid,
+            message="Planning packet requires approval",
+            provider="openai",
+            sandbox_profile="full",
+        )
+        run_service.transition_run(
+            str(run.get("id", "")),
+            state="planning",
+            label="Planning approval required before execution",
+        )
+
+        response = client.post(f"/api/projects/{pid}/approve")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "approved"
+        assert str(run.get("id", "")) in payload.get("released_runs", [])
+
+        updated = run_service.get_run(str(run.get("id", "")))
+        assert updated is not None
+        assert updated["status"] == "done"
+
+
 # ---------------------------------------------------------------------------
 # GET /api/projects/{project_id}
 # ---------------------------------------------------------------------------
