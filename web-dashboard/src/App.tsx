@@ -11,7 +11,6 @@ const SettingsPanel = lazy(() => import('./components/SettingsPanel'));
 import Walkthrough from './components/Walkthrough';
 import SetupWizard from './components/SetupWizard';
 import CompassRoseLogo from './components/CompassRoseLogo';
-import type { ActiveAgentInfo } from './components/TeamPulse';
 
 import { useThemeInit } from './hooks/useTheme';
 import { useKeyboardShortcuts, useShortcutsPanel, ShortcutsModal } from './hooks/useKeyboardShortcuts';
@@ -36,6 +35,9 @@ const MIN_POLL_INTERVAL_MS = 3000;
 const MAX_POLL_INTERVAL_MS = 30000;
 const TASK_POLL_MULTIPLIER = 3;
 const MIN_TASK_POLL_INTERVAL_MS = 15000;
+const WORKFORCE_STALE_MULTIPLIER = 3;
+const WORKFORCE_STALE_MIN_MS = 15000;
+const WORKFORCE_MAX_BACKOFF_MS = 60000;
 const MICRO_PROJECT_MODE_KEY = 'compaas_micro_project_mode';
 const ONBOARDING_TOUR_DONE_KEY = 'compaas_onboarding_tour_done';
 const TELEGRAM_KEYS = {
@@ -306,7 +308,6 @@ export default function App() {
   // Project-selection required modal for CEO chat
   const [showProjectRequired, setShowProjectRequired] = useState(false);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
-  const [liveAgents, setLiveAgents] = useState<Map<string, ActiveAgentInfo>>(new Map());
   const [workforceLive, setWorkforceLive] = useState<WorkforceLiveSnapshot>(() => emptyWorkforceLiveSnapshot(''));
 
   // Loading states
@@ -321,7 +322,11 @@ export default function App() {
   const projectRefreshTimestampsRef = useRef<number[]>([]);
   const loadWorkforceInFlightRef = useRef<Promise<void> | null>(null);
   const pendingWorkforceLoadRef = useRef(false);
+  const pendingWorkforceForceRef = useRef(false);
   const workforceAbortRef = useRef<AbortController | null>(null);
+  const workforceFailureCountRef = useRef(0);
+  const workforceNextAllowedAtRef = useRef(0);
+  const workforceLastSuccessAtRef = useRef(0);
 
   // ---- Config check ----
   useEffect(() => {
@@ -450,27 +455,67 @@ export default function App() {
     return runner;
   }, [activeProjectId]);
 
-  const loadWorkforce = useCallback(async () => {
+  const loadWorkforce = useCallback(async (force: boolean = false) => {
     pendingWorkforceLoadRef.current = true;
+    pendingWorkforceForceRef.current = pendingWorkforceForceRef.current || force;
     if (loadWorkforceInFlightRef.current) {
       return loadWorkforceInFlightRef.current;
     }
 
     const runner = (async () => {
       while (pendingWorkforceLoadRef.current) {
+        const runForce = pendingWorkforceForceRef.current;
         pendingWorkforceLoadRef.current = false;
+        pendingWorkforceForceRef.current = false;
+        const now = Date.now();
+        if (!runForce && now < workforceNextAllowedAtRef.current) {
+          continue;
+        }
         try {
           workforceAbortRef.current?.abort();
           const controller = new AbortController();
           workforceAbortRef.current = controller;
           const snapshot = await fetchWorkforceLive(activeProjectId, { signal: controller.signal });
           if (!controller.signal.aborted) {
-            setWorkforceLive(snapshot);
+            const successAt = Date.now();
+            workforceFailureCountRef.current = 0;
+            workforceLastSuccessAtRef.current = successAt;
+            workforceNextAllowedAtRef.current = successAt + pollIntervalMs;
+            setWorkforceLive({
+              ...snapshot,
+              client_meta: {
+                last_success_at: new Date(successAt).toISOString(),
+                stale: false,
+                failure_count: 0,
+                next_retry_in_ms: pollIntervalMs,
+                heartbeat_age_ms: 0,
+              },
+            });
           }
         } catch (err) {
           const isAbort = err instanceof DOMException && err.name === 'AbortError';
           if (!isAbort) {
-            setWorkforceLive(emptyWorkforceLiveSnapshot(activeProjectId));
+            const failures = workforceFailureCountRef.current + 1;
+            workforceFailureCountRef.current = failures;
+            const nextRetryMs = Math.min(pollIntervalMs * Math.pow(2, Math.min(failures, 4)), WORKFORCE_MAX_BACKOFF_MS);
+            const failedAt = Date.now();
+            workforceNextAllowedAtRef.current = failedAt + nextRetryMs;
+            const lastSuccessAt = workforceLastSuccessAtRef.current;
+            const staleThresholdMs = Math.max(WORKFORCE_STALE_MIN_MS, pollIntervalMs * WORKFORCE_STALE_MULTIPLIER);
+            const stale = !lastSuccessAt || (failedAt - lastSuccessAt) > staleThresholdMs;
+            setWorkforceLive((prev) => {
+              const base = stale ? emptyWorkforceLiveSnapshot(activeProjectId) : prev;
+              return {
+                ...base,
+                client_meta: {
+                  last_success_at: lastSuccessAt ? new Date(lastSuccessAt).toISOString() : '',
+                  stale,
+                  failure_count: failures,
+                  next_retry_in_ms: nextRetryMs,
+                  heartbeat_age_ms: lastSuccessAt ? Math.max(0, failedAt - lastSuccessAt) : undefined,
+                },
+              };
+            });
           }
         }
       }
@@ -480,7 +525,7 @@ export default function App() {
 
     loadWorkforceInFlightRef.current = runner;
     return runner;
-  }, [activeProjectId]);
+  }, [activeProjectId, pollIntervalMs]);
 
   useEffect(() => () => {
     projectDetailAbortRef.current?.abort();
@@ -540,7 +585,7 @@ export default function App() {
 
     loadAgents();
     loadProjects(true);
-    loadWorkforce();
+    loadWorkforce(true);
     loadMetrics();
 
     // Seed recent activity (deduplicated to avoid duplicates with SSE stream)
@@ -552,43 +597,6 @@ export default function App() {
           const merged = [...newEvents, ...prev].slice(0, MAX_EVENTS);
           return merged;
         });
-        // Also hydrate liveAgents from seed events so the org chart + TeamPulse
-        // show active agents immediately without waiting for the first SSE tick.
-        const SEED_WINDOW_MS = 180_000;
-        const now = Date.now();
-        const toSlug = (v: string) => v.trim().toLowerCase().replace(/\s+/g, '-');
-        // Collect the latest state per agent: a COMPLETED/FAILED clears an earlier STARTED.
-        const agentStates = new Map<string, { task: string; flow: 'down' | 'up' | 'working' }>();
-        for (const evt of fetched) {
-          const ts = evt.timestamp ? new Date(evt.timestamp).getTime() : 0;
-          if (now - ts > SEED_WINDOW_MS) continue;
-          const meta = (evt.metadata || {}) as Record<string, unknown>;
-          const action = (evt.action || '').toUpperCase();
-          const source = toSlug(String(meta.source_agent || ''));
-          const target = toSlug(String(meta.target_agent || ''));
-          const evtAgent = toSlug(String(evt.agent || ''));
-          const task = String(meta.task || evt.detail || '').trim();
-          if (action === 'DELEGATED' && target && target !== 'ceo') {
-            agentStates.set(target, { task, flow: 'down' });
-          } else if (action === 'STARTED') {
-            const ag = (target && target !== 'ceo') ? target : (source && source !== 'ceo') ? source : (evtAgent !== 'ceo' ? evtAgent : '');
-            if (ag) agentStates.set(ag, { task, flow: 'working' });
-          } else if (action === 'COMPLETED' || action === 'FAILED') {
-            const ag = (source && source !== 'ceo') ? source : (target && target !== 'ceo') ? target : (evtAgent !== 'ceo' ? evtAgent : '');
-            if (ag) agentStates.set(ag, { task: task || 'Completed', flow: 'up' });
-          }
-        }
-        if (agentStates.size > 0) {
-          setLiveAgents((prev) => {
-            const next = new Map(prev);
-            for (const [agentId, info] of agentStates) {
-              if (!next.has(agentId)) {
-                next.set(agentId, { agentId, task: info.task.slice(0, 100), since: new Date().toISOString(), flow: info.flow });
-              }
-            }
-            return next;
-          });
-        }
       }
     }).catch(() => {
       // no recent activity endpoint
@@ -610,7 +618,7 @@ export default function App() {
       if (document.visibilityState !== 'visible') return;
       if (shouldRefreshAgents) loadAgents();
       if (shouldRefreshProjectSummaries) loadProjects(false);
-      if (shouldRefreshWorkforce) loadWorkforce();
+      if (shouldRefreshWorkforce) loadWorkforce(false);
       if (shouldRefreshMetrics) loadMetrics();
     }, pollIntervalMs);
 
@@ -628,12 +636,18 @@ export default function App() {
       if (chatOpen || activeTab === 'overview' || activeTab === 'activity') {
         loadProjects(false);
       }
-      loadWorkforce();
+      loadWorkforce(true);
       // metrics polling removed
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, [activeTab, chatOpen, loadAgents, loadProjects, loadWorkforce, showWizard]);
+
+  useEffect(() => {
+    if (showWizard) return;
+    workforceNextAllowedAtRef.current = 0;
+    loadWorkforce(true);
+  }, [activeProjectId, loadWorkforce, showWizard]);
 
   // Refresh detailed task boards only on project-focused views.
   useEffect(() => {
@@ -668,56 +682,18 @@ export default function App() {
     if (pendingWorkforceRefreshRef.current) return;
     pendingWorkforceRefreshRef.current = setTimeout(() => {
       pendingWorkforceRefreshRef.current = null;
-      loadWorkforce();
+      loadWorkforce(true);
     }, Math.max(100, delayMs));
   }, [loadWorkforce]);
-
-  // ---- Live agent activity for TeamPulse + org chart ----
-  const LIVE_AGENT_EXPIRY_MS = 120_000; // 2 minutes — delegations often run longer
-  const knownAgentIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const agent of agents) {
-      ids.add(agent.id.toLowerCase().trim().replace(/\s+/g, '-'));
-    }
-    return ids;
-  }, [agents]);
-
   const handleAgentActivity = useCallback((agentId: string, task: string, flow: 'down' | 'up' | 'working') => {
-    // Always normalize to slug format (spaces → dashes) so keys match ORG_TREE IDs
-    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
-    if (!normalized) return;
-    // Ignore transient/non-org actors (for example "workspace") so active
-    // counts and highlights only reflect real agents in the org chart.
-    if (!knownAgentIds.has(normalized)) return;
-    setLiveAgents((prev) => {
-      const existing = prev.get(normalized);
-      // Deduplicate: skip if same agent+flow was updated within 2 seconds
-      // to avoid redundant re-renders from WebSocket + SSE dual delivery.
-      if (existing && existing.flow === flow) {
-        const elapsed = Date.now() - new Date(existing.since).getTime();
-        if (elapsed < 2000) return prev;
-      }
-      const next = new Map(prev);
-      next.set(normalized, {
-        agentId: normalized,
-        task: task.slice(0, 100),
-        since: new Date().toISOString(),
-        flow,
-      });
-      return next;
-    });
+    void agentId;
+    void task;
+    void flow;
     requestWorkforceRefresh(120);
-  }, [knownAgentIds, requestWorkforceRefresh]);
+  }, [requestWorkforceRefresh]);
 
   const removeLiveAgent = useCallback((agentId: string) => {
-    const normalized = agentId.toLowerCase().trim().replace(/\s+/g, '-');
-    if (!normalized) return;
-    setLiveAgents((prev) => {
-      if (!prev.has(normalized)) return prev;
-      const next = new Map(prev);
-      next.delete(normalized);
-      return next;
-    });
+    void agentId;
     requestWorkforceRefresh(120);
   }, [requestWorkforceRefresh]);
 
@@ -816,27 +792,6 @@ export default function App() {
       }
     };
   }, [showWizard, handleAgentActivity, removeLiveAgent, debouncedRefreshProjects, requestWorkforceRefresh]);
-
-  // Auto-expire stale live agents
-  useEffect(() => {
-    if (liveAgents.size === 0) return;
-    const timer = setInterval(() => {
-      const now = Date.now();
-      setLiveAgents((prev) => {
-        let changed = false;
-        const next = new Map<string, ActiveAgentInfo>();
-        for (const [id, info] of prev) {
-          if (now - new Date(info.since).getTime() < LIVE_AGENT_EXPIRY_MS) {
-            next.set(id, info);
-          } else {
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [liveAgents.size]);
 
   // ---- Keyboard shortcuts ----
   const shortcuts = useMemo(() => ({
@@ -997,7 +952,6 @@ export default function App() {
               loadingAgents={loadingAgents}
               loadingProjects={loadingProjects}
               loadingTasks={loadingTasks}
-              liveAgents={liveAgents}
               workforceLive={workforceLive}
             />
           );
@@ -1101,7 +1055,6 @@ export default function App() {
               loadingAgents={loadingAgents}
               loadingProjects={loadingProjects}
               loadingTasks={loadingTasks}
-              liveAgents={liveAgents}
               workforceLive={workforceLive}
             />
           );

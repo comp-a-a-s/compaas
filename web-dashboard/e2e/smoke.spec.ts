@@ -310,6 +310,12 @@ test('workforce states stay consistent across overview and agents @smoke', async
   await expect(page.getByText('1 working — collaborating')).toBeVisible();
   await expect(page.getByText('1 assigned')).toBeVisible();
   await expect(page.getByText('1 reporting')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Live Truth' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Live Truth' }).click();
+  await expect(page.getByText('Live Workforce Truth').first()).toBeVisible();
+  await expect(page.getByText('run run-smoke').first()).toBeVisible();
+  await expect(page.getByText('source real').first()).toBeVisible();
 
   await page.getByRole('button', { name: 'Agents' }).click();
   await page.getByRole('button', { name: /Priya/i }).first().click();

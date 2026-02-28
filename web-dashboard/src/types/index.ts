@@ -106,6 +106,14 @@ export interface WorkforceWorker {
   elapsed_seconds: number;
 }
 
+export interface WorkforceClientMeta {
+  last_success_at?: string;
+  stale?: boolean;
+  failure_count?: number;
+  next_retry_in_ms?: number;
+  heartbeat_age_ms?: number;
+}
+
 export interface WorkforceLiveSnapshot {
   status: 'ok' | string;
   as_of: string;
@@ -117,6 +125,7 @@ export interface WorkforceLiveSnapshot {
     blocked: number;
   };
   workers: WorkforceWorker[];
+  client_meta?: WorkforceClientMeta;
 }
 
 export interface ChatMessage {
