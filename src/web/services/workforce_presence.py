@@ -199,6 +199,29 @@ class WorkforcePresenceService:
             candidate = fallback if not _is_non_worker(fallback) else ""
         return candidate
 
+    def _run_is_terminal(self, run_id: str) -> bool:
+        if not run_id or self.run_service is None:
+            return False
+        try:
+            run = self.run_service.get_run(run_id)
+        except Exception:
+            return False
+        if not isinstance(run, dict):
+            return False
+        return str(run.get("status", "") or "").strip().lower() in TERMINAL_STATES
+
+    def _is_execution_phase_run(self, run_id: str) -> bool:
+        if not run_id or self.run_service is None:
+            return False
+        try:
+            run = self.run_service.get_run(run_id)
+        except Exception:
+            return False
+        if not isinstance(run, dict):
+            return False
+        status = str(run.get("status", "") or "").strip().lower()
+        return status in {"executing", "verifying"}
+
     @staticmethod
     def _derive_work_item_id(
         meta: dict[str, Any],
@@ -228,8 +251,20 @@ class WorkforcePresenceService:
         project_id = str(event.get("project_id", "") or meta.get("project_id", "") or "").strip()
         task = str(meta.get("task", "") or event.get("detail", "") or "").strip()[:280]
         agent_id = self._derive_agent_id(event, meta, work_state)
+        source_agent = _agent_slug(str(meta.get("source_agent", "") or event.get("agent", "") or ""))
         if _is_non_worker(agent_id):
-            return
+            # Real runtime execution events are currently emitted by CEO in
+            # Codex/CLI flows. Track these as working so live workforce does
+            # not go blind during execution.
+            if (
+                source == "real"
+                and source_agent == "ceo"
+                and work_state in {"working", "reporting", "blocked", "completed"}
+                and self._is_execution_phase_run(run_id)
+            ):
+                agent_id = "ceo"
+            else:
+                return
 
         # Synthetic delegation is planning-only evidence. Keep it visible as
         # "assigned" and never promote to working/reporting/blocked/completed.
@@ -254,6 +289,32 @@ class WorkforcePresenceService:
 
         # Completed work clears immediately (explicit requirement).
         if work_state == "completed":
+            if (
+                agent_id == "ceo"
+                and source == "real"
+                and run_id
+                and self._is_execution_phase_run(run_id)
+                and not self._run_is_terminal(run_id)
+            ):
+                started_at = str(existing.get("started_at", "")) if existing else ""
+                if not started_at:
+                    started_at = timestamp
+                persisted_task = task or (str(existing.get("task", "")) if existing else "")
+                agent_name = AGENT_REGISTRY.get(agent_id, {}).get("name", get_agent_display_name(agent_id))
+                self._workers[work_item_id] = {
+                    "work_item_id": work_item_id,
+                    "agent_id": agent_id,
+                    "agent_name": str(agent_name or get_agent_display_name(agent_id)),
+                    "state": "working",
+                    "project_id": project_id,
+                    "run_id": run_id,
+                    "task": persisted_task,
+                    "source": source,
+                    "started_at": started_at,
+                    "updated_at": timestamp,
+                }
+                self._persist_locked()
+                return
             if work_item_id in self._workers:
                 self._workers.pop(work_item_id, None)
                 self._persist_locked()
