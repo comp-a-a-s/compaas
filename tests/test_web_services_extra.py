@@ -349,7 +349,8 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
     (repo_dir / ".git").mkdir()
-    (repo_dir / "main.py").write_text("key = 'sk-abcdefghijklmnopqrstuvwxyz123456'\n", encoding="utf-8")
+    sentinel_secret = "-----BEGIN " + "PRIVATE KEY-----"
+    (repo_dir / "main.py").write_text(f"key = '{sentinel_secret}'\n", encoding="utf-8")
     scan = service.pre_push_secret_scan(str(repo_dir))
     assert scan["status"] == "ok"
     assert scan["clean"] is False
@@ -414,7 +415,7 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
     # GitHub verify wrappers
     def fake_github_verify(_token, _method, path, _payload=None):
         if path == "/user":
-            return (200, {"login": "idan", "name": "Idan", "html_url": "https://github.com/idan"})
+            return (200, {"login": "test-user", "name": "Test User", "html_url": "https://github.com/test-user"})
         if path == "/repos/comp-a-a-s/compaas":
             return (200, {"full_name": "comp-a-a-s/compaas"})
         return (404, {"message": "Not Found"})
@@ -428,7 +429,7 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
     assert github_verified["status"] == "ok"
     assert github_verified["ok"] is True
     assert github_verified["repo_ok"] is True
-    assert github_verified["account"]["login"] == "idan"
+    assert github_verified["account"]["login"] == "test-user"
 
     github_missing_token = service.github_verify_connection("", repo="comp-a-a-s/compaas")
     assert github_missing_token["status"] == "error"
@@ -464,7 +465,7 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
     # Vercel verify + deploy-from-saved wrappers
     def fake_vercel_verify(_token, _method, path, _payload=None):
         if path == "/v2/user":
-            return (200, {"user": {"id": "usr_1", "username": "idan", "email": "idan@example.com"}})
+            return (200, {"user": {"id": "usr_1", "username": "test-user", "email": ""}})
         if path == "/v9/projects/compaas?teamId=team_1":
             return (200, {"id": "prj_1", "name": "compaas"})
         if path.startswith("/v13/deployments"):
@@ -480,7 +481,7 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
     assert vercel_verified["status"] == "ok"
     assert vercel_verified["ok"] is True
     assert vercel_verified["project_ok"] is True
-    assert vercel_verified["account"]["username"] == "idan"
+    assert vercel_verified["account"]["username"] == "test-user"
 
     monkeypatch.setattr(
         IntegrationService,
