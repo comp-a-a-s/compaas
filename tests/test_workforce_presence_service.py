@@ -360,3 +360,61 @@ def test_rebuild_restores_state_from_activity_log_and_prunes_terminal_runs(tmp_p
     worker_ids = {worker["work_item_id"] for worker in snap["workers"]}
     assert "run-live:lead-backend" in worker_ids
     assert "run-done:qa-lead" not in worker_ids
+
+
+def test_real_ceo_execution_is_visible_as_working_until_run_terminal(tmp_path: Path) -> None:
+    service, run_service, _data_dir = _make_service(tmp_path)
+    now = datetime.now(timezone.utc)
+
+    run, _created = run_service.create_run(
+        project_id="proj-ceo",
+        message="Implement tiny probe",
+        provider="openai",
+    )
+    run_id = str(run["id"])
+    run_service.transition_run(run_id, state="executing", label="Execution started")
+
+    service.ingest_event(
+        _event(
+            at=now,
+            agent="ceo",
+            action="STARTED",
+            project_id="proj-ceo",
+            run_id=run_id,
+            work_item_id=f"{run_id}:ceo",
+            work_state="working",
+            source_agent="ceo",
+            target_agent="workspace",
+            flow="internal",
+            detail="Codex executor started",
+        )
+    )
+    started = service.snapshot(project_id="proj-ceo")
+    assert started["counts"]["working"] == 1
+    assert started["workers"][0]["agent_id"] == "ceo"
+
+    # Command/file step completions can occur while run is still executing.
+    # Presence should stay "working" until the run actually becomes terminal.
+    service.ingest_event(
+        _event(
+            at=now + timedelta(seconds=1),
+            agent="ceo",
+            action="COMPLETED",
+            project_id="proj-ceo",
+            run_id=run_id,
+            work_item_id=f"{run_id}:ceo",
+            work_state="completed",
+            source_agent="ceo",
+            target_agent="workspace",
+            flow="internal",
+            detail="Command exit=0",
+        )
+    )
+    still_working = service.snapshot(project_id="proj-ceo")
+    assert still_working["counts"]["working"] == 1
+    assert still_working["workers"][0]["agent_id"] == "ceo"
+
+    run_service.transition_run(run_id, state="done", label="Execution done")
+    service.mark_run_terminal(run_id, project_id="proj-ceo", terminal_state="done")
+    done = service.snapshot(project_id="proj-ceo")
+    assert done["counts"] == {"assigned": 0, "working": 0, "reporting": 0, "blocked": 0}

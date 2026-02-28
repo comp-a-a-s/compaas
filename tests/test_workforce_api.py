@@ -142,6 +142,73 @@ def test_workforce_live_filters_assigned_and_reporting(api_client_with_presence)
     assert all(worker["state"] != "reporting" for worker in no_reporting["workers"])
 
 
+def test_workforce_live_includes_real_ceo_execution_and_clears_on_terminal(api_client_with_presence) -> None:
+    client, workforce_service = api_client_with_presence
+    run_service = workforce_service.run_service
+    assert run_service is not None
+
+    run, _created = run_service.create_run(
+        project_id="proj-ceo",
+        message="Create tiny file",
+        provider="openai",
+    )
+    run_id = str(run["id"])
+    run_service.transition_run(run_id, state="executing", label="Execution started")
+
+    now = datetime.now(timezone.utc).isoformat()
+    workforce_service.ingest_event(
+        {
+            "timestamp": now,
+            "agent": "ceo",
+            "action": "STARTED",
+            "detail": "Codex executor started",
+            "project_id": "proj-ceo",
+            "metadata": {
+                "run_id": run_id,
+                "work_item_id": f"{run_id}:ceo",
+                "work_state": "working",
+                "source": "real",
+                "source_agent": "ceo",
+                "target_agent": "workspace",
+                "flow": "internal",
+                "task": "Codex executor started",
+            },
+        }
+    )
+
+    live = client.get("/api/workforce/live", params={"project_id": "proj-ceo"}).json()
+    assert live["counts"]["working"] == 1
+    assert any(worker["agent_id"] == "ceo" and worker["state"] == "working" for worker in live["workers"])
+
+    # Step-level completion should keep CEO visible while run still executes.
+    workforce_service.ingest_event(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "agent": "ceo",
+            "action": "COMPLETED",
+            "detail": "Command exit=0",
+            "project_id": "proj-ceo",
+            "metadata": {
+                "run_id": run_id,
+                "work_item_id": f"{run_id}:ceo",
+                "work_state": "completed",
+                "source": "real",
+                "source_agent": "ceo",
+                "target_agent": "workspace",
+                "flow": "internal",
+                "task": "Command exit=0",
+            },
+        }
+    )
+    mid = client.get("/api/workforce/live", params={"project_id": "proj-ceo"}).json()
+    assert mid["counts"]["working"] == 1
+
+    run_service.transition_run(run_id, state="done", label="Execution completed")
+    workforce_service.mark_run_terminal(run_id, project_id="proj-ceo", terminal_state="done")
+    done = client.get("/api/workforce/live", params={"project_id": "proj-ceo"}).json()
+    assert done["counts"] == {"assigned": 0, "working": 0, "reporting": 0, "blocked": 0}
+
+
 def test_v1_workforce_live_endpoint_contract(temp_data_dir) -> None:
     data_dir = Path(temp_data_dir)
     state_manager = ProjectStateManager(temp_data_dir)
