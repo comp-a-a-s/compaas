@@ -1,6 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import type { Agent, Project, Task, ActivityEvent, WorkforceLiveSnapshot, WorkforceState, WorkforceWorker } from '../types';
-import type { ActiveAgentInfo } from './TeamPulse';
 import Tooltip from './Tooltip';
 
 interface OverviewProps {
@@ -13,7 +12,6 @@ interface OverviewProps {
   loadingAgents: boolean;
   loadingProjects: boolean;
   loadingTasks: boolean;
-  liveAgents?: Map<string, ActiveAgentInfo>;
   workforceLive?: WorkforceLiveSnapshot;
 }
 
@@ -84,38 +82,59 @@ function liveStateVisual(state?: WorkforceState): { color: string; bg: string; p
   }
 }
 
-// ---- Recent activity helpers ----
 // Normalize agent identifier to canonical slug format (spaces → dashes, lowercase)
 function toAgentSlug(raw: string): string {
   return raw.trim().toLowerCase().replace(/\s+/g, '-');
 }
 
-function isAgentRecentlyActive(agentId: string, agentName: string, events: ActivityEvent[]): boolean {
-  const now = Date.now();
-  const WINDOW_MS = 120_000; // 2 minutes — matches LIVE_AGENT_EXPIRY_MS in App.tsx
-  const idLower = agentId.toLowerCase();
-  const nameLower = agentName.toLowerCase();
-  // normalizeAgent() converts slugs like "lead-backend" to display names "Lead Backend",
-  // so we also need to match the space-separated form of the slug.
-  const idSpaced = idLower.replace(/-/g, ' ');
-  return events.some((evt) => {
-    if (!evt.timestamp) return false;
-    const evtTime = new Date(evt.timestamp).getTime();
-    if (now - evtTime > WINDOW_MS) return false;
-    const evtAgent = (evt.agent ?? '').toLowerCase();
-    const evtAgentSlug = toAgentSlug(evtAgent);
-    // Check direct agent match (slug, space-separated slug, or personal name)
-    if (evtAgent === idLower || evtAgent === idSpaced || evtAgentSlug === idLower || evtAgent === nameLower || evtAgent.includes(nameLower)) return true;
-    // Also check delegation metadata — agents appear as target/source in delegation events
-    const meta = evt.metadata || {};
-    const target = String(meta.target_agent ?? '').toLowerCase();
-    const source = String(meta.source_agent ?? '').toLowerCase();
-    const targetSlug = toAgentSlug(target);
-    const sourceSlug = toAgentSlug(source);
-    if (target === idLower || targetSlug === idLower || target === nameLower) return true;
-    if (source === idLower || sourceSlug === idLower || source === nameLower) return true;
-    return false;
-  });
+function formatElapsedSeconds(seconds: number): string {
+  const safe = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = safe % 60;
+  if (hours > 0) return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
+  if (minutes > 0) return `${minutes}m ${secs.toString().padStart(2, '0')}s`;
+  return `${secs}s`;
+}
+
+function formatClock(iso: string): string {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
+function formatFreshness(iso?: string): string {
+  if (!iso) return 'not synced yet';
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts) || ts <= 0) return 'not synced yet';
+  const deltaMs = Math.max(0, Date.now() - ts);
+  if (deltaMs < 1000) return 'just now';
+  if (deltaMs < 60_000) return `${Math.floor(deltaMs / 1000)}s ago`;
+  if (deltaMs < 3_600_000) return `${Math.floor(deltaMs / 60_000)}m ago`;
+  return `${Math.floor(deltaMs / 3_600_000)}h ago`;
+}
+
+function liveStateLabel(state: WorkforceState): string {
+  if (state === 'working') return 'Working';
+  if (state === 'assigned') return 'Assigned';
+  if (state === 'reporting') return 'Reporting';
+  return 'Blocked';
+}
+
+function liveWhyTitle(row: WorkforceWorker): string {
+  const bits = [
+    `State: ${liveStateLabel(row.state)}`,
+    row.task ? `Task: ${row.task}` : '',
+    row.run_id ? `Run: ${row.run_id}` : '',
+    row.source ? `Source: ${row.source}` : '',
+    row.project_id ? `Project: ${row.project_id}` : '',
+    row.started_at ? `Started: ${formatClock(row.started_at)}` : '',
+    `Elapsed: ${formatElapsedSeconds(row.elapsed_seconds)}`,
+  ].filter(Boolean);
+  return bits.join('\n');
 }
 
 // ---- Animated connector line ----
@@ -174,46 +193,37 @@ interface OrgNodeProps {
   agent: Agent;
   displayRole?: string;
   onAgentClick?: (agent: Agent) => void;
-  recentlyActive?: boolean;
   muted?: boolean;
-  activeTaskLabel?: string;
   blocked?: boolean;
   liveState?: WorkforceState;
+  liveWorker?: WorkforceWorker;
 }
 function OrgNode({
   agent,
   displayRole,
   onAgentClick,
-  recentlyActive = false,
   muted = false,
-  activeTaskLabel,
   blocked = false,
   liveState,
+  liveWorker,
 }: OrgNodeProps) {
   const color = modelColor(effectiveModel(agent));
   const initial = agent.name.charAt(0).toUpperCase();
-  const fallbackActive = !muted && (
-    recentlyActive
-    || agent.status === 'active'
-    || (agent.recent_activity && agent.recent_activity.length > 0)
-  );
   const effectiveState: WorkforceState | null = !muted
-    ? (liveState || (blocked ? 'blocked' : (fallbackActive ? 'working' : null)))
+    ? (liveState || (blocked ? 'blocked' : null))
     : null;
   const visual = liveStateVisual(effectiveState || undefined);
   const isActive = Boolean(effectiveState);
 
-  // Latest activity detail for tooltip
-  const latestActivity = agent.recent_activity?.[0];
-
   // Determine what label to show under the card
-  const activityLabel = activeTaskLabel && !muted
-    ? activeTaskLabel
-    : isActive && latestActivity
-      ? (latestActivity.detail || latestActivity.action)
-      : isActive
-        ? 'Working...'
+  const activityLabel = liveWorker?.task && !muted
+    ? liveWorker.task
+    : !muted && isActive
+      ? liveStateLabel(effectiveState || 'working')
         : null;
+  const liveMetaLabel = liveWorker
+    ? `${liveWorker.run_id ? `${liveWorker.run_id.slice(0, 10)} ` : ''}${liveWorker.source || 'real'} · ${formatElapsedSeconds(liveWorker.elapsed_seconds)}`
+    : '';
 
   return (
     <div
@@ -323,6 +333,21 @@ function OrgNode({
           {activityLabel}
         </p>
       ) : null}
+      {liveWorker && !muted && (
+        <p
+          className="text-xs text-center leading-tight"
+          style={{
+            color: 'var(--tf-text-muted)',
+            maxWidth: '102px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={liveWhyTitle(liveWorker)}
+        >
+          {liveMetaLabel}
+        </p>
+      )}
     </div>
   );
 }
@@ -518,26 +543,26 @@ interface TreeNodeProps {
   node: OrgTreeNode;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
-  recentActiveIds: Set<string>;
   activeIds: Set<string>;
   mutedAgentIds: Set<string>;
   flowEdgeDirections: Map<string, FlowDirection>;
   activeTaskByAgent: Map<string, string>;
   blockedAgentIds: Set<string>;
   liveStateByAgent: Map<string, WorkforceState>;
+  liveWorkerByAgent: Map<string, WorkforceWorker>;
 }
 
 function TreeNode({
   node,
   agentMap,
   onAgentClick,
-  recentActiveIds,
   activeIds,
   mutedAgentIds,
   flowEdgeDirections,
   activeTaskByAgent,
   blockedAgentIds,
   liveStateByAgent,
+  liveWorkerByAgent,
 }: TreeNodeProps) {
   const agent = agentMap.get(node.id);
   const children = node.children ?? [];
@@ -545,9 +570,9 @@ function TreeNode({
   if (!agent) return null;
 
   const hasChildren = children.length > 0;
-  const recentlyActive = recentActiveIds.has(node.id);
   const muted = mutedAgentIds.has(node.id);
   const liveState = liveStateByAgent.get(node.id);
+  const liveWorker = liveWorkerByAgent.get(node.id);
   const blocked = blockedAgentIds.has(node.id) || liveState === 'blocked';
   const childSubtreeActive = children.some((c) => subtreeHasActive(c, activeIds))
     || children.some((c) => flowEdgeDirections.has(orgEdgeKey(node.id, c.id)));
@@ -555,19 +580,21 @@ function TreeNode({
   const stemDirection: FlowDirection = firstFlowEdge
     ? (flowEdgeDirections.get(orgEdgeKey(node.id, firstFlowEdge.id)) || 'down')
     : 'down';
+  const tooltipContent = liveWorker
+    ? `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)}\n${liveWhyTitle(liveWorker)}`
+    : `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)}`;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <Tooltip content={`${node.displayRole ?? agent.role} · ${runtimeLabel(agent)}`} position="top">
+      <Tooltip content={tooltipContent} position="top">
         <OrgNode
           agent={agent}
           displayRole={node.displayRole}
           onAgentClick={onAgentClick}
-          recentlyActive={recentlyActive}
           muted={muted}
           blocked={blocked}
           liveState={liveState}
-          activeTaskLabel={activeTaskByAgent.get(node.id)}
+          liveWorker={liveWorker}
         />
       </Tooltip>
 
@@ -579,13 +606,13 @@ function TreeNode({
             node={node}
             agentMap={agentMap}
             onAgentClick={onAgentClick}
-            recentActiveIds={recentActiveIds}
             activeIds={activeIds}
             mutedAgentIds={mutedAgentIds}
             flowEdgeDirections={flowEdgeDirections}
             activeTaskByAgent={activeTaskByAgent}
             blockedAgentIds={blockedAgentIds}
             liveStateByAgent={liveStateByAgent}
+            liveWorkerByAgent={liveWorkerByAgent}
           />
         </>
       )}
@@ -597,26 +624,26 @@ interface ChildrenGroupProps {
   node: OrgTreeNode;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
-  recentActiveIds: Set<string>;
   activeIds: Set<string>;
   mutedAgentIds: Set<string>;
   flowEdgeDirections: Map<string, FlowDirection>;
   activeTaskByAgent: Map<string, string>;
   blockedAgentIds: Set<string>;
   liveStateByAgent: Map<string, WorkforceState>;
+  liveWorkerByAgent: Map<string, WorkforceWorker>;
 }
 
 function ChildrenGroup({
   node,
   agentMap,
   onAgentClick,
-  recentActiveIds,
   activeIds,
   mutedAgentIds,
   flowEdgeDirections,
   activeTaskByAgent,
   blockedAgentIds,
   liveStateByAgent,
+  liveWorkerByAgent,
 }: ChildrenGroupProps) {
   const children = node.children ?? [];
   const visibleChildren = children.filter((c) => agentMap.has(c.id));
@@ -635,13 +662,13 @@ function ChildrenGroup({
           node={visibleChildren[0]}
           agentMap={agentMap}
           onAgentClick={onAgentClick}
-          recentActiveIds={recentActiveIds}
           activeIds={activeIds}
           mutedAgentIds={mutedAgentIds}
           flowEdgeDirections={flowEdgeDirections}
           activeTaskByAgent={activeTaskByAgent}
           blockedAgentIds={blockedAgentIds}
           liveStateByAgent={liveStateByAgent}
+          liveWorkerByAgent={liveWorkerByAgent}
         />
       </div>
     );
@@ -695,13 +722,13 @@ function ChildrenGroup({
               node={child}
               agentMap={agentMap}
               onAgentClick={onAgentClick}
-              recentActiveIds={recentActiveIds}
               activeIds={activeIds}
               mutedAgentIds={mutedAgentIds}
               flowEdgeDirections={flowEdgeDirections}
               activeTaskByAgent={activeTaskByAgent}
               blockedAgentIds={blockedAgentIds}
               liveStateByAgent={liveStateByAgent}
+              liveWorkerByAgent={liveWorkerByAgent}
             />
           </div>
         );
@@ -716,12 +743,12 @@ interface OrgChartProps {
   events: ActivityEvent[];
   activeProjectId?: string;
   microProjectMode?: boolean;
-  liveAgents?: Map<string, ActiveAgentInfo>;
   workforceLive?: WorkforceLiveSnapshot;
 }
 
-function OrgChart({ agents, loading, events, activeProjectId = '', microProjectMode = false, liveAgents, workforceLive }: OrgChartProps) {
+function OrgChart({ agents, loading, events, activeProjectId = '', microProjectMode = false, workforceLive }: OrgChartProps) {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+  const [showTruthDrawer, setShowTruthDrawer] = useState(false);
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const hierarchyViewportRef = useRef<HTMLDivElement | null>(null);
   const hierarchyContentRef = useRef<HTMLDivElement | null>(null);
@@ -833,187 +860,68 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     }
     return { assigned, working, reporting, blocked };
   }, [workforceByAgent]);
+  const truthRows = useMemo(
+    () => Array.from(workforceByAgent.values()).sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''))),
+    [workforceByAgent],
+  );
 
-  const hasCanonicalPresence = Boolean(workforceLive?.as_of && workforceLive.as_of !== '1970-01-01T00:00:00.000Z');
+  const hasCanonicalPresence = Boolean(
+    workforceLive?.client_meta?.last_success_at
+    || (workforceLive?.as_of && workforceLive.as_of !== '1970-01-01T00:00:00.000Z'),
+  );
+  const workforceStale = Boolean(workforceLive?.client_meta?.stale);
 
   // Set of currently working agent IDs. Canonical source is workforce presence.
   const recentActiveIds = useMemo(() => {
     const s = new Set<string>();
-    if (hasCanonicalPresence) {
-      for (const [agentId, row] of workforceByAgent.entries()) {
-        if (row.state === 'working') s.add(agentId);
-      }
-      return s;
-    }
-    for (const agent of agents) {
-      if (microProjectMode && agent.id !== 'ceo') continue;
-      if (isAgentRecentlyActive(agent.id, agent.name, scopedEvents)) {
-        s.add(agent.id);
-      }
-    }
-    // Merge real-time delegation tracking from App.tsx.
-    // Normalize keys to canonical slug form (spaces → dashes) and resolve
-    // via aliasToId so that keys like "lead backend" map to "lead-backend".
-    if (liveAgents) {
-      for (const [rawId] of liveAgents) {
-        const slug = toAgentSlug(rawId);
-        const canonicalId = aliasToId.get(slug) || aliasToId.get(rawId) || slug;
-        if (!agentMap.has(canonicalId)) continue;
-        if (microProjectMode && canonicalId !== 'ceo') continue;
-        s.add(canonicalId);
-      }
+    for (const [agentId, row] of workforceByAgent.entries()) {
+      if (row.state === 'working') s.add(agentId);
     }
     return s;
-  }, [agents, scopedEvents, microProjectMode, liveAgents, aliasToId, agentMap, hasCanonicalPresence, workforceByAgent]);
+  }, [workforceByAgent]);
 
   // Broader active set to drive connector highlights.
   const activeIds = useMemo(() => {
-    if (hasCanonicalPresence) {
-      const s = new Set<string>();
-      for (const [agentId] of workforceByAgent.entries()) {
-        s.add(agentId);
-      }
-      return s;
-    }
-    const s = new Set(recentActiveIds);
-    for (const agent of agents) {
-      if (microProjectMode && agent.id !== 'ceo') continue;
-      if (agent.status === 'active') s.add(agent.id);
-      if ((agent.recent_activity ?? []).length > 0) s.add(agent.id);
+    const s = new Set<string>();
+    for (const [agentId] of workforceByAgent.entries()) {
+      s.add(agentId);
     }
     return s;
-  }, [agents, recentActiveIds, microProjectMode, hasCanonicalPresence, workforceByAgent]);
+  }, [workforceByAgent]);
 
   const latestFlow = useMemo((): {
     edgeDirections: Map<string, FlowDirection>;
     activeTaskByAgent: Map<string, string>;
     blockedAgentIds: Set<string>;
   } => {
-    if (microProjectMode) {
-      return {
-        edgeDirections: new Map<string, FlowDirection>(),
-        activeTaskByAgent: new Map<string, string>(),
-        blockedAgentIds: new Set<string>(),
-      };
-    }
-    const FLOW_WINDOW_MS = 12_000;
-    const latestEventTimestamp = scopedEvents.length > 0
-      ? new Date(scopedEvents[scopedEvents.length - 1].timestamp || '').getTime()
-      : 0;
     const edgeDirections = new Map<string, FlowDirection>();
     const activeTaskByAgent = new Map<string, string>();
     const blockedAgentIds = new Set<string>();
-    const trackedFlows = new Set<string>();
 
-    const addEdgeDirection = (edgeKey: string, direction: FlowDirection) => {
-      if (edgeDirections.has(edgeKey)) {
-        edgeDirections.delete(edgeKey);
-      }
-      edgeDirections.set(edgeKey, direction);
-      while (edgeDirections.size > 2) {
-        const first = edgeDirections.keys().next().value;
-        if (!first) break;
-        edgeDirections.delete(first);
+    const addFlowToAgent = (agentId: string, direction: FlowDirection) => {
+      if (!agentId || agentId === 'ceo') return;
+      const path = findPathToNode(ORG_TREE, agentId);
+      if (!path || path.length < 2) return;
+      for (let i = 0; i < path.length - 1; i += 1) {
+        edgeDirections.set(orgEdgeKey(path[i], path[i + 1]), direction);
       }
     };
 
-    const safeAgentId = (value: unknown): string => {
-      const normalized = String(value || '').trim().toLowerCase();
-      if (!normalized) return '';
-      return aliasToId.get(normalized) || normalized;
-    };
-
-    const buildFlowToAgent = (agentId: string, direction: FlowDirection, task: string) => {
-      if (!agentId || agentId === 'ceo') return null;
-      const targetPath = findPathToNode(ORG_TREE, agentId);
-      if (!targetPath || targetPath.length < 2) return null;
-      const flowKey = `${agentId}:${direction}`;
-      if (trackedFlows.has(flowKey)) return null;
-      trackedFlows.add(flowKey);
-      for (let i = 0; i < targetPath.length - 1; i += 1) {
-        addEdgeDirection(orgEdgeKey(targetPath[i], targetPath[i + 1]), direction);
-      }
-      if (task) {
-        activeTaskByAgent.set(agentId, task.slice(0, 70));
-      }
-      return true;
-    };
-
-    for (let idx = scopedEvents.length - 1; idx >= 0; idx -= 1) {
-      const evt = scopedEvents[idx];
-      const evtTs = evt.timestamp ? new Date(evt.timestamp).getTime() : 0;
-      if (
-        latestEventTimestamp
-        && Number.isFinite(latestEventTimestamp)
-        && evtTs
-        && Number.isFinite(evtTs)
-        && latestEventTimestamp - evtTs > FLOW_WINDOW_MS
-      ) {
+    for (const [agentId, row] of workforceByAgent.entries()) {
+      if (agentId === 'ceo' || (microProjectMode && agentId !== 'ceo')) continue;
+      if (row.state === 'blocked') {
+        blockedAgentIds.add(agentId);
         continue;
       }
-      const meta = (evt.metadata || {}) as Record<string, unknown>;
-      const sourceMeta = safeAgentId(meta.source_agent ?? meta.from_agent);
-      const targetMeta = safeAgentId(meta.target_agent ?? meta.to_agent);
-      const flowMeta = String(meta.flow || '').toLowerCase();
-      const taskText = String(meta.task || evt.detail || evt.action || '').trim();
-      if (flowMeta === 'blocked') {
-        if (sourceMeta) blockedAgentIds.add(sourceMeta);
-        if (targetMeta) blockedAgentIds.add(targetMeta);
-      }
-      if (sourceMeta && targetMeta && sourceMeta !== targetMeta) {
-        if (sourceMeta === 'ceo' && targetMeta !== 'ceo') {
-          buildFlowToAgent(targetMeta, 'down', taskText);
-          if (edgeDirections.size >= 2) break;
-        }
-        if (targetMeta === 'ceo' && sourceMeta !== 'ceo') {
-          buildFlowToAgent(sourceMeta, 'up', taskText);
-          if (edgeDirections.size >= 2) break;
-        }
-      }
-
-      const detail = (evt.detail || '').toLowerCase();
-      const downMatch = detail.match(/delegating to ([a-z0-9\- ]+)/i);
-      if (downMatch) {
-        buildFlowToAgent(safeAgentId(downMatch[1].trim()), 'down', taskText);
-        if (edgeDirections.size >= 2) break;
-      }
-      const upMatch = detail.match(/(update|result|response) from ([a-z0-9\- ]+)/i);
-      if (upMatch) {
-        buildFlowToAgent(safeAgentId(upMatch[2].trim()), 'up', taskText);
-        if (edgeDirections.size >= 2) break;
-      }
-    }
-    // Canonical live workforce presence drives node states + flow hints.
-    if (hasCanonicalPresence) {
-      for (const [agentId, row] of workforceByAgent.entries()) {
-        if (agentId === 'ceo' || (microProjectMode && agentId !== 'ceo')) continue;
-        if (row.state === 'blocked') blockedAgentIds.add(agentId);
-        const direction: FlowDirection = row.state === 'reporting' ? 'up' : 'down';
-        if (row.state !== 'blocked') {
-          buildFlowToAgent(agentId, direction, String(row.task || ''));
-        }
-        if (row.task && !activeTaskByAgent.has(agentId)) {
-          activeTaskByAgent.set(agentId, String(row.task).slice(0, 70));
-        }
+      const direction: FlowDirection = row.state === 'reporting' ? 'up' : 'down';
+      addFlowToAgent(agentId, direction);
+      if (row.task) {
+        activeTaskByAgent.set(agentId, String(row.task).slice(0, 70));
       }
     }
 
-    // Keep websocket/SSE hints only as an optimistic fallback when canonical
-    // workforce state is not available.
-    if (!hasCanonicalPresence && liveAgents) {
-      for (const [rawId, info] of liveAgents) {
-        const slug = toAgentSlug(rawId);
-        const canonicalId = aliasToId.get(slug) || aliasToId.get(rawId) || slug;
-        if (canonicalId === 'ceo' || (microProjectMode && canonicalId !== 'ceo')) continue;
-        const direction: FlowDirection = info.flow === 'up' ? 'up' : 'down';
-        buildFlowToAgent(canonicalId, direction, info.task || '');
-        if (info.task && !activeTaskByAgent.has(canonicalId)) {
-          activeTaskByAgent.set(canonicalId, info.task.slice(0, 70));
-        }
-      }
-    }
     return { edgeDirections, activeTaskByAgent, blockedAgentIds };
-  }, [aliasToId, scopedEvents, microProjectMode, liveAgents, hasCanonicalPresence, workforceByAgent]);
+  }, [workforceByAgent, microProjectMode]);
 
   const mutedAgentIds = useMemo(() => {
     if (!microProjectMode) return new Set<string>();
@@ -1162,9 +1070,11 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     { title: 'Specialists', ids: ['security-engineer', 'data-engineer'] },
   ] as const;
 
-  const workingAgentCount = hasCanonicalPresence ? workforceCounts.working : recentActiveIds.size;
-  const assignedAgentCount = hasCanonicalPresence ? workforceCounts.assigned : 0;
-  const reportingAgentCount = hasCanonicalPresence ? workforceCounts.reporting : 0;
+  const workingAgentCount = workforceCounts.working;
+  const assignedAgentCount = workforceCounts.assigned;
+  const reportingAgentCount = workforceCounts.reporting;
+  const blockedAgentCount = workforceCounts.blocked;
+  const syncFreshness = formatFreshness(workforceLive?.client_meta?.last_success_at);
 
   return (
     <div ref={chartContainerRef} style={{ maxWidth: '100%', overflow: 'hidden' }}>
@@ -1253,6 +1163,56 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
               {reportingAgentCount} reporting
             </span>
           )}
+          {hasCanonicalPresence && blockedAgentCount > 0 && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '2px 8px',
+                borderRadius: '999px',
+                fontSize: '10px',
+                fontWeight: 600,
+                backgroundColor: 'rgba(234,114,103,0.12)',
+                color: 'var(--tf-error)',
+                border: '1px solid rgba(234,114,103,0.35)',
+              }}
+            >
+              {blockedAgentCount} blocked
+            </span>
+          )}
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '2px 8px',
+              borderRadius: '999px',
+              fontSize: '10px',
+              fontWeight: 600,
+              backgroundColor: workforceStale ? 'rgba(234,114,103,0.12)' : 'rgba(59,142,255,0.12)',
+              color: workforceStale ? 'var(--tf-error)' : 'var(--tf-accent-blue)',
+              border: `1px solid ${workforceStale ? 'rgba(234,114,103,0.35)' : 'rgba(59,142,255,0.35)'}`,
+            }}
+            title={workforceLive?.client_meta?.last_success_at ? `Last successful sync ${workforceLive.client_meta.last_success_at}` : 'No successful sync yet'}
+          >
+            {workforceStale ? `stale (${syncFreshness})` : `synced ${syncFreshness}`}
+          </span>
+          <button
+            onClick={() => setShowTruthDrawer((v) => !v)}
+            style={{
+              borderRadius: '999px',
+              border: `1px solid ${showTruthDrawer ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+              backgroundColor: showTruthDrawer ? 'rgba(59,142,255,0.12)' : 'var(--tf-surface)',
+              color: showTruthDrawer ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+              fontSize: '10px',
+              fontWeight: 600,
+              padding: '2px 8px',
+              cursor: 'pointer',
+            }}
+          >
+            {showTruthDrawer ? 'Hide Live Truth' : 'Live Truth'}
+          </button>
         </div>
         {activeAgentNames.length > 0 && (
           <p style={{ fontSize: '11px', color: 'var(--tf-success)', fontWeight: 500, textAlign: 'center' }}>
@@ -1309,6 +1269,78 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
         ))}
       </div>
 
+      {showTruthDrawer && (
+        <div
+          style={{
+            marginBottom: '14px',
+            border: '1px solid var(--tf-border)',
+            borderRadius: '10px',
+            backgroundColor: 'var(--tf-surface-raised)',
+            padding: '10px',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+            <p style={{ fontSize: '11px', fontWeight: 600, color: 'var(--tf-text)', margin: 0 }}>
+              Live Workforce Truth
+            </p>
+            <p style={{ fontSize: '10px', color: 'var(--tf-text-muted)', margin: 0 }}>
+              Active means state = <strong>working</strong>. Assigned/reporting/blocked are visible context only.
+            </p>
+          </div>
+          {truthRows.length === 0 ? (
+            <p style={{ fontSize: '11px', color: 'var(--tf-text-muted)', margin: 0 }}>
+              No live workers in current scope.
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '240px', overflowY: 'auto' }}>
+              {truthRows.map((row) => {
+                const stateVisual = liveStateVisual(row.state);
+                const displayAgent = agentMap.get(row.agent_id)?.name || row.agent_name || row.agent_id;
+                return (
+                  <div
+                    key={row.work_item_id || `${row.agent_id}-${row.updated_at}`}
+                    style={{
+                      border: '1px solid var(--tf-border)',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--tf-surface)',
+                      padding: '8px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--tf-text)' }}>{displayAgent}</span>
+                      <span
+                        style={{
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          color: stateVisual.color,
+                          backgroundColor: stateVisual.bg,
+                          border: `1px solid ${stateVisual.color}`,
+                          borderRadius: '999px',
+                          padding: '1px 7px',
+                        }}
+                      >
+                        {liveStateLabel(row.state)}
+                      </span>
+                      {row.project_id && (
+                        <span style={{ fontSize: '10px', color: 'var(--tf-text-muted)' }}>project {row.project_id}</span>
+                      )}
+                    </div>
+                    {row.task && (
+                      <p style={{ fontSize: '11px', color: 'var(--tf-text-secondary)', margin: '6px 0 2px' }}>
+                        {row.task}
+                      </p>
+                    )}
+                    <p style={{ fontSize: '10px', color: 'var(--tf-text-muted)', margin: 0 }}>
+                      run {row.run_id || '(none)'} · source {row.source || 'real'} · started {formatClock(row.started_at)} · elapsed {formatElapsedSeconds(row.elapsed_seconds)}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {layoutMode === 'timeline' ? (
         <div style={{ border: '1px solid var(--tf-border)', borderRadius: '10px', backgroundColor: 'var(--tf-surface-raised)', maxHeight: '320px', overflowY: 'auto' }}>
           {timelineEvents.length === 0 ? (
@@ -1338,7 +1370,8 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
                   <OrgNode
                     agent={ceoAgent}
                     onAgentClick={handleAgentClick}
-                    recentlyActive={activeIds.has(ceoAgent.id)}
+                    liveState={workforceStateByAgent.get(ceoAgent.id)}
+                    liveWorker={workforceByAgent.get(ceoAgent.id)}
                   />
                 </div>
               </Tooltip>
@@ -1388,11 +1421,12 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
                       const workload = workloadMap.get(agent.name.toLowerCase()) || workloadMap.get(agent.id.toLowerCase()) || 0;
                       const mutedInMicro = microProjectMode && agent.id !== 'ceo';
                       const showActive = active && !mutedInMicro;
+                      const showWorkingPulse = showActive && liveState === 'working';
                       return (
                         <button
                           key={agent.id}
                           onClick={() => handleAgentClick(agent)}
-                          className={showActive && (!hasCanonicalPresence || liveState === 'working') ? 'org-node-active' : ''}
+                          className={showWorkingPulse ? 'org-node-active' : ''}
                           style={{
                             border: `1.5px solid ${showActive ? nodeVisual.color : 'var(--tf-border)'}`,
                             backgroundColor: showActive ? nodeVisual.bg : 'var(--tf-surface)',
@@ -1462,13 +1496,13 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
                 node={ORG_TREE}
                 agentMap={agentMap}
                 onAgentClick={handleAgentClick}
-                recentActiveIds={recentActiveIds}
                 activeIds={activeIds}
                 mutedAgentIds={mutedAgentIds}
                 flowEdgeDirections={latestFlow.edgeDirections}
                 activeTaskByAgent={latestFlow.activeTaskByAgent}
                 blockedAgentIds={latestFlow.blockedAgentIds}
                 liveStateByAgent={workforceStateByAgent}
+                liveWorkerByAgent={workforceByAgent}
               />
             </div>
           </div>
@@ -1701,7 +1735,6 @@ export default function Overview({
   loadingAgents,
   loadingProjects,
   loadingTasks,
-  liveAgents,
   workforceLive,
 }: OverviewProps) {
   const [widgets, setWidgets] = useState<Record<WidgetId, boolean>>(loadWidgets);
@@ -1796,7 +1829,6 @@ export default function Overview({
             events={events}
             activeProjectId={activeProjectId}
             microProjectMode={microProjectMode}
-            liveAgents={liveAgents}
             workforceLive={workforceLive}
           />
         </div>
