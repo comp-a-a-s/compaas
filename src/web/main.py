@@ -7,6 +7,8 @@ import webbrowser
 
 import uvicorn
 
+from src.web.template_rendering import render_agent_templates
+
 
 def _ensure_frontend_built() -> None:
     """Build the React frontend if the dist/assets directory is missing."""
@@ -37,9 +39,9 @@ def _ensure_frontend_built() -> None:
 
 def _render_agent_templates() -> None:
     """Render agent templates with dynamic names from config."""
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     try:
-        from scripts.render_agents import render_templates
-        count = render_templates()
+        count = render_agent_templates(project_root)
         if count:
             print(f"[COMPaaS] Rendered {count} agent template(s).")
     except Exception as exc:
@@ -60,7 +62,7 @@ def main():
     # Auto-open browser after a short delay (set COMPAAS_NO_BROWSER=true to disable)
     if os.environ.get("COMPAAS_NO_BROWSER", "").lower() != "true":
         url = f"http://{host}:{port}"
-        threading.Timer(1.5, webbrowser.open, args=[url]).start()
+        threading.Timer(2.0, webbrowser.open, args=[url]).start()
 
     uvicorn.run("src.web.api:app", host=host, port=port, reload=debug)
 

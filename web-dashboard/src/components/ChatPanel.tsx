@@ -607,7 +607,11 @@ function MessageBubble({
   const isUser = message.role === 'user';
   const [hovered, setHovered] = useState(false);
   const [showFullResponse, setShowFullResponse] = useState(false);
-  const showStructuredCard = !isUser && !isStreaming && !searchQuery && hasStructuredContent(message.structured);
+  const showStructuredCard = !isUser
+    && !isStreaming
+    && !searchQuery
+    && message.structured?.completion_kind === 'build_complete'
+    && hasStructuredContent(message.structured);
   const autoLaunch = !isUser && !isStreaming ? message.auto_launch : undefined;
 
   return (

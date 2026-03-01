@@ -360,10 +360,91 @@ async def test_handle_ceo_claude_streams_chunks_actions_and_results(monkeypatch)
     assert "--permission-mode" in captured_cmd
     assert "bypassPermissions" in captured_cmd
     assert "--dangerously-skip-permissions" in captured_cmd
+    assert "--disallowed-tools" in captured_cmd
+    assert "AskUserQuestion" in captured_cmd
     event_types = [event["type"] for event in ws.events]
     assert "chunk" in event_types
     assert "action" in event_types
     assert "action_result" in event_types
+
+
+@pytest.mark.asyncio
+async def test_handle_ceo_claude_retries_incomplete_clarification_stub(monkeypatch):
+    calls = {"count": 0}
+    captured_cmds: list[list[str]] = []
+    first_attempt_lines = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Before I mobilize the team, I need to understand a few things:"},
+                        {"type": "tool_use", "name": "AskUserQuestion", "input": {"question": "Who is the audience?"}},
+                    ]
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "result",
+                "result": (
+                    "Idan, that's a great ambition — let me narrow it down so we build the right thing fast.\n\n"
+                    "Before I mobilize the team, I need to understand a few things:"
+                ),
+            }
+        ),
+    ]
+    second_attempt_lines = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Assumptions: SMB audience, low-ticket offer, and subscription path. "},
+                    ]
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "result",
+                "result": (
+                    "Assumptions: SMB audience, low-ticket offer, and subscription path.\n\n"
+                    "I will proceed to build an MVP landing + checkout flow now."
+                ),
+            }
+        ),
+    ]
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        calls["count"] += 1
+        captured_cmds.append(list(_args))
+        if calls["count"] == 1:
+            return _FakeProcess(lines=first_attempt_lines, returncode=0)
+        return _FakeProcess(lines=second_attempt_lines, returncode=0)
+
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(api, "_emit_chat_activity", lambda *args, **kwargs: None)
+
+    ws = _FakeWebSocket()
+    result = await api._handle_ceo_claude(
+        websocket=ws,
+        prompt="build me an app that makes money",
+        claude_path="/usr/bin/claude",
+        llm_cfg={"anthropic_mode": "cli"},
+        ceo_name="Marcus",
+    )
+
+    assert calls["count"] == 2
+    assert result is not None
+    assert "proceed to build" in result.lower()
+    assert not result.strip().endswith(":")
+    assert all("--disallowed-tools" in cmd and "AskUserQuestion" in cmd for cmd in captured_cmds)
+    assert any(
+        event.get("type") == "warning"
+        and "assumption-first execution" in str(event.get("content", "")).lower()
+        for event in ws.events
+    )
 
 
 @pytest.mark.asyncio
@@ -732,6 +813,15 @@ def test_structured_response_payload_extracts_deliverables_validation_and_next_a
     assert payload["completion_kind"] == "build_complete"
 
 
+def test_structured_response_payload_keeps_clarification_turn_as_general():
+    payload = api._structured_response_payload(
+        "Idan, that's a great ambition — before I mobilize the team, I need to understand a few things:"
+    )
+    assert payload["completion_kind"] == "general"
+    assert payload["run_commands"] == []
+    assert payload["deliverables"] == []
+
+
 def test_structured_response_payload_is_backward_compatible_for_empty_text():
     payload = api._structured_response_payload("")
     assert payload["summary"] == ""
@@ -754,7 +844,7 @@ def test_merge_structured_completion_with_project_includes_run_hints():
             "next_actions": [],
             "run_commands": ["npm run build"],
             "open_links": [{"label": "Preview", "target": "https://app.example.com", "kind": "url"}],
-            "completion_kind": "general",
+            "completion_kind": "build_complete",
         },
         {
             "workspace_path": "/Users/idan/compaas/projects/cashtracker-b82e75d5",
@@ -767,6 +857,28 @@ def test_merge_structured_completion_with_project_includes_run_hints():
     assert any(item["target"] == "/Users/idan/compaas/projects/cashtracker-b82e75d5" for item in merged["open_links"])
     assert any(item["target"] == "https://github.com/comp-a-a-s/compaas" for item in merged["open_links"])
     assert merged["completion_kind"] == "build_complete"
+
+
+def test_merge_structured_completion_with_project_keeps_general_turn_unpromoted():
+    merged = api._merge_structured_completion_with_project(
+        {
+            "summary": "Let me clarify scope first.",
+            "deliverables": [],
+            "validation": [],
+            "next_actions": [],
+            "run_commands": [],
+            "open_links": [],
+            "completion_kind": "general",
+        },
+        {
+            "workspace_path": "/Users/idan/compaas/projects/cashtracker-b82e75d5",
+            "run_instructions": "npm ci\nnpm run dev\nOpen http://localhost:5173",
+            "github_repo": "comp-a-a-s/compaas",
+        },
+    )
+    assert merged["completion_kind"] == "general"
+    assert merged["run_commands"] == []
+    assert merged["open_links"] == []
 
 
 def test_sync_project_completion_snapshot_updates_description_team_and_run_commands(monkeypatch):
@@ -802,6 +914,7 @@ def test_sync_project_completion_snapshot_updates_description_team_and_run_comma
         structured={
             "summary": "CashTracker release candidate is ready.",
             "run_commands": ["npm ci", "npm run dev"],
+            "completion_kind": "build_complete",
             "delegations": [{"agent": "Priya", "why": "UI polish", "action": "Finalize dashboard layout"}],
         },
         support_agents=["lead-frontend"],

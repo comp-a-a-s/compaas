@@ -438,6 +438,23 @@ test('ceo chat renders structured response with links, wrapping, focus, and icon
   chatHistoryPayload = [
     {
       role: 'ceo',
+      content: 'Idan, I will assume a B2B SaaS audience and start with a monetizable MVP scope immediately.',
+      timestamp: '2026-02-28T10:21:00.000Z',
+      project_id: '',
+      structured: {
+        summary: 'Assumptions captured and execution will proceed.',
+        completion_kind: 'general',
+        delegations: [],
+        risks: [],
+        next_actions: [],
+        deliverables: [],
+        validation: [],
+        run_commands: [],
+        open_links: [],
+      },
+    },
+    {
+      role: 'ceo',
       content: [
         '## Outcome',
         'CashTracker build is complete.',
@@ -527,6 +544,8 @@ test('ceo chat renders structured response with links, wrapping, focus, and icon
   await expect(chatInput).toBeEditable();
 
   await expect(page.getByText('Completion Summary')).toBeVisible();
+  await expect(page.getByText('Completion Summary')).toHaveCount(1);
+  await expect(page.getByText('Response Summary')).toHaveCount(0);
   await expect(page.getByText('Auto-start completed')).toBeVisible();
   await expect(page.getByRole('link', { name: /Open app: http:\/\/localhost:5173/i })).toBeVisible();
   await page.getByRole('button', { name: /Activation Guide/i }).click();

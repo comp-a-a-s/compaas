@@ -47,6 +47,7 @@ from src.web.services.project_service import ProjectService
 from src.web.services.integration_service import IntegrationService
 from src.web.services.workforce_presence import WorkforcePresenceService
 from src.web.routers.v1 import V1Context, create_v1_router
+from src.web.template_rendering import render_agent_templates
 
 
 # ---------------------------------------------------------------------------
@@ -1258,8 +1259,7 @@ def _save_config(config: dict) -> None:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
     # Re-render agent templates with updated config values
     try:
-        from scripts.render_agents import render_templates
-        render_templates()
+        render_agent_templates(PROJECT_ROOT)
     except Exception:
         logger.warning("Failed to re-render agent templates after config save", exc_info=True)
 
@@ -1297,13 +1297,6 @@ def update_config(request: Request, updates: dict) -> dict:
     config = _load_config()
     merged = _deep_merge(config, updates)
     _save_config(merged)
-    # Auto-render agent templates when agent names change
-    if "agents" in updates:
-        try:
-            from scripts.render_agents import render_templates
-            render_templates()
-        except Exception:
-            pass  # best-effort
     return {"status": "ok"}
 
 
@@ -2204,6 +2197,9 @@ def _build_context_prompt(
         "Use an executive, human tone for a Chairman/CEO conversation: concise, clear, respectful, practical. "
         "Do not re-introduce yourself every turn (avoid phrases like '<CEO> here'). "
         "Keep one clear final response per turn, and avoid narrating every intermediate step in prose. "
+        "This dashboard flow is non-interactive: do not block waiting for clarifications. "
+        "If requirements are ambiguous, state concise assumptions and proceed with execution immediately. "
+        "Do not use interactive question tools. "
         "For build requests, delegate to your specialist team via the Task tool and report their progress. "
         "For product and UI work, involve the designer by default and ensure design choices match user purpose, audience, and workflow (avoid generic boilerplate output). "
         "When implementation work is completed, structure the final update using short sections in this order: "
@@ -2779,10 +2775,26 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
 
     completion_kind = "general"
     lower_raw = raw.lower()
-    if run_commands or open_links or (
-        "complete" in lower_raw
-        and ("deliverable" in lower_raw or "validation" in lower_raw or "next step" in lower_raw)
-    ):
+    has_completion_sections = bool(sections["summary"]) and bool(
+        sections["deliverables"]
+        or sections["validation"]
+        or sections["run_commands"]
+        or sections["open_links"]
+        or sections["next_actions"]
+    )
+    completion_markers = (
+        "build complete",
+        "implementation complete",
+        "execution complete",
+        "delivery complete",
+        "release handoff",
+        "project handoff",
+        "ready to run",
+        "shipped",
+    )
+    has_completion_phrase = any(marker in lower_raw for marker in completion_markers)
+    has_completion_evidence = bool(run_commands or section_validation or deliverables)
+    if has_completion_sections or (has_completion_phrase and has_completion_evidence):
         completion_kind = "build_complete"
 
     return {
@@ -2805,7 +2817,6 @@ def _merge_structured_completion_with_project(
     """Merge structured chat payload with project run/open hints."""
     payload = copy.deepcopy(structured or {})
     project_info = project if isinstance(project, dict) else {}
-    run_instructions = str(project_info.get("run_instructions", "") or "").strip()
 
     def _normalize_string_list(value: Any, *, limit: int = 12) -> list[str]:
         seen: set[str] = set()
@@ -2845,36 +2856,39 @@ def _merge_structured_completion_with_project(
                 break
         return result
 
-    parsed_run = _structured_response_payload(run_instructions) if run_instructions else {}
+    completion_kind = str(payload.get("completion_kind", "") or "").strip().lower()
+    if completion_kind not in {"build_complete", "general"}:
+        completion_kind = "general"
+    is_build_complete = completion_kind == "build_complete"
 
     base_commands = _normalize_string_list(payload.get("run_commands"))
-    project_commands = _normalize_string_list(parsed_run.get("run_commands"))
-    payload["run_commands"] = _normalize_string_list(base_commands + project_commands)
-
+    payload["run_commands"] = base_commands
     base_links = _normalize_links(payload.get("open_links"))
-    project_links = _normalize_links(parsed_run.get("open_links"))
     deliverable_links = _normalize_links(payload.get("deliverables"), limit=20)
-    merged_links = _normalize_links(base_links + project_links + deliverable_links, limit=20)
+    payload["open_links"] = _normalize_links(base_links + deliverable_links, limit=20)
 
-    workspace_path = str(project_info.get("workspace_path", "") or "").strip()
-    if workspace_path:
-        merged_links = _normalize_links(
-            merged_links + [{"label": "Workspace Path", "target": workspace_path, "kind": "path"}],
-            limit=20,
-        )
-    github_repo = str(project_info.get("github_repo", "") or "").strip()
-    if github_repo:
-        merged_links = _normalize_links(
-            merged_links + [{"label": "GitHub Repository", "target": f"https://github.com/{github_repo}", "kind": "url"}],
-            limit=20,
-        )
-    payload["open_links"] = merged_links
+    if is_build_complete:
+        run_instructions = str(project_info.get("run_instructions", "") or "").strip()
+        parsed_run = _structured_response_payload(run_instructions) if run_instructions else {}
+        project_commands = _normalize_string_list(parsed_run.get("run_commands"))
+        payload["run_commands"] = _normalize_string_list(base_commands + project_commands)
 
-    completion_kind = str(payload.get("completion_kind", "") or "").strip().lower()
-    if not completion_kind:
-        completion_kind = "general"
-    if payload.get("run_commands") or payload.get("open_links"):
-        completion_kind = "build_complete"
+        project_links = _normalize_links(parsed_run.get("open_links"))
+        merged_links = _normalize_links(base_links + project_links + deliverable_links, limit=20)
+        workspace_path = str(project_info.get("workspace_path", "") or "").strip()
+        if workspace_path:
+            merged_links = _normalize_links(
+                merged_links + [{"label": "Workspace Path", "target": workspace_path, "kind": "path"}],
+                limit=20,
+            )
+        github_repo = str(project_info.get("github_repo", "") or "").strip()
+        if github_repo:
+            merged_links = _normalize_links(
+                merged_links + [{"label": "GitHub Repository", "target": f"https://github.com/{github_repo}", "kind": "url"}],
+                limit=20,
+            )
+        payload["open_links"] = merged_links
+
     payload["completion_kind"] = completion_kind
     return payload
 
@@ -3004,8 +3018,9 @@ def _sync_project_completion_snapshot(
     if summary and summary != str(current.get("description", "") or "").strip():
         updates["description"] = summary
 
+    completion_kind = str(structured.get("completion_kind", "") or "").strip().lower()
     run_commands = _normalize_unique_strings(structured.get("run_commands"), limit=16)
-    if run_commands:
+    if completion_kind == "build_complete" and run_commands:
         run_instructions = "\n".join(run_commands)
         if run_instructions != str(current.get("run_instructions", "") or "").strip():
             updates["run_instructions"] = run_instructions
@@ -4346,6 +4361,38 @@ def _sanitize_ceo_response(text: str, *, ceo_name: str, user_name: str) -> str:
     return cleaned or raw
 
 
+def _is_incomplete_clarification_stub(text: str) -> bool:
+    """Detect partial clarification stubs that block non-interactive chat flows."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    normalized = re.sub(r"\s+", " ", raw).strip().lower()
+    markers = (
+        "before i mobilize the team",
+        "i need to understand a few things",
+        "i need to understand a few details",
+        "i have a few questions",
+    )
+    if not any(marker in normalized for marker in markers):
+        return False
+    has_follow_up_list = bool(re.search(r"\n\s*(?:[-*]|\d+[.)])\s+\S+", raw))
+    question_count = raw.count("?")
+    if raw.endswith(":") and not has_follow_up_list:
+        return True
+    if normalized.endswith("a few things") and question_count == 0 and not has_follow_up_list:
+        return True
+    return False
+
+
+def _build_assumption_first_retry_prompt(prompt: str) -> str:
+    """Force a non-interactive retry path when Claude returns a clarification stub."""
+    prefix = (
+        "[NON-INTERACTIVE DASHBOARD MODE: Do not ask follow-up questions and do not use AskUserQuestion. "
+        "If details are ambiguous, state concise assumptions and proceed immediately with execution.]"
+    )
+    return f"{prefix}\n\n{prompt}"
+
+
 def _build_execution_bridge_prompt(
     user_message: str,
     model_response: str,
@@ -4416,6 +4463,7 @@ async def _handle_ceo_claude(
     micro_project_mode: bool = False,
     project_id: str = "",
     run_id: str = "",
+    allow_clarification_retry: bool = True,
 ) -> str | None:
     """Handle a CEO chat turn using the Claude Code CLI subprocess.
 
@@ -4429,11 +4477,13 @@ async def _handle_ceo_claude(
     """
     env = _sanitize_subprocess_env(os.environ.copy())
     anthropic_mode = str(llm_cfg.get("anthropic_mode", "cli") or "cli").lower()
+    interactive_tools_blocked = ["AskUserQuestion"]
     runtime_metadata = {
         "provider": "anthropic",
         "mode": anthropic_mode if anthropic_mode in ("cli", "apikey") else "cli",
         "runtime": "claude_cli",
         "model": str(llm_cfg.get("model", "claude") or "claude"),
+        "interactive_tools_blocked": interactive_tools_blocked,
     }
     if run_id:
         runtime_metadata["run_id"] = run_id
@@ -4473,6 +4523,7 @@ async def _handle_ceo_claude(
 
     process = None
     saw_tool_use = False
+    saw_interactive_question_tool_use = False
     # Map tool_use_id → delegated agent name for accurate result matching.
     # Previous FIFO list could mis-attribute results when parallel delegations
     # returned out of order.
@@ -4482,6 +4533,7 @@ async def _handle_ceo_claude(
         # Web dashboard runs are non-interactive, so permission prompts cannot
         # be answered. Force bypass mode to avoid silent no-op file writes.
         cmd.extend(["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"])
+        cmd.extend(["--disallowed-tools", ",".join(interactive_tools_blocked)])
         cmd.extend(["--output-format", "stream-json", "--verbose"])
         _emit_chat_activity(
             "ceo",
@@ -4573,6 +4625,8 @@ async def _handle_ceo_claude(
                     elif btype == "tool_use":
                         saw_tool_use = True
                         tool_name = str(block.get("name", "tool") or "tool")
+                        if tool_name.strip().lower() in {"askuserquestion", "ask_user_question"}:
+                            saw_interactive_question_tool_use = True
                         tool_input = block.get("input", {}) if isinstance(block.get("input", {}), dict) else {}
                         if micro_project_mode and tool_name == "Task":
                             violation_message = (
@@ -4899,6 +4953,49 @@ async def _handle_ceo_claude(
                 metadata=runtime_metadata,
             )
 
+        if full_response and _is_incomplete_clarification_stub(full_response):
+            if allow_clarification_retry:
+                await websocket.send_json({
+                    "type": "warning",
+                    "content": (
+                        "Clarification prompt was incomplete in non-interactive mode. "
+                        "Continuing with assumption-first execution."
+                    ),
+                })
+                _emit_chat_activity(
+                    "ceo",
+                    "WARNING",
+                    "Incomplete clarification prompt detected; auto-retrying with assumption-first policy.",
+                    project_id=project_id,
+                    metadata={
+                        "clarification_retry": True,
+                        "interactive_question_tool_attempted": saw_interactive_question_tool_use,
+                        **runtime_metadata,
+                    },
+                )
+                return await _handle_ceo_claude(
+                    websocket=websocket,
+                    prompt=_build_assumption_first_retry_prompt(prompt),
+                    claude_path=claude_path,
+                    llm_cfg=llm_cfg,
+                    ceo_name=ceo_name,
+                    micro_project_mode=micro_project_mode,
+                    project_id=project_id,
+                    run_id=run_id,
+                    allow_clarification_retry=False,
+                )
+            _emit_chat_activity(
+                "ceo",
+                "WARNING",
+                "Clarification response remained incomplete after non-interactive retry.",
+                project_id=project_id,
+                metadata={
+                    "clarification_retry": False,
+                    "interactive_question_tool_attempted": saw_interactive_question_tool_use,
+                    **runtime_metadata,
+                },
+            )
+
         if micro_project_mode and saw_tool_use:
             await websocket.send_json({
                 "type": "micro_project_warning",
@@ -4917,14 +5014,26 @@ async def _handle_ceo_claude(
             "COMPLETED",
             "CEO response generated",
             project_id=project_id,
-            metadata={"micro_project_mode": micro_project_mode, "tool_use_detected": saw_tool_use, **runtime_metadata},
+            metadata={
+                "micro_project_mode": micro_project_mode,
+                "tool_use_detected": saw_tool_use,
+                "interactive_question_tool_attempted": saw_interactive_question_tool_use,
+                "clarification_retry_enabled": allow_clarification_retry,
+                **runtime_metadata,
+            },
         )
         if run_id:
             _transition_run_state(
                 run_id,
                 state="done",
                 label="CEO response generated",
-                metadata={"micro_project_mode": micro_project_mode, "tool_use_detected": saw_tool_use, **runtime_metadata},
+                metadata={
+                    "micro_project_mode": micro_project_mode,
+                    "tool_use_detected": saw_tool_use,
+                    "interactive_question_tool_attempted": saw_interactive_question_tool_use,
+                    "clarification_retry_enabled": allow_clarification_retry,
+                    **runtime_metadata,
+                },
             )
 
         return full_response
