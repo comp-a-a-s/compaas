@@ -128,12 +128,6 @@ compaas-web
 
 Default URL: [http://localhost:8420](http://localhost:8420)
 
-### TUI
-
-```bash
-compaas-tui
-```
-
 ## API and Runtime
 
 - WebSocket chat: `/api/chat/ws`
