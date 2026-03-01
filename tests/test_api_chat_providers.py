@@ -515,6 +515,57 @@ async def test_handle_ceo_claude_micro_mode_keeps_ceo_agent_and_warns_on_tool_us
 
 
 @pytest.mark.asyncio
+async def test_handle_ceo_claude_emits_synthetic_delegation_when_no_real_task_tool(monkeypatch):
+    lines = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "I will proceed with the build now."}]},
+            }
+        ),
+        json.dumps({"type": "result", "result": "Build initiated."}),
+    ]
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess(lines=lines, returncode=0)
+
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(api, "_emit_chat_activity", lambda *args, **kwargs: None)
+
+    ws = _FakeWebSocket()
+    result = await api._handle_ceo_claude(
+        websocket=ws,
+        prompt="run",
+        claude_path="/usr/bin/claude",
+        llm_cfg={"anthropic_mode": "cli"},
+        ceo_name="Marcus",
+        project_id="abcd1234",
+        run_id="run-1",
+        user_message="Build a landing page app",
+        support_agents=["lead-frontend", "lead-designer"],
+        config={"agents": {"lead-frontend": "Priya", "lead-designer": "Lena"}},
+        synthetic_delegation_fallback=True,
+    )
+
+    assert result == "Build initiated."
+    action_details = [
+        event["content"]
+        for event in ws.events
+        if event.get("type") == "action_detail" and isinstance(event.get("content"), dict)
+    ]
+    assert any(
+        str(item.get("flow", "")).lower() == "down"
+        and str(item.get("target_agent", "")).lower() in {"lead-frontend", "lead-designer"}
+        for item in action_details
+    )
+    assert any(
+        str(item.get("flow", "")).lower() == "up"
+        and str(item.get("source_agent", "")).lower() in {"lead-frontend", "lead-designer"}
+        for item in action_details
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_ceo_codex_requires_cli_binary(monkeypatch):
     monkeypatch.setattr(api.shutil, "which", lambda _name: None)
     ws = _FakeWebSocket()

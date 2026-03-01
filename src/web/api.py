@@ -4473,6 +4473,10 @@ async def _handle_ceo_claude(
     micro_project_mode: bool = False,
     project_id: str = "",
     run_id: str = "",
+    user_message: str = "",
+    support_agents: list[str] | None = None,
+    config: dict[str, Any] | None = None,
+    synthetic_delegation_fallback: bool = False,
     allow_clarification_retry: bool = True,
 ) -> str | None:
     """Handle a CEO chat turn using the Claude Code CLI subprocess.
@@ -4534,10 +4538,12 @@ async def _handle_ceo_claude(
     process = None
     saw_tool_use = False
     saw_interactive_question_tool_use = False
+    saw_real_delegation = False
     # Map tool_use_id → delegated agent name for accurate result matching.
     # Previous FIFO list could mis-attribute results when parallel delegations
     # returned out of order.
     pending_delegate_agents: dict[str, str] = {}
+    delegation_plan: list[dict[str, str]] = []
     try:
         cmd = [claude_path, "--agent", "ceo", "-p", prompt]
         # Web dashboard runs are non-interactive, so permission prompts cannot
@@ -4568,6 +4574,26 @@ async def _handle_ceo_claude(
             env=env,
             cwd=PROJECT_ROOT,
         )
+
+        if (
+            synthetic_delegation_fallback
+            and not micro_project_mode
+            and support_agents
+        ):
+            effective_config = config if isinstance(config, dict) else _load_config()
+            delegation_plan = _build_synthetic_delegation_plan(
+                user_message or prompt,
+                support_agents,
+                config=effective_config,
+            )
+            if delegation_plan:
+                await _emit_synthetic_delegation_start(
+                    websocket,
+                    delegation_plan=delegation_plan,
+                    project_id=project_id,
+                    runtime_metadata=runtime_metadata,
+                    run_id=run_id,
+                )
 
         response_parts: list[str] = []
         full_response: str | None = None
@@ -4699,6 +4725,7 @@ async def _handle_ceo_claude(
                             ).strip()
                             tool_use_id = str(block.get("id", "") or "").strip()
                             if delegated_agent:
+                                saw_real_delegation = True
                                 is_delegation = True
                                 delegation_work_item = f"{run_id}:{delegated_agent}" if run_id else f"{project_id}:{delegated_agent}"
                                 if tool_use_id:
@@ -4992,6 +5019,10 @@ async def _handle_ceo_claude(
                     micro_project_mode=micro_project_mode,
                     project_id=project_id,
                     run_id=run_id,
+                    user_message=user_message,
+                    support_agents=support_agents,
+                    config=config,
+                    synthetic_delegation_fallback=False,
                     allow_clarification_retry=False,
                 )
             _emit_chat_activity(
@@ -5017,6 +5048,18 @@ async def _handle_ceo_claude(
                 "Micro mode triggered tool activity; consider full crew mode.",
                 project_id=project_id,
                 metadata=runtime_metadata,
+            )
+
+        # Claude can return direct text without explicit Task tool delegation in
+        # non-interactive runs. Emit a synthetic completion pulse so the org tree
+        # still reflects active workforce transitions for this turn.
+        if delegation_plan and not saw_real_delegation:
+            await _emit_synthetic_delegation_completion(
+                websocket,
+                delegation_plan=delegation_plan,
+                project_id=project_id,
+                runtime_metadata=runtime_metadata,
+                run_id=run_id,
             )
 
         _emit_chat_activity(
@@ -6374,6 +6417,15 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     micro_project_mode=micro_project_mode,
                     project_id=active_project_id,
                     run_id=run_id,
+                    user_message=user_message,
+                    support_agents=support_agents,
+                    config=config,
+                    synthetic_delegation_fallback=(
+                        bool(support_agents)
+                        and not no_delegation_mode
+                        and not micro_project_mode
+                        and str(intent.get("intent", "") or "").strip().lower() == "execution"
+                    ),
                 )
 
             full_response = _apply_agent_name_overrides(full_response or "", config) or None
