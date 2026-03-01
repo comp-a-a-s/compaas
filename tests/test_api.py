@@ -288,6 +288,17 @@ class TestDeleteProjectEndpoint:
         assert payload["project_id"] == pid
         assert api_module.state_manager.get_project(pid) is None
 
+    def test_delete_project_post_action_success(self, client):
+        import src.web.api as api_module
+
+        pid = _create_project(client, name="Delete Action Project")
+        response = client.post(f"/api/projects/{pid}", json={"action": "delete"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["project_id"] == pid
+        assert api_module.state_manager.get_project(pid) is None
+
 
 class TestPatchProjectEndpoint:
     def test_patch_project_updates_tags(self, client):

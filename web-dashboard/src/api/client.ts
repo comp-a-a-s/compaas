@@ -88,9 +88,18 @@ export async function deleteProject(projectId: string): Promise<{
       signal: controller.signal,
     });
     // Some deployments/proxies block DELETE; fall back to POST alias.
-    if (res.status === 405) {
+    if (res.status === 405 || res.status === 404) {
       res = await fetch(`${BASE}/projects/${encodeURIComponent(projectId)}/delete`, {
         method: 'POST',
+        signal: controller.signal,
+      });
+    }
+    // Last-resort compatibility for deployments that only allow POST on canonical resource path.
+    if (res.status === 405 || res.status === 404) {
+      res = await fetch(`${BASE}/projects/${encodeURIComponent(projectId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete' }),
         signal: controller.signal,
       });
     }

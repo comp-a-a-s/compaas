@@ -905,6 +905,15 @@ def delete_project_post_alias(request: Request, project_id: str) -> dict:
     return _delete_project_impl(request, project_id)
 
 
+@app.post("/api/projects/{project_id}", summary="Project mutation actions (POST alias)")
+def project_post_action(request: Request, project_id: str, body: dict | None = None) -> dict:
+    payload = body or {}
+    action = str(payload.get("action", "") or "").strip().lower()
+    if action == "delete":
+        return _delete_project_impl(request, project_id)
+    raise HTTPException(status_code=400, detail="Unsupported project action.")
+
+
 @app.patch("/api/projects/{project_id}", summary="Update mutable project metadata")
 def patch_project(request: Request, project_id: str, body: dict | None = None) -> dict:
     _require_write_auth(request)
