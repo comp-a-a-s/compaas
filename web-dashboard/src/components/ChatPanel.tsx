@@ -326,7 +326,34 @@ function normalizeStructuredResponse(value: unknown): StructuredChatResponse | u
       })
       .filter(Boolean) as StructuredDeliverable[]
     : [];
-  if (!summary && nextActions.length === 0 && risks.length === 0 && validation.length === 0 && deliverables.length === 0 && delegations.length === 0) {
+  const runCommands = Array.isArray(raw.run_commands) ? raw.run_commands.map((item) => String(item)).filter(Boolean) : [];
+  const openLinks = Array.isArray(raw.open_links)
+    ? raw.open_links
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const payload = item as Record<string, unknown>;
+        const target = trimLinkTarget(String(payload.target || ''));
+        if (!target) return null;
+        const normalizedKind = String(payload.kind || '').toLowerCase();
+        const kind: StructuredDeliverable['kind'] = normalizedKind === 'url' || isHttpUrl(target) ? 'url' : 'path';
+        const label = String(payload.label || target).trim() || target;
+        return { label, target, kind };
+      })
+      .filter(Boolean) as StructuredDeliverable[]
+    : [];
+  const completionKind = (raw.completion_kind === 'build_complete' || raw.completion_kind === 'general')
+    ? raw.completion_kind
+    : undefined;
+  if (
+    !summary
+    && nextActions.length === 0
+    && risks.length === 0
+    && validation.length === 0
+    && deliverables.length === 0
+    && openLinks.length === 0
+    && runCommands.length === 0
+    && delegations.length === 0
+  ) {
     return undefined;
   }
   return {
@@ -335,6 +362,9 @@ function normalizeStructuredResponse(value: unknown): StructuredChatResponse | u
     risks,
     validation,
     deliverables,
+    run_commands: runCommands,
+    open_links: openLinks,
+    completion_kind: completionKind,
     delegations,
   };
 }
@@ -345,6 +375,8 @@ function hasStructuredContent(value?: StructuredChatResponse): boolean {
   return Boolean(
     summary
     || (value.deliverables && value.deliverables.length > 0)
+    || (value.open_links && value.open_links.length > 0)
+    || (value.run_commands && value.run_commands.length > 0)
     || (value.validation && value.validation.length > 0)
     || (value.next_actions && value.next_actions.length > 0)
   );
@@ -400,6 +432,7 @@ interface StructuredCompletionCardProps {
   showFullResponse: boolean;
   onToggleFullResponse: () => void;
   onCopyPath: (path: string) => void;
+  onCopyCommand: (command: string) => void;
 }
 
 function StructuredCompletionCard({
@@ -407,15 +440,21 @@ function StructuredCompletionCard({
   showFullResponse,
   onToggleFullResponse,
   onCopyPath,
+  onCopyCommand,
 }: StructuredCompletionCardProps) {
   const summary = (structured.summary || '').trim();
   const deliverables = structured.deliverables || [];
   const validation = structured.validation || [];
   const nextActions = structured.next_actions || [];
+  const runCommands = structured.run_commands || [];
+  const openLinks = structured.open_links || [];
+  const completionKind = structured.completion_kind || 'general';
   return (
     <div className="chat-summary-card">
       <div className="chat-summary-card-header">
-        <span className="chat-summary-card-title">Completion Summary</span>
+        <span className="chat-summary-card-title">
+          {completionKind === 'build_complete' ? 'Completion Summary' : 'Response Summary'}
+        </span>
         <button type="button" onClick={onToggleFullResponse} className="chat-summary-toggle">
           {showFullResponse ? 'Hide full response' : 'Show full response'}
         </button>
@@ -433,6 +472,48 @@ function StructuredCompletionCard({
           <p className="chat-summary-label">Deliverables</p>
           <ul className="chat-summary-list">
             {deliverables.map((item, idx) => (
+              <li key={`${item.target}-${idx}`} className="chat-summary-list-item">
+                {item.kind === 'url' ? (
+                  <a href={item.target} target="_blank" rel="noreferrer" className="chat-http-link">
+                    {item.label}
+                  </a>
+                ) : (
+                  <button type="button" className="chat-path-link" onClick={() => onCopyPath(item.target)} title={`Copy path: ${item.target}`}>
+                    {item.label}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {runCommands.length > 0 && (
+        <div className="chat-summary-block">
+          <p className="chat-summary-label">Run Commands</p>
+          <ul className="chat-summary-list">
+            {runCommands.map((command, idx) => (
+              <li key={`${command}-${idx}`} className="chat-summary-list-item chat-summary-command-row">
+                <code className="chat-markdown-inline-code" style={{ flex: 1, minWidth: 0 }}>{command}</code>
+                <button
+                  type="button"
+                  className="chat-summary-copy-btn"
+                  onClick={() => onCopyCommand(command)}
+                  title={`Copy command: ${command}`}
+                >
+                  Copy
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {openLinks.length > 0 && (
+        <div className="chat-summary-block">
+          <p className="chat-summary-label">Open Links</p>
+          <ul className="chat-summary-list">
+            {openLinks.map((item, idx) => (
               <li key={`${item.target}-${idx}`} className="chat-summary-list-item">
                 {item.kind === 'url' ? (
                   <a href={item.target} target="_blank" rel="noreferrer" className="chat-http-link">
@@ -498,9 +579,20 @@ interface MessageBubbleProps {
   onPin?: () => void;
   searchQuery?: string;
   onCopyPath: (path: string) => void;
+  onCopyCommand: (command: string) => void;
 }
 
-function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You', pinned, onPin, searchQuery, onCopyPath }: MessageBubbleProps) {
+function MessageBubble({
+  message,
+  isStreaming,
+  ceoName = 'CEO',
+  userName = 'You',
+  pinned,
+  onPin,
+  searchQuery,
+  onCopyPath,
+  onCopyCommand,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [hovered, setHovered] = useState(false);
   const [showFullResponse, setShowFullResponse] = useState(false);
@@ -557,6 +649,7 @@ function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You'
                       showFullResponse={showFullResponse}
                       onToggleFullResponse={() => setShowFullResponse((prev) => !prev)}
                       onCopyPath={onCopyPath}
+                      onCopyCommand={onCopyCommand}
                     />
                   )}
                   {searchQuery
@@ -1259,6 +1352,14 @@ export default function ChatPanel({
       toast('Path copied to clipboard.', 'success');
     }).catch(() => {
       toast('Unable to copy path.', 'warning');
+    });
+  }, [toast]);
+
+  const handleCopyCommand = useCallback((command: string) => {
+    void navigator.clipboard.writeText(command).then(() => {
+      toast('Command copied to clipboard.', 'success');
+    }).catch(() => {
+      toast('Unable to copy command.', 'warning');
     });
   }, [toast]);
 
@@ -2335,7 +2436,12 @@ export default function ChatPanel({
               const key = msgKey(msg);
               return (
                 <MessageBubble key={`${key}-${i}`} message={msg} ceoName={ceoName} userName={userName}
-                  pinned={pinnedIds.has(key)} onPin={() => handlePin(key)} searchQuery={searchQuery} onCopyPath={handleCopyPath} />
+                  pinned={pinnedIds.has(key)}
+                  onPin={() => handlePin(key)}
+                  searchQuery={searchQuery}
+                  onCopyPath={handleCopyPath}
+                  onCopyCommand={handleCopyCommand}
+                />
               );
             })}
 
@@ -2347,7 +2453,12 @@ export default function ChatPanel({
             )}
             {streamingContent && (
               <MessageBubble message={{ role: 'ceo', content: streamingContent, timestamp: new Date().toISOString() }}
-                isStreaming ceoName={ceoName} userName={userName} onCopyPath={handleCopyPath} />
+                isStreaming
+                ceoName={ceoName}
+                userName={userName}
+                onCopyPath={handleCopyPath}
+                onCopyCommand={handleCopyCommand}
+              />
             )}
             {isWaiting && !streamingContent && actionLog.length === 0 && showThinking && (
               <ThinkingIndicator ceoName={ceoName} customText={thinkingContent || undefined} />

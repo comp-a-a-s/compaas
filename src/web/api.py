@@ -15,12 +15,18 @@ import hashlib
 import hmac
 import ipaddress
 import time
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 import yaml
 from typing import Any, AsyncGenerator
 from datetime import datetime, timezone
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
+    import tomli as tomllib  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +73,245 @@ try:
 except Exception:
     logger.warning("Failed to rebuild workforce presence snapshot at startup.", exc_info=True)
 
+UPDATE_LOG_PATH = os.path.join(DATA_DIR, "update_events.log")
+
+
+def _run_git_command(*args: str, timeout_seconds: float = 30.0) -> tuple[bool, str]:
+    """Run a git command in project root and return (ok, output/error)."""
+    if not os.path.isdir(os.path.join(PROJECT_ROOT, ".git")):
+        return False, "Git repository not found."
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    output = (result.stdout or "").strip()
+    error = (result.stderr or "").strip()
+    if result.returncode != 0:
+        return False, error or output or f"git {' '.join(args)} failed with code {result.returncode}"
+    return True, output or error
+
+
+def _parse_semver_tag(value: str) -> tuple[int, int, int] | None:
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", (value or "").strip())
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+def _normalize_semver_tag(value: str) -> str:
+    parsed = _parse_semver_tag(value)
+    if not parsed:
+        return ""
+    major, minor, patch = parsed
+    return f"v{major}.{minor}.{patch}"
+
+
+def _read_pyproject_version() -> str:
+    pyproject_path = os.path.join(PROJECT_ROOT, "pyproject.toml")
+    if not os.path.exists(pyproject_path):
+        return "v0.1.0"
+    try:
+        with open(pyproject_path, "rb") as handle:
+            parsed = tomllib.load(handle)
+        version = str(parsed.get("project", {}).get("version", "") or "").strip()
+        normalized = _normalize_semver_tag(version)
+        if normalized:
+            return normalized
+    except Exception:
+        logger.warning("Failed to read pyproject version.", exc_info=True)
+    return "v0.1.0"
+
+
+def _release_tags_local() -> list[str]:
+    ok, output = _run_git_command("tag", "--list", "v*.*.*")
+    if not ok:
+        return []
+    tags = [line.strip() for line in output.splitlines() if _parse_semver_tag(line.strip())]
+    tags.sort(key=lambda value: _parse_semver_tag(value) or (0, 0, 0))
+    return tags
+
+
+def _highest_release_tag(tags: list[str]) -> str:
+    if not tags:
+        return ""
+    return tags[-1]
+
+
+def _head_release_tag() -> str:
+    ok, output = _run_git_command("tag", "--points-at", "HEAD")
+    if not ok:
+        return ""
+    tags = [line.strip() for line in output.splitlines() if _parse_semver_tag(line.strip())]
+    if not tags:
+        return ""
+    tags.sort(key=lambda value: _parse_semver_tag(value) or (0, 0, 0))
+    return tags[-1]
+
+
+def _is_git_dirty() -> bool:
+    ok, output = _run_git_command("status", "--porcelain")
+    if not ok:
+        return True
+    return bool(output.strip())
+
+
+def _record_update_event(event: dict[str, Any]) -> None:
+    try:
+        os.makedirs(os.path.dirname(UPDATE_LOG_PATH), exist_ok=True)
+        payload = {"timestamp": datetime.now(timezone.utc).isoformat(), **event}
+        with open(UPDATE_LOG_PATH, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        logger.warning("Failed to append update event.", exc_info=True)
+
+
+def _resolve_app_version() -> str:
+    explicit = _normalize_semver_tag(os.environ.get("COMPAAS_VERSION", "").strip())
+    if explicit:
+        return explicit
+    head_tag = _head_release_tag()
+    if head_tag:
+        return head_tag
+    return _read_pyproject_version()
+
+
+APP_VERSION = _resolve_app_version()
+
+
+def _update_status_snapshot(*, refresh_remote: bool) -> dict[str, Any]:
+    """Compute updater status from release tags."""
+    baseline = {
+        "status": "ok",
+        "channel": "release_tags",
+        "current_version": _resolve_app_version(),
+        "latest_version": "",
+        "update_available": False,
+        "dirty_repo": False,
+        "can_update": False,
+        "block_reason": "",
+    }
+    if not os.path.isdir(os.path.join(PROJECT_ROOT, ".git")):
+        baseline.update(
+            {
+                "status": "error",
+                "can_update": False,
+                "block_reason": "Local git repository not found.",
+            }
+        )
+        return baseline
+
+    if refresh_remote:
+        _run_git_command("fetch", "--tags", "--force", "origin", timeout_seconds=90.0)
+
+    tags = _release_tags_local()
+    latest = _highest_release_tag(tags)
+    current = _head_release_tag() or baseline["current_version"]
+    dirty = _is_git_dirty()
+    baseline["current_version"] = current
+    baseline["latest_version"] = latest or current
+    baseline["dirty_repo"] = dirty
+    baseline["_available_tags"] = tags
+
+    current_semver = _parse_semver_tag(current)
+    latest_semver = _parse_semver_tag(latest)
+    if latest_semver and current_semver:
+        baseline["update_available"] = latest_semver > current_semver
+    elif latest and latest != current:
+        baseline["update_available"] = True
+
+    if dirty:
+        baseline["block_reason"] = "Local repository has uncommitted changes. Commit or stash before updating."
+        baseline["can_update"] = False
+        return baseline
+
+    if not latest:
+        baseline["block_reason"] = "No release tags were found."
+        baseline["can_update"] = False
+        return baseline
+
+    if baseline["update_available"]:
+        baseline["can_update"] = True
+    else:
+        baseline["can_update"] = False
+        baseline["block_reason"] = "Already on the latest release."
+
+    return baseline
+
+
+def _apply_release_tag_update(version: str = "") -> dict[str, Any]:
+    status = _update_status_snapshot(refresh_remote=True)
+    from_version = str(status.get("current_version", "") or "")
+    response: dict[str, Any] = {
+        "status": "ok",
+        "channel": "release_tags",
+        "from_version": from_version,
+        "to_version": from_version,
+        "update_applied": False,
+        "restart_required": False,
+        "dirty_repo": bool(status.get("dirty_repo")),
+        "can_update": bool(status.get("can_update")),
+        "block_reason": str(status.get("block_reason", "") or ""),
+    }
+
+    if status.get("status") != "ok":
+        response["status"] = "error"
+        response["error"] = str(status.get("block_reason", "Update status unavailable."))
+        _record_update_event({"action": "apply", "result": "blocked", "reason": response["error"]})
+        return response
+
+    requested = _normalize_semver_tag(version)
+    available_tags = [tag for tag in status.get("_available_tags", []) if isinstance(tag, str)]
+    target = requested or str(status.get("latest_version", "") or "")
+    if not target or target not in available_tags:
+        response["status"] = "error"
+        response["error"] = "Requested release tag was not found."
+        _record_update_event({"action": "apply", "result": "error", "reason": response["error"], "target": target})
+        return response
+
+    if _is_git_dirty():
+        response["dirty_repo"] = True
+        response["can_update"] = False
+        response["block_reason"] = "Local repository has uncommitted changes. Commit or stash before updating."
+        _record_update_event({"action": "apply", "result": "blocked", "reason": response["block_reason"]})
+        return response
+
+    if _parse_semver_tag(target) and _parse_semver_tag(from_version):
+        if (_parse_semver_tag(target) or (0, 0, 0)) <= (_parse_semver_tag(from_version) or (0, 0, 0)):
+            response["can_update"] = False
+            response["block_reason"] = "Selected release is not newer than the current version."
+            _record_update_event({"action": "apply", "result": "blocked", "reason": response["block_reason"], "target": target})
+            return response
+
+    ok_fetch, out_fetch = _run_git_command("fetch", "--tags", "--force", "origin", timeout_seconds=90.0)
+    if not ok_fetch:
+        response["status"] = "error"
+        response["error"] = out_fetch or "Failed to fetch remote release tags."
+        _record_update_event({"action": "apply", "result": "error", "reason": response["error"]})
+        return response
+
+    ok_reset, out_reset = _run_git_command("reset", "--hard", target, timeout_seconds=90.0)
+    if not ok_reset:
+        response["status"] = "error"
+        response["error"] = out_reset or "Failed to switch to requested release tag."
+        _record_update_event({"action": "apply", "result": "error", "reason": response["error"], "target": target})
+        return response
+
+    resolved_after = _head_release_tag() or target
+    response["to_version"] = resolved_after
+    response["update_applied"] = True
+    response["restart_required"] = True
+    response["can_update"] = False
+    response["block_reason"] = "Update applied. Restart COMPaaS to load the new version."
+    _record_update_event({"action": "apply", "result": "ok", "from": from_version, "to": resolved_after})
+    return response
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -74,7 +319,7 @@ except Exception:
 app = FastAPI(
     title="COMPaaS Dashboard API",
     description="Live data API for the COMPaaS virtual company web dashboard.",
-    version="0.1.0",
+    version=APP_VERSION,
 )
 
 # CORS — restrict to known origins
@@ -330,7 +575,7 @@ def _require_slack_signature(request: Request, body: bytes) -> None:
 def health_check() -> dict:
     return {
         "status": "healthy",
-        "version": "0.1.0",
+        "version": APP_VERSION,
         "data_dir_exists": os.path.isdir(DATA_DIR),
     }
 
@@ -897,6 +1142,9 @@ app.include_router(
             integration_service=integration_service,
             workforce_presence_service=workforce_presence_service,
             require_write_auth=_require_write_auth,
+            app_version=APP_VERSION,
+            update_status=lambda refresh_remote=False: _update_status_snapshot(refresh_remote=refresh_remote),
+            apply_update=lambda version="": _apply_release_tag_update(version),
         )
     )
 )
@@ -1782,7 +2030,8 @@ def _build_context_prompt(
         "Keep one clear final response per turn, and avoid narrating every intermediate step in prose. "
         "For build requests, delegate to your specialist team via the Task tool and report their progress. "
         "When implementation work is completed, structure the final update using short sections in this order: "
-        "'Outcome', 'Deliverables', 'Validation', and 'Next Steps'."
+        "'Outcome', 'Deliverables', 'Validation', 'Run Commands', 'Open Links', and 'Next Steps'. "
+        "Include concrete commands and openable targets whenever available."
     )
     return "\n".join(parts)
 
@@ -2146,6 +2395,9 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
             "next_actions": [],
             "deliverables": [],
             "validation": [],
+            "run_commands": [],
+            "open_links": [],
+            "completion_kind": "general",
         }
 
     def _clean_bullet_prefix(line: str) -> str:
@@ -2159,6 +2411,10 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
             return "deliverables"
         if name in {"validation"}:
             return "validation"
+        if name in {"run command", "run commands", "command", "commands"}:
+            return "run_commands"
+        if name in {"open link", "open links", "links"}:
+            return "open_links"
         if name in {"next step", "next steps", "next action", "next actions"}:
             return "next_actions"
         if name in {"risk", "risks"}:
@@ -2179,7 +2435,7 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
     def _deliverable_kind(target: str) -> str:
         return "url" if re.match(r"^https?://", target, flags=re.IGNORECASE) else "path"
 
-    def _extract_deliverables(lines: list[str]) -> list[dict[str, str]]:
+    def _extract_link_items(lines: list[str]) -> list[dict[str, str]]:
         items: list[dict[str, str]] = []
         seen_targets: set[str] = set()
         path_pattern = re.compile(r"(?<![\w.-])((?:/[A-Za-z0-9._-]+){2,}|(?:[A-Za-z0-9._-]+/){1,}[A-Za-z0-9._-]+(?:\.[A-Za-z0-9._-]+)?)")
@@ -2219,14 +2475,57 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
 
         return items[:20]
 
+    def _looks_like_command(line: str) -> bool:
+        if not line:
+            return False
+        candidate = line.strip()
+        if not candidate or candidate.endswith(":"):
+            return False
+        if re.match(r"^https?://", candidate, flags=re.IGNORECASE):
+            return False
+        command_prefix = re.compile(
+            r"^(?:\./|cd\s+|npm|pnpm|yarn|bun|npx|pnpx|node|python|uv|pip|poetry|cargo|go|make|docker|git|bash|sh|deno|php|composer|ruby|rails|dotnet|java|export\s+)",
+            flags=re.IGNORECASE,
+        )
+        if command_prefix.match(candidate):
+            return True
+        return " && " in candidate or " || " in candidate
+
+    def _extract_run_commands(lines: list[str]) -> list[str]:
+        commands: list[str] = []
+        seen: set[str] = set()
+        in_code_block = False
+
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            cleaned = _clean_bullet_prefix(stripped)
+            cleaned = re.sub(r"^\$\s*", "", cleaned).strip()
+            if not cleaned:
+                continue
+            if in_code_block or _looks_like_command(cleaned):
+                norm = re.sub(r"\s+", " ", cleaned).strip()
+                key = norm.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                commands.append(norm)
+                if len(commands) >= 20:
+                    break
+        return commands
+
     section_heading = re.compile(
-        r"^\s*(?:#{1,6}\s*)?(outcome|summary|deliverables?|artifacts?|validation|next steps?|next actions?|risks?)\s*:?\s*(.*)$",
+        r"^\s*(?:#{1,6}\s*)?(outcome|summary|deliverables?|artifacts?|validation|run commands?|commands?|open links?|links?|next steps?|next actions?|risks?)\s*:?\s*(.*)$",
         flags=re.IGNORECASE,
     )
     sections: dict[str, list[str]] = {
         "summary": [],
         "deliverables": [],
         "validation": [],
+        "run_commands": [],
+        "open_links": [],
         "next_actions": [],
         "risks": [],
         "body": [],
@@ -2266,7 +2565,11 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
     section_next = [_clean_bullet_prefix(line) for line in sections["next_actions"] if _clean_bullet_prefix(line)]
     section_validation = [_clean_bullet_prefix(line) for line in sections["validation"] if _clean_bullet_prefix(line)]
     deliverable_source = sections["deliverables"] if sections["deliverables"] else all_lines_raw
-    deliverables = _extract_deliverables(deliverable_source)
+    deliverables = _extract_link_items(deliverable_source)
+    run_source = sections["run_commands"] if sections["run_commands"] else all_lines_raw
+    run_commands = _extract_run_commands(run_source)
+    open_link_source = sections["open_links"] if sections["open_links"] else (sections["deliverables"] or all_lines_raw)
+    open_links = _extract_link_items(open_link_source)
 
     def _unique(items: list[str], limit: int = 10) -> list[str]:
         seen: set[str] = set()
@@ -2281,14 +2584,122 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
                 break
         return result
 
+    def _unique_link_items(items: list[dict[str, str]], limit: int = 12) -> list[dict[str, str]]:
+        seen: set[str] = set()
+        result: list[dict[str, str]] = []
+        for item in items:
+            target = str(item.get("target", "") or "").strip()
+            if not target:
+                continue
+            key = target.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+            if len(result) >= limit:
+                break
+        return result
+
+    completion_kind = "general"
+    lower_raw = raw.lower()
+    if run_commands or open_links or (
+        "complete" in lower_raw
+        and ("deliverable" in lower_raw or "validation" in lower_raw or "next step" in lower_raw)
+    ):
+        completion_kind = "build_complete"
+
     return {
         "summary": summary,
         "delegations": delegations[:10],
         "risks": _unique(section_risks + risks, limit=10),
         "next_actions": _unique(section_next + next_actions, limit=10),
-        "deliverables": deliverables,
+        "deliverables": _unique_link_items(deliverables, limit=20),
         "validation": _unique(section_validation + validation, limit=10),
+        "run_commands": _unique(run_commands, limit=12),
+        "open_links": _unique_link_items(open_links + deliverables, limit=12),
+        "completion_kind": completion_kind,
     }
+
+
+def _merge_structured_completion_with_project(
+    structured: dict[str, Any],
+    project: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge structured chat payload with project run/open hints."""
+    payload = copy.deepcopy(structured or {})
+    project_info = project if isinstance(project, dict) else {}
+    run_instructions = str(project_info.get("run_instructions", "") or "").strip()
+
+    def _normalize_string_list(value: Any, *, limit: int = 12) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        if not isinstance(value, list):
+            return result
+        for raw_item in value:
+            item = str(raw_item or "").strip()
+            key = re.sub(r"\s+", " ", item).lower()
+            if not item or key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+            if len(result) >= limit:
+                break
+        return result
+
+    def _normalize_links(value: Any, *, limit: int = 12) -> list[dict[str, str]]:
+        seen: set[str] = set()
+        result: list[dict[str, str]] = []
+        if not isinstance(value, list):
+            return result
+        for raw_item in value:
+            if not isinstance(raw_item, dict):
+                continue
+            target = str(raw_item.get("target", "") or "").strip()
+            if not target:
+                continue
+            key = target.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            label = str(raw_item.get("label", "") or "").strip() or target
+            kind = "url" if re.match(r"^https?://", target, flags=re.IGNORECASE) else "path"
+            result.append({"label": label, "target": target, "kind": kind})
+            if len(result) >= limit:
+                break
+        return result
+
+    parsed_run = _structured_response_payload(run_instructions) if run_instructions else {}
+
+    base_commands = _normalize_string_list(payload.get("run_commands"))
+    project_commands = _normalize_string_list(parsed_run.get("run_commands"))
+    payload["run_commands"] = _normalize_string_list(base_commands + project_commands)
+
+    base_links = _normalize_links(payload.get("open_links"))
+    project_links = _normalize_links(parsed_run.get("open_links"))
+    deliverable_links = _normalize_links(payload.get("deliverables"), limit=20)
+    merged_links = _normalize_links(base_links + project_links + deliverable_links, limit=20)
+
+    workspace_path = str(project_info.get("workspace_path", "") or "").strip()
+    if workspace_path:
+        merged_links = _normalize_links(
+            merged_links + [{"label": "Workspace Path", "target": workspace_path, "kind": "path"}],
+            limit=20,
+        )
+    github_repo = str(project_info.get("github_repo", "") or "").strip()
+    if github_repo:
+        merged_links = _normalize_links(
+            merged_links + [{"label": "GitHub Repository", "target": f"https://github.com/{github_repo}", "kind": "url"}],
+            limit=20,
+        )
+    payload["open_links"] = merged_links
+
+    completion_kind = str(payload.get("completion_kind", "") or "").strip().lower()
+    if not completion_kind:
+        completion_kind = "general"
+    if payload.get("run_commands") or payload.get("open_links"):
+        completion_kind = "build_complete"
+    payload["completion_kind"] = completion_kind
+    return payload
 
 
 def _lightweight_ceo_response(
@@ -5413,7 +5824,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 "planning_packet_status": plan_packet_status,
             }
             if structured_enabled:
-                done_payload["structured"] = _structured_response_payload(full_response or "")
+                base_structured = _structured_response_payload(full_response or "")
+                done_payload["structured"] = _merge_structured_completion_with_project(base_structured, active_project)
             if deploy_offer:
                 done_payload["deploy_offer"] = deploy_offer
             await websocket.send_json(done_payload)

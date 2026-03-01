@@ -4,7 +4,6 @@ import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
 import CompassRoseLogo from './CompassRoseLogo';
-import FloatingSelect from './ui/FloatingSelect';
 
 // ---- Types ----
 
@@ -43,13 +42,6 @@ const AGENT_DEFAULTS: AgentDefault[] = [
   { id: 'security-engineer', role: 'Security Engineer', defaultName: 'Alex' },
   { id: 'data-engineer', role: 'Data Engineer', defaultName: 'Maya' },
   { id: 'tech-writer', role: 'Tech Writer', defaultName: 'Tom' },
-];
-
-const POLL_INTERVAL_OPTIONS = [
-  { label: '3 seconds', value: 3000 },
-  { label: '5 seconds', value: 5000 },
-  { label: '10 seconds', value: 10000 },
-  { label: '30 seconds', value: 30000 },
 ];
 
 // Name templates for crew (keyed by agent IDs)
@@ -1264,15 +1256,11 @@ function StepTeamNames({
 
 function StepPreferences({
   autoOpenBrowser,
-  pollInterval,
   onAutoOpenChange,
-  onPollIntervalChange,
 }: {
   autoOpenBrowser: boolean;
-  pollInterval: number;
   theme: string;
   onAutoOpenChange: (v: boolean) => void;
-  onPollIntervalChange: (v: number) => void;
   onThemeChange: (v: string) => void;
 }) {
   const { setTheme, currentTheme } = useThemeSwitch();
@@ -1382,35 +1370,6 @@ function StepPreferences({
         </button>
       </div>
 
-      {/* Poll interval dropdown */}
-      <div
-        style={{
-          backgroundColor: C.surfaceRaised,
-          border: `1px solid ${C.border}`,
-          borderRadius: '8px',
-          padding: '14px',
-        }}
-      >
-        <label
-          style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: C.textPrimary, marginBottom: '2px' }}
-        >
-          Poll interval
-        </label>
-        <p style={{ fontSize: '11px', color: C.textSecondary, marginBottom: '10px' }}>
-          How often the dashboard fetches updated data from the backend.
-        </p>
-        <FloatingSelect
-          value={String(pollInterval)}
-          options={POLL_INTERVAL_OPTIONS.map((opt) => ({ value: String(opt.value), label: opt.label }))}
-          onChange={(nextValue) => onPollIntervalChange(Number(nextValue))}
-          ariaLabel="Poll interval"
-          size="md"
-          variant="input"
-          style={{
-            minWidth: '160px',
-          }}
-        />
-      </div>
     </div>
   );
 }
@@ -1784,7 +1743,6 @@ function StepComplete({
   userName,
   agentNames,
   autoOpenBrowser,
-  pollInterval,
   telegramBotToken,
   telegramChatId,
   llmProvider,
@@ -1799,7 +1757,6 @@ function StepComplete({
   userName: string;
   agentNames: Record<string, string>;
   autoOpenBrowser: boolean;
-  pollInterval: number;
   theme: string;
   telegramBotToken: string;
   telegramChatId: string;
@@ -1813,7 +1770,6 @@ function StepComplete({
   vercelConfigured: boolean;
 }) {
   const { currentTheme } = useThemeSwitch();
-  const pollLabel = POLL_INTERVAL_OPTIONS.find((o) => o.value === pollInterval)?.label ?? `${pollInterval}ms`;
   const nameCount = Object.keys(agentNames).length;
   const telegramConfigured = telegramBotToken && telegramChatId;
 
@@ -1830,7 +1786,6 @@ function StepComplete({
     { label: 'Team size', value: `${nameCount} agents configured` },
     { label: 'Theme', value: currentTheme.charAt(0).toUpperCase() + currentTheme.slice(1) },
     { label: 'Auto-open browser', value: autoOpenBrowser ? 'Enabled' : 'Disabled' },
-    { label: 'Poll interval', value: pollLabel },
     { label: 'GitHub', value: githubConfigured ? 'Verified' : 'Not configured' },
     { label: 'Vercel', value: vercelConfigured ? 'Verified' : 'Not configured' },
     { label: 'Telegram', value: telegramConfigured ? 'Configured' : 'Not configured' },
@@ -2074,7 +2029,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
   // Step 5 — Preferences
   const [autoOpenBrowser, setAutoOpenBrowser] = useState(true);
-  const [pollInterval, setPollInterval] = useState(5000);
   const [theme, setTheme] = useState('midnight');
 
   // Step 6 — Connectors (optional)
@@ -2214,7 +2168,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       agents: agentNames,
       ui: {
         theme: currentTheme,
-        poll_interval_ms: pollInterval,
+        poll_interval_ms: 5000,
       },
       server: {
         host: '',
@@ -2352,10 +2306,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             {step === 5 && (
               <StepPreferences
                 autoOpenBrowser={autoOpenBrowser}
-                pollInterval={pollInterval}
                 theme={theme}
                 onAutoOpenChange={setAutoOpenBrowser}
-                onPollIntervalChange={setPollInterval}
                 onThemeChange={setTheme}
               />
             )}
@@ -2395,7 +2347,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 userName={userName}
                 agentNames={agentNames}
                 autoOpenBrowser={autoOpenBrowser}
-                pollInterval={pollInterval}
                 theme={theme}
                 telegramBotToken={telegramBotToken}
                 telegramChatId={telegramChatId}

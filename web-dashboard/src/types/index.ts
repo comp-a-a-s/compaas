@@ -149,6 +149,33 @@ export interface StructuredChatResponse {
   next_actions?: string[];
   deliverables?: StructuredDeliverable[];
   validation?: string[];
+  run_commands?: string[];
+  open_links?: StructuredDeliverable[];
+  completion_kind?: 'build_complete' | 'general';
+}
+
+export interface UpdateStatusResponse {
+  status: 'ok' | 'error';
+  channel: 'release_tags';
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  dirty_repo: boolean;
+  can_update: boolean;
+  block_reason?: string;
+}
+
+export interface UpdateApplyResponse {
+  status: 'ok' | 'error';
+  channel: 'release_tags';
+  from_version: string;
+  to_version: string;
+  update_applied: boolean;
+  restart_required: boolean;
+  dirty_repo: boolean;
+  can_update: boolean;
+  block_reason?: string;
+  error?: string;
 }
 
 export interface ProjectMetadata {

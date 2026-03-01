@@ -28,6 +28,9 @@ class V1Context:
     integration_service: IntegrationService
     workforce_presence_service: WorkforcePresenceService
     require_write_auth: Callable[[Request], None] | None = None
+    app_version: str = "v0.1.0"
+    update_status: Callable[[bool], dict[str, Any]] | None = None
+    apply_update: Callable[[str], dict[str, Any]] | None = None
 
 
 class RunCreateRequest(BaseModel):
@@ -113,6 +116,10 @@ class ProjectVercelDeployRequest(BaseModel):
     target: str = Field(default="preview")
 
 
+class UpdateApplyRequest(BaseModel):
+    version: str = Field(default="")
+
+
 def _classify_intent(message: str) -> dict[str, Any]:
     text = (message or "").strip().lower()
     if not text:
@@ -157,6 +164,7 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {
             "status": "ok",
             "version": "v1",
+            "app_version": ctx.app_version,
             "features": flags.model_dump(),
         }
 
@@ -216,9 +224,93 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
                         },
                     },
                     "validation": {"type": "array", "items": {"type": "string"}},
+                    "run_commands": {"type": "array", "items": {"type": "string"}},
+                    "open_links": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["label", "target", "kind"],
+                            "properties": {
+                                "label": {"type": "string"},
+                                "target": {"type": "string"},
+                                "kind": {"type": "string", "enum": ["url", "path"]},
+                            },
+                        },
+                    },
+                    "completion_kind": {"type": "string", "enum": ["build_complete", "general"]},
                 },
             },
         }
+
+    @router.get("/update/status")
+    def v1_update_status() -> dict[str, Any]:
+        if ctx.update_status is None:
+            return {
+                "status": "error",
+                "channel": "release_tags",
+                "current_version": ctx.app_version,
+                "latest_version": ctx.app_version,
+                "update_available": False,
+                "dirty_repo": False,
+                "can_update": False,
+                "block_reason": "Updater is not configured for this deployment.",
+            }
+        payload = ctx.update_status(False)
+        if not isinstance(payload, dict):
+            return {"status": "error", "block_reason": "Invalid updater response."}
+        payload.pop("_available_tags", None)
+        return payload
+
+    @router.post("/update/check")
+    def v1_update_check() -> dict[str, Any]:
+        if ctx.update_status is None:
+            return {
+                "status": "error",
+                "channel": "release_tags",
+                "current_version": ctx.app_version,
+                "latest_version": ctx.app_version,
+                "update_available": False,
+                "dirty_repo": False,
+                "can_update": False,
+                "block_reason": "Updater is not configured for this deployment.",
+            }
+        payload = ctx.update_status(True)
+        if not isinstance(payload, dict):
+            return {"status": "error", "block_reason": "Invalid updater response."}
+        payload.pop("_available_tags", None)
+        return payload
+
+    @router.post("/update/apply")
+    def v1_update_apply(request: Request, body: UpdateApplyRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        if ctx.apply_update is None:
+            return {
+                "status": "error",
+                "channel": "release_tags",
+                "from_version": ctx.app_version,
+                "to_version": ctx.app_version,
+                "update_applied": False,
+                "restart_required": False,
+                "dirty_repo": False,
+                "can_update": False,
+                "block_reason": "Updater is not configured for this deployment.",
+                "error": "Updater is not configured for this deployment.",
+            }
+        payload = ctx.apply_update((body.version or "").strip())
+        if not isinstance(payload, dict):
+            return {
+                "status": "error",
+                "channel": "release_tags",
+                "from_version": ctx.app_version,
+                "to_version": ctx.app_version,
+                "update_applied": False,
+                "restart_required": False,
+                "dirty_repo": False,
+                "can_update": False,
+                "block_reason": "Invalid updater response.",
+                "error": "Invalid updater response.",
+            }
+        return payload
 
     @router.post("/chat/intents")
     def v1_classify_intent(body: dict[str, Any]) -> dict[str, Any]:

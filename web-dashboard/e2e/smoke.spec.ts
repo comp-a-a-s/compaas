@@ -281,6 +281,52 @@ test.beforeEach(async ({ page }) => {
     }
     await route.fulfill({ json: { status: 'ok' } });
   });
+
+  await page.route('**/api/v1/update/status', async (route) => {
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        channel: 'release_tags',
+        current_version: 'v1.0.0',
+        latest_version: 'v1.0.1',
+        update_available: true,
+        dirty_repo: false,
+        can_update: true,
+        block_reason: '',
+      },
+    });
+  });
+
+  await page.route('**/api/v1/update/check', async (route) => {
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        channel: 'release_tags',
+        current_version: 'v1.0.0',
+        latest_version: 'v1.0.1',
+        update_available: true,
+        dirty_repo: false,
+        can_update: true,
+        block_reason: '',
+      },
+    });
+  });
+
+  await page.route('**/api/v1/update/apply', async (route) => {
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        channel: 'release_tags',
+        from_version: 'v1.0.0',
+        to_version: 'v1.0.1',
+        update_applied: true,
+        restart_required: true,
+        dirty_repo: false,
+        can_update: false,
+        block_reason: 'Update applied. Restart COMPaaS to load the new version.',
+      },
+    });
+  });
 });
 
 test('dashboard navigation and connector validation @smoke', async ({ page }) => {
@@ -291,6 +337,9 @@ test('dashboard navigation and connector validation @smoke', async ({ page }) =>
   await expect(page.getByText('Smoke Project')).toBeVisible();
 
   await page.getByRole('button', { name: 'Settings' }).click();
+  await expect(page.getByText('Update Center')).toBeVisible();
+  await expect(page.getByText('Current version')).toBeVisible();
+  await expect(page.getByText('Poll Interval')).toHaveCount(0);
   await page.getByRole('button', { name: 'Integrations' }).click();
   await expect(page.getByText('GitHub Connector')).toBeVisible();
 
@@ -344,6 +393,13 @@ test('ceo chat renders structured response with links, wrapping, and maximize to
         '## Validation',
         '- npm run build passed.',
         '',
+        '## Run Commands',
+        '- npm ci',
+        '- npm run dev',
+        '',
+        '## Open Links',
+        '- [Local App](http://localhost:5173)',
+        '',
         '## Next Steps',
         '1. Open the activation guide.',
       ].join('\n'),
@@ -364,6 +420,15 @@ test('ceo chat renders structured response with links, wrapping, and maximize to
           },
         ],
         validation: ['npm run build passed.'],
+        run_commands: ['npm ci', 'npm run dev'],
+        open_links: [
+          {
+            label: 'Local App',
+            target: 'http://localhost:5173',
+            kind: 'url',
+          },
+        ],
+        completion_kind: 'build_complete',
         next_actions: ['Open the activation guide.'],
         delegations: [],
         risks: [],
@@ -395,6 +460,11 @@ test('ceo chat renders structured response with links, wrapping, and maximize to
   const dashboardLink = page.getByRole('link', { name: 'Dashboard URL' });
   await expect(dashboardLink).toHaveAttribute('href', 'https://cashtracker.example.com');
   await expect(dashboardLink).toHaveAttribute('target', '_blank');
+  await expect(page.getByText('Run Commands')).toBeVisible();
+  await page.getByRole('button', { name: 'Copy' }).first().click();
+  await expect(page.getByText(/Command copied to clipboard|Unable to copy command/i)).toBeVisible();
+  const localAppLink = page.getByRole('link', { name: 'Local App' });
+  await expect(localAppLink).toHaveAttribute('href', 'http://localhost:5173');
 
   await page.getByRole('button', { name: 'Show full response' }).click();
   await expect(page.getByRole('heading', { name: 'Outcome' })).toBeVisible();

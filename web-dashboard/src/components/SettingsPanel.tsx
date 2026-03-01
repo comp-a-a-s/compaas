@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   fetchConfig,
   updateConfig,
@@ -16,8 +16,11 @@ import {
   vercelDeploy,
   vercelAssignDomain,
   vercelSetEnv,
+  fetchUpdateStatus,
+  checkForUpdates,
+  applyManualUpdate,
 } from '../api/client';
-import type { AppConfig, LlmConfig } from '../types';
+import type { AppConfig, LlmConfig, UpdateStatusResponse } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
 import FloatingSelect from './ui/FloatingSelect';
@@ -65,13 +68,6 @@ const AGENT_ROSTER = [
   { id: 'security-engineer', role: 'Security Engineer' },
   { id: 'data-engineer', role: 'Data Engineer' },
   { id: 'tech-writer', role: 'Tech Writer' },
-];
-
-const POLL_INTERVAL_OPTIONS = [
-  { label: '3 seconds', value: 3000 },
-  { label: '5 seconds', value: 5000 },
-  { label: '10 seconds', value: 10000 },
-  { label: '30 seconds', value: 30000 },
 ];
 
 const THEMES = [
@@ -1189,8 +1185,11 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
 
   // Local form state (mirrors config)
   const [userName, setUserName] = useState('');
-  const [pollInterval, setPollInterval] = useState(5000);
   const [autoOpen, setAutoOpen] = useState(true);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusResponse | null>(null);
+  const [updateStatusBusy, setUpdateStatusBusy] = useState(false);
+  const [updateApplyBusy, setUpdateApplyBusy] = useState(false);
+  const [updateFeedback, setUpdateFeedback] = useState('');
 
   // Display / integrations
   const [compactMode, setCompactMode] = useState(() => localStorage.getItem('tf_compact_mode') === '1');
@@ -1235,9 +1234,54 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [vercelEnvKey, setVercelEnvKey] = useState('');
   const [vercelEnvValue, setVercelEnvValue] = useState('');
 
+  const refreshUpdateStatus = useCallback(async (forceRefresh = false) => {
+    setUpdateStatusBusy(true);
+    if (forceRefresh) setUpdateFeedback('Checking for updates...');
+    const payload = forceRefresh ? await checkForUpdates() : await fetchUpdateStatus();
+    if (!payload) {
+      setUpdateFeedback('Unable to fetch update status.');
+      setUpdateStatusBusy(false);
+      return;
+    }
+    setUpdateStatus(payload);
+    if (payload.status !== 'ok') {
+      setUpdateFeedback(payload.block_reason || 'Unable to determine update status.');
+    } else if (payload.update_available) {
+      setUpdateFeedback(`Update available: ${payload.latest_version}`);
+    } else {
+      setUpdateFeedback(payload.block_reason || 'You are already on the latest release.');
+    }
+    setUpdateStatusBusy(false);
+  }, []);
+
+  const handleApplyUpdate = useCallback(async () => {
+    if (!updateStatus?.latest_version || !updateStatus.can_update || updateApplyBusy) return;
+    setUpdateApplyBusy(true);
+    setUpdateFeedback(`Applying update ${updateStatus.latest_version}...`);
+    const payload = await applyManualUpdate(updateStatus.latest_version);
+    if (!payload) {
+      setUpdateFeedback('Unable to apply update.');
+      setUpdateApplyBusy(false);
+      return;
+    }
+    if (payload.status !== 'ok' || !payload.update_applied) {
+      setUpdateFeedback(payload.error || payload.block_reason || 'Update was not applied.');
+      setUpdateApplyBusy(false);
+      await refreshUpdateStatus(false);
+      return;
+    }
+    setUpdateFeedback(`Updated to ${payload.to_version}. Restart COMPaaS to load the new release.`);
+    setUpdateApplyBusy(false);
+    await refreshUpdateStatus(false);
+  }, [refreshUpdateStatus, updateApplyBusy, updateStatus]);
+
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    void refreshUpdateStatus(false);
+  }, [refreshUpdateStatus]);
 
   const runIntegrationOp = async (label: string, fn: () => Promise<unknown>) => {
     setIntegrationOpsBusy(true);
@@ -1490,7 +1534,6 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       if (cfg) {
         setConfig(cfg);
         setUserName(cfg.user?.name ?? '');
-        setPollInterval(cfg.ui?.poll_interval_ms ?? 5000);
         setAutoOpen(cfg.server?.auto_open_browser ?? true);
         const integrationCfg = integrationsFromConfig(cfg);
         setWorkspaceMode(integrationCfg.workspace_mode);
@@ -1550,7 +1593,7 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
 
     const patch: Partial<AppConfig> = {
       user: { name: userName.trim() },
-      ui: { theme: 'midnight', ...(config?.ui ?? {}), poll_interval_ms: pollInterval },
+      ui: { theme: 'midnight', ...(config?.ui ?? {}), poll_interval_ms: config?.ui?.poll_interval_ms ?? 5000 },
       server: { host: config?.server?.host ?? '', port: config?.server?.port ?? 3000, ...(config?.server ?? {}), auto_open_browser: autoOpen },
     };
 
@@ -1715,29 +1758,89 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
               />
             </div>
 
-            <div>
-              <label
-                style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: C.textSecondary, marginBottom: '6px' }}
-              >
-                Poll Interval
-              </label>
-              <FloatingSelect
-                value={String(pollInterval)}
-                options={POLL_INTERVAL_OPTIONS.map((opt) => ({ value: String(opt.value), label: opt.label }))}
-                onChange={(nextValue) => setPollInterval(Number(nextValue))}
-                ariaLabel="Poll interval"
-                variant="input"
-                size="md"
-                style={{ maxWidth: '200px' }}
-              />
-            </div>
-
             <Toggle
               value={autoOpen}
               onChange={setAutoOpen}
               label="Auto-open browser"
               description="Automatically open the dashboard when compaas-web starts"
             />
+          </div>
+        </Section>
+      )}
+
+      {activeTab === 'general' && (
+        <Section title="Update Center">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div
+              style={{
+                backgroundColor: C.surfaceRaised,
+                border: `1px solid ${C.border}`,
+                borderRadius: '8px',
+                padding: '12px',
+                display: 'grid',
+                gap: '6px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '12px' }}>
+                <span style={{ color: C.textSecondary }}>Channel</span>
+                <strong style={{ color: C.textPrimary }}>{updateStatus?.channel ?? 'release_tags'}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '12px' }}>
+                <span style={{ color: C.textSecondary }}>Current version</span>
+                <strong style={{ color: C.textPrimary }}>{updateStatus?.current_version || 'unknown'}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '12px' }}>
+                <span style={{ color: C.textSecondary }}>Latest version</span>
+                <strong style={{ color: C.textPrimary }}>{updateStatus?.latest_version || updateStatus?.current_version || 'unknown'}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '12px' }}>
+                <span style={{ color: C.textSecondary }}>Repository state</span>
+                <strong style={{ color: updateStatus?.dirty_repo ? C.warning : C.success }}>
+                  {updateStatus?.dirty_repo ? 'Dirty (blocked)' : 'Clean'}
+                </strong>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => { void refreshUpdateStatus(true); }}
+                disabled={updateStatusBusy || updateApplyBusy}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  border: `1px solid ${C.border}`,
+                  backgroundColor: C.surfaceRaised,
+                  color: C.textPrimary,
+                  cursor: (updateStatusBusy || updateApplyBusy) ? 'default' : 'pointer',
+                  opacity: (updateStatusBusy || updateApplyBusy) ? 0.7 : 1,
+                }}
+              >
+                {updateStatusBusy ? 'Checking…' : 'Check for updates'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { void handleApplyUpdate(); }}
+                disabled={updateStatusBusy || updateApplyBusy || !updateStatus?.can_update}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  border: `1px solid ${updateStatus?.can_update ? C.accent : C.border}`,
+                  backgroundColor: updateStatus?.can_update ? C.accentDim : C.surfaceRaised,
+                  color: updateStatus?.can_update ? C.accent : C.textMuted,
+                  cursor: (updateStatusBusy || updateApplyBusy || !updateStatus?.can_update) ? 'default' : 'pointer',
+                  opacity: (updateStatusBusy || updateApplyBusy || !updateStatus?.can_update) ? 0.7 : 1,
+                }}
+              >
+                {updateApplyBusy ? 'Updating…' : `Update to ${updateStatus?.latest_version || 'latest'}`}
+              </button>
+            </div>
+
+            {updateFeedback && (
+              <div style={{ fontSize: '12px', color: C.textSecondary }}>
+                {updateFeedback}
+              </div>
+            )}
           </div>
         </Section>
       )}

@@ -9,6 +9,8 @@ import type {
   FeatureFlags,
   PlanningPacketStatus,
   WorkforceLiveSnapshot,
+  UpdateApplyResponse,
+  UpdateStatusResponse,
 } from '../types';
 
 const BASE = '/api';
@@ -427,6 +429,65 @@ export async function fetchFeatureFlags(): Promise<FeatureFlags> {
 
 export async function updateFeatureFlags(flags: Partial<FeatureFlags>): Promise<boolean> {
   return safeMutate(`${V1}/feature-flags`, 'PATCH', flags);
+}
+
+export async function fetchUpdateStatus(): Promise<UpdateStatusResponse | null> {
+  const fallback: UpdateStatusResponse = {
+    status: 'error',
+    channel: 'release_tags',
+    current_version: '',
+    latest_version: '',
+    update_available: false,
+    dirty_repo: false,
+    can_update: false,
+    block_reason: 'Unable to fetch update status.',
+  };
+  const res = await safeFetch<UpdateStatusResponse>(`${V1}/update/status`, fallback);
+  return res;
+}
+
+export async function checkForUpdates(): Promise<UpdateStatusResponse | null> {
+  const fallback: UpdateStatusResponse = {
+    status: 'error',
+    channel: 'release_tags',
+    current_version: '',
+    latest_version: '',
+    update_available: false,
+    dirty_repo: false,
+    can_update: false,
+    block_reason: 'Unable to check updates.',
+  };
+  const res = await safeFetch<UpdateStatusResponse>(
+    `${V1}/update/check`,
+    fallback,
+    { method: 'POST' },
+  );
+  return res;
+}
+
+export async function applyManualUpdate(version = ''): Promise<UpdateApplyResponse | null> {
+  const fallback: UpdateApplyResponse = {
+    status: 'error',
+    channel: 'release_tags',
+    from_version: '',
+    to_version: '',
+    update_applied: false,
+    restart_required: false,
+    dirty_repo: false,
+    can_update: false,
+    block_reason: 'Unable to apply update.',
+    error: 'Unable to apply update.',
+  };
+  const res = await safeFetch<UpdateApplyResponse>(
+    `${V1}/update/apply`,
+    fallback,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version }),
+    },
+  );
+  return res;
 }
 
 export async function fetchGithubRepos(token: string): Promise<Array<{ full_name: string; default_branch: string }>> {

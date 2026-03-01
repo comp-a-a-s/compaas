@@ -1,0 +1,84 @@
+name: Release Tag
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  tag-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - name: Determine next release tag
+        id: semver
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import pathlib
+          import subprocess
+          import tomllib
+
+          def parse(tag: str):
+              match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", tag.strip())
+              if not match:
+                  return None
+              return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+          def fmt(version: tuple[int, int, int]) -> str:
+              return f"v{version[0]}.{version[1]}.{version[2]}"
+
+          all_tags = subprocess.check_output(
+              ["git", "tag", "--list", "v*.*.*"],
+              text=True,
+          ).splitlines()
+          versions = [parsed for tag in all_tags if (parsed := parse(tag))]
+
+          head_tags = subprocess.check_output(
+              ["git", "tag", "--points-at", "HEAD"],
+              text=True,
+          ).splitlines()
+          existing_head = next((tag.strip() for tag in head_tags if parse(tag)), "")
+
+          pyproject_path = pathlib.Path("pyproject.toml")
+          base_version = (0, 1, 0)
+          if pyproject_path.exists():
+              parsed = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+              pyproject_version = str(parsed.get("project", {}).get("version", "")).strip()
+              parsed_pyproject = parse(pyproject_version)
+              if parsed_pyproject:
+                  base_version = parsed_pyproject
+
+          top = max([base_version] + versions) if versions else base_version
+          next_version = (top[0], top[1], top[2] + 1)
+          next_tag = fmt(next_version)
+
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as handle:
+              if existing_head:
+                  handle.write("create_tag=false\n")
+                  handle.write(f"tag={existing_head}\n")
+              else:
+                  handle.write("create_tag=true\n")
+                  handle.write(f"tag={next_tag}\n")
+          PY
+
+      - name: Create and push tag
+        if: steps.semver.outputs.create_tag == 'true'
+        run: |
+          tag="${{ steps.semver.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "Release $tag"
+          git push origin "$tag"

@@ -662,7 +662,7 @@ def test_build_context_prompt_includes_completion_sections_guidance(monkeypatch)
 
     prompt = api._build_context_prompt("build a dashboard", user_name="Idan", ceo_name="Ari")
 
-    assert "'Outcome', 'Deliverables', 'Validation', and 'Next Steps'" in prompt
+    assert "'Outcome', 'Deliverables', 'Validation', 'Run Commands', 'Open Links', and 'Next Steps'" in prompt
 
 
 def test_structured_response_payload_extracts_deliverables_validation_and_next_actions():
@@ -679,6 +679,10 @@ def test_structured_response_payload_extracts_deliverables_validation_and_next_a
         - npm run build passed.
         - Smoke tests validated the chat flow.
 
+        ## Run Commands
+        - npm install
+        - npm run dev
+
         ## Next Steps
         1. Open [Handoff](/Users/idan/compaas/projects/cashtracker/artifacts/03_project_handoff.md)
         2. Verify production telemetry.
@@ -690,6 +694,10 @@ def test_structured_response_payload_extracts_deliverables_validation_and_next_a
     assert any(item["target"] == "https://cashtracker.example.com" and item["kind"] == "url" for item in payload["deliverables"])
     assert any("build passed" in item.lower() for item in payload["validation"])
     assert any("verify production telemetry" in item.lower() for item in payload["next_actions"])
+    assert any(cmd == "npm install" for cmd in payload["run_commands"])
+    assert any(cmd == "npm run dev" for cmd in payload["run_commands"])
+    assert any(link["target"] == "https://cashtracker.example.com" for link in payload["open_links"])
+    assert payload["completion_kind"] == "build_complete"
 
 
 def test_structured_response_payload_is_backward_compatible_for_empty_text():
@@ -700,6 +708,33 @@ def test_structured_response_payload_is_backward_compatible_for_empty_text():
     assert payload["next_actions"] == []
     assert payload["deliverables"] == []
     assert payload["validation"] == []
+    assert payload["run_commands"] == []
+    assert payload["open_links"] == []
+    assert payload["completion_kind"] == "general"
+
+
+def test_merge_structured_completion_with_project_includes_run_hints():
+    merged = api._merge_structured_completion_with_project(
+        {
+            "summary": "Build complete.",
+            "deliverables": [],
+            "validation": [],
+            "next_actions": [],
+            "run_commands": ["npm run build"],
+            "open_links": [{"label": "Preview", "target": "https://app.example.com", "kind": "url"}],
+            "completion_kind": "general",
+        },
+        {
+            "workspace_path": "/Users/idan/compaas/projects/cashtracker-b82e75d5",
+            "run_instructions": "npm ci\nnpm run dev\nOpen http://localhost:5173",
+            "github_repo": "comp-a-a-s/compaas",
+        },
+    )
+    assert "npm run dev" in merged["run_commands"]
+    assert any(item["target"] == "http://localhost:5173" for item in merged["open_links"])
+    assert any(item["target"] == "/Users/idan/compaas/projects/cashtracker-b82e75d5" for item in merged["open_links"])
+    assert any(item["target"] == "https://github.com/comp-a-a-s/compaas" for item in merged["open_links"])
+    assert merged["completion_kind"] == "build_complete"
 
 
 def test_apply_agent_name_overrides_replaces_agent_names():

@@ -510,6 +510,26 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.chat-summary-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-summary-copy-btn {
+  border: 1px solid var(--tf-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tf-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 1px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* ---- Split chat panel motion ---- */
 @keyframes split-panel-open {
   from {
