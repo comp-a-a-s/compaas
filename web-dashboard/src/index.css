@@ -618,6 +618,11 @@ textarea:focus-visible {
   min-width: 190px;
 }
 
+.header-project-context:focus-within {
+  border-color: var(--tf-accent-blue) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tf-accent-blue) 42%, transparent);
+}
+
 .header-global-search {
   flex: 0 1 clamp(210px, 24vw, 340px);
 }
@@ -650,6 +655,20 @@ textarea:focus-visible {
 .floating-select-trigger-pill {
   border-radius: 999px;
   background-color: var(--tf-surface);
+}
+
+.header-project-context .floating-select-trigger {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.header-project-context .floating-select-trigger-sm {
+  padding: 4px 0;
+}
+
+.header-project-context .floating-select-trigger:hover {
+  border-color: transparent;
 }
 
 .floating-select-trigger-input {

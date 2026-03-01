@@ -3121,6 +3121,21 @@ def _is_safe_auto_launch_command(command: str) -> bool:
 
 
 def _extract_preferred_open_url(structured: dict[str, Any], project: dict[str, Any] | None = None) -> str:
+    def _sanitize_url_candidate(raw_target: str) -> str:
+        value = str(raw_target or "").strip()
+        if not value:
+            return ""
+        # Accept noisy labels like "Open app: http://localhost:5173**"
+        # and normalize trailing markdown punctuation.
+        match = re.search(r"https?://[^\s)\]>]+", value, flags=re.IGNORECASE)
+        candidate = match.group(0) if match else value
+        candidate = candidate.strip().strip("'\"`")
+        candidate = re.sub(r"[*_~`]+$", "", candidate)
+        candidate = candidate.rstrip(".,);!?]>")
+        if not re.match(r"^https?://", candidate, flags=re.IGNORECASE):
+            return ""
+        return candidate
+
     links: list[str] = []
     for key in ("open_links", "deliverables"):
         value = structured.get(key)
@@ -3129,8 +3144,8 @@ def _extract_preferred_open_url(structured: dict[str, Any], project: dict[str, A
         for row in value:
             if not isinstance(row, dict):
                 continue
-            target = str(row.get("target", "") or "").strip()
-            if re.match(r"^https?://", target, flags=re.IGNORECASE):
+            target = _sanitize_url_candidate(str(row.get("target", "") or ""))
+            if target:
                 links.append(target)
     for target in links:
         parsed = urllib.parse.urlparse(target)
@@ -3141,20 +3156,53 @@ def _extract_preferred_open_url(structured: dict[str, Any], project: dict[str, A
         return links[0]
 
     run_notes = str((project or {}).get("run_instructions", "") or "")
-    match = re.search(r"https?://[^\s)>\]]+", run_notes)
-    return match.group(0) if match else ""
+    match = re.search(r"https?://[^\s)\]>]+", run_notes)
+    return _sanitize_url_candidate(match.group(0)) if match else ""
 
 
-def _resolve_autostart_command(structured: dict[str, Any], project: dict[str, Any] | None = None) -> str:
+def _resolve_autostart_command(
+    structured: dict[str, Any],
+    project: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    workspace_path = str((project or {}).get("workspace_path", "") or "").strip()
+    workspace_realpath = os.path.realpath(workspace_path) if workspace_path else ""
+    active_cwd = workspace_realpath if workspace_realpath and os.path.isdir(workspace_realpath) else workspace_path
+
+    def _resolve_cd_target(raw_command: str, current_cwd: str) -> str:
+        try:
+            parts = shlex.split(raw_command)
+        except ValueError:
+            return current_cwd
+        if len(parts) < 2 or parts[0].lower() != "cd":
+            return current_cwd
+        target = str(parts[1] or "").strip()
+        if not target:
+            return current_cwd
+        if os.path.isabs(target):
+            candidate = os.path.realpath(target)
+        else:
+            base = current_cwd or workspace_realpath or workspace_path
+            candidate = os.path.realpath(os.path.join(base, target))
+        if not os.path.isdir(candidate):
+            return current_cwd
+        if workspace_realpath:
+            prefix = f"{workspace_realpath}{os.sep}"
+            if candidate != workspace_realpath and not candidate.startswith(prefix):
+                return current_cwd
+        return candidate
+
     primary_commands = _normalize_unique_strings(structured.get("run_commands"), limit=16)
     if not primary_commands:
         parsed = _structured_response_payload(str((project or {}).get("run_instructions", "") or ""))
         primary_commands = _normalize_unique_strings(parsed.get("run_commands"), limit=16)
 
     for command in primary_commands:
+        if command.strip().lower().startswith("cd "):
+            active_cwd = _resolve_cd_target(command.strip(), active_cwd)
+            continue
         if _looks_like_launch_command(command):
-            return command
-    return ""
+            return command, active_cwd
+    return "", active_cwd
 
 
 def _attempt_local_project_autostart(
@@ -3176,7 +3224,7 @@ def _attempt_local_project_autostart(
     if str(structured.get("completion_kind", "general") or "general").strip().lower() != "build_complete":
         return result
 
-    command = _resolve_autostart_command(structured, project)
+    command, command_cwd = _resolve_autostart_command(structured, project)
     if not command:
         return result
 
@@ -3192,6 +3240,8 @@ def _attempt_local_project_autostart(
         result["message"] = "Auto-start skipped because workspace path is unavailable."
         return result
 
+    runtime_cwd = command_cwd if command_cwd and os.path.isdir(command_cwd) else workspace_path
+
     try:
         argv = shlex.split(command)
         if not argv:
@@ -3199,7 +3249,7 @@ def _attempt_local_project_autostart(
             return result
         subprocess.Popen(  # noqa: S603
             argv,
-            cwd=workspace_path,
+            cwd=runtime_cwd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -3212,9 +3262,9 @@ def _attempt_local_project_autostart(
         _emit_chat_activity(
             "ceo",
             "STARTED",
-            f"Auto-start command executed: {command[:160]}",
+            f"Auto-start command executed: {command[:160]} (cwd: {runtime_cwd[:160]})",
             project_id=str(project.get("id", "") or ""),
-            metadata={"run_id": run_id, "workspace_path": workspace_path, "auto_launch": True},
+            metadata={"run_id": run_id, "workspace_path": workspace_path, "runtime_cwd": runtime_cwd, "auto_launch": True},
         )
     except Exception as exc:
         result["message"] = f"Auto-start failed: {str(exc)[:180]}"
@@ -4599,6 +4649,8 @@ async def _handle_ceo_claude(
         full_response: str | None = None
         assert process.stdout is not None
         idle_ticks = 0  # how many 30-s timeouts in a row
+        max_idle_seconds = int(llm_cfg.get("claude_idle_timeout_seconds", 240) or 240)
+        max_idle_seconds = max(90, min(1800, max_idle_seconds))
 
         while True:
             if run_id:
@@ -4617,17 +4669,50 @@ async def _handle_ceo_claude(
                 raw = await asyncio.wait_for(process.stdout.readline(), timeout=30.0)
             except asyncio.TimeoutError:
                 idle_ticks += 1
+                idle_seconds = idle_ticks * 30
                 await websocket.send_json({
                     "type": "thinking",
-                    "content": f"{ceo_name} is working… ({idle_ticks * 30}s)",
+                    "content": f"{ceo_name} is working… ({idle_seconds}s)",
                 })
                 _emit_chat_activity(
                     "ceo",
                     "UPDATED",
-                    f"Claude runtime still processing ({idle_ticks * 30}s)",
+                    f"Claude runtime still processing ({idle_seconds}s)",
                     project_id=project_id,
                     metadata=runtime_metadata,
                 )
+                if process.returncode is None and idle_seconds >= max_idle_seconds:
+                    notice = (
+                        f"{ceo_name} is still running after {idle_seconds}s with no new output. "
+                        "Finalizing this turn to avoid a stuck chat. You can ask for a status check next."
+                    )
+                    await websocket.send_json({
+                        "type": "warning",
+                        "content": notice,
+                    })
+                    _emit_chat_activity(
+                        "ceo",
+                        "WARNING",
+                        f"Claude idle timeout guardrail triggered at {idle_seconds}s.",
+                        project_id=project_id,
+                        metadata={"idle_seconds": idle_seconds, **runtime_metadata},
+                    )
+                    partial = "".join(response_parts).strip()
+                    if partial:
+                        full_response = f"{partial}\n\n[Notice] {notice}"
+                        try:
+                            process.kill()
+                        except ProcessLookupError:
+                            pass
+                        break
+                    await websocket.send_json({"type": "error", "content": notice})
+                    if run_id:
+                        _transition_run_state(
+                            run_id,
+                            state="failed",
+                            label=f"Claude idle timeout after {idle_seconds}s",
+                        )
+                    return None
                 if process.returncode is not None:
                     break
                 continue

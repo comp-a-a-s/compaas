@@ -36,6 +36,14 @@ function formatTime(ts: string): string {
   }
 }
 
+function formatElapsedCompact(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const rem = safe % 60;
+  if (minutes <= 0) return `${rem}s`;
+  return `${minutes}m ${String(rem).padStart(2, '0')}s`;
+}
+
 function msgKey(msg: ChatMessage): string {
   return `${msg.timestamp}|${msg.role}`;
 }
@@ -1186,6 +1194,7 @@ export default function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isWaiting, setIsWaiting] = useState(false);
+  const [waitElapsedSec, setWaitElapsedSec] = useState(0);
   const [streamingContent, setStreamingContent] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const showThinking = true;
@@ -1251,6 +1260,7 @@ export default function ChatPanel({
   const lastOutboundMessageRef = useRef('');
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const telegramMirrorEnabledRef = useRef(telegramMirrorEnabled);
+  const waitStartedAtRef = useRef<number | null>(null);
 
   const focusInput = useCallback(() => {
     requestAnimationFrame(() => {
@@ -1278,6 +1288,22 @@ export default function ChatPanel({
   useEffect(() => { onProjectDataRefreshRef.current = onProjectDataRefresh; }, [onProjectDataRefresh]);
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
+
+  useEffect(() => {
+    if (!isWaiting) {
+      waitStartedAtRef.current = null;
+      setWaitElapsedSec(0);
+      return;
+    }
+    const startedAt = Date.now();
+    waitStartedAtRef.current = startedAt;
+    setWaitElapsedSec(0);
+    const timer = setInterval(() => {
+      const anchor = waitStartedAtRef.current || startedAt;
+      setWaitElapsedSec(Math.max(0, Math.floor((Date.now() - anchor) / 1000)));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isWaiting]);
 
   // Telegram incoming message polling
   useEffect(() => {
@@ -2558,6 +2584,33 @@ export default function ChatPanel({
             })}
 
             {/* Live CEO response */}
+            {isWaiting && (
+              <div
+                className="mb-3 rounded-xl px-3 py-2 animate-slide-up"
+                style={{
+                  backgroundColor: 'var(--tf-surface)',
+                  border: '1px solid var(--tf-border)',
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-2 h-2 rounded-full animate-pulse-dot"
+                    style={{ backgroundColor: 'var(--tf-accent)' }}
+                  />
+                  <p className="text-xs font-semibold" style={{ color: 'var(--tf-text-secondary)' }}>
+                    Run in progress • {formatElapsedCompact(waitElapsedSec)}
+                  </p>
+                </div>
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                  {ceoName} is still working. This card will stay active until the run finishes.
+                </p>
+                {waitElapsedSec >= 180 && (
+                  <p className="text-xs mt-1" style={{ color: 'var(--tf-warning)' }}>
+                    Long run detected. If this does not complete soon, send a status check message.
+                  </p>
+                )}
+              </div>
+            )}
             {isWaiting && showThinking && thinkingContent && (
               <div style={{ padding: '8px 12px', backgroundColor: 'var(--tf-bg)', borderRadius: '8px', marginBottom: '4px', borderLeft: '2px solid var(--tf-border)', marginLeft: '40px' }}>
                 <p style={{ color: 'var(--tf-text-muted)', fontSize: '11px', fontStyle: 'italic' }}>{thinkingContent}</p>

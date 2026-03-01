@@ -1056,6 +1056,58 @@ def test_attempt_local_project_autostart_runs_safe_command(monkeypatch, tmp_path
     assert captured["cwd"] == str(workspace)
 
 
+def test_attempt_local_project_autostart_honors_cd_command_and_sanitizes_open_url(monkeypatch, tmp_path):
+    workspace = tmp_path / "project-root"
+    nested = workspace / "todo-app"
+    nested.mkdir(parents=True)
+    captured: dict = {}
+
+    class _Proc:
+        pass
+
+    def _fake_popen(argv, cwd=None, stdout=None, stderr=None, start_new_session=None):  # type: ignore[no-untyped-def]
+        captured["argv"] = argv
+        captured["cwd"] = cwd
+        captured["start_new_session"] = start_new_session
+        return _Proc()
+
+    monkeypatch.setattr(api.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(api, "_emit_chat_activity", lambda *args, **kwargs: None)
+
+    result = api._attempt_local_project_autostart(
+        project={
+            "id": "abcd1234",
+            "delivery_mode": "local",
+            "workspace_path": str(workspace),
+        },
+        structured={
+            "completion_kind": "build_complete",
+            "run_commands": [f"cd {nested}", "npm run dev"],
+            "open_links": [{"label": "Open app", "target": "Open app: http://localhost:5173**", "kind": "url"}],
+        },
+        run_id="run-local-2",
+    )
+
+    assert result["attempted"] is True
+    assert result["started"] is True
+    assert result["command"] == "npm run dev"
+    assert result["open_url"] == "http://localhost:5173"
+    assert captured["argv"] == ["npm", "run", "dev"]
+    assert captured["cwd"] == str(nested)
+
+
+def test_extract_preferred_open_url_sanitizes_markdown_noise():
+    url = api._extract_preferred_open_url(
+        {
+            "open_links": [
+                {"label": "Open app", "target": "Open app: http://localhost:5173**", "kind": "url"},
+            ],
+        },
+        project={},
+    )
+    assert url == "http://localhost:5173"
+
+
 def test_attempt_local_project_autostart_blocks_unsafe_command(monkeypatch, tmp_path):
     workspace = tmp_path / "autostart-app-unsafe"
     workspace.mkdir()
