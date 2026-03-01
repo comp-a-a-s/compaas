@@ -530,6 +530,55 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
+.chat-auto-launch-card {
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--tf-accent-blue) 25%, var(--tf-border));
+  background-color: color-mix(in srgb, var(--tf-bg) 72%, var(--tf-surface-raised));
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.chat-auto-launch-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tf-text-secondary);
+}
+
+.chat-auto-launch-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.chat-auto-launch-dot-ok {
+  background-color: var(--tf-success);
+}
+
+.chat-auto-launch-dot-fail {
+  background-color: var(--tf-warning);
+}
+
+.chat-auto-launch-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-auto-launch-message {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--tf-text-muted);
+  overflow-wrap: anywhere;
+}
+
 /* ---- Split chat panel motion ---- */
 @keyframes split-panel-open {
   from {

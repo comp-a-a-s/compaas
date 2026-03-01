@@ -8,6 +8,7 @@ import logging
 import os
 import json
 import re
+import shlex
 import shutil
 import asyncio
 import copy
@@ -2029,6 +2030,7 @@ def _build_context_prompt(
         "Do not re-introduce yourself every turn (avoid phrases like '<CEO> here'). "
         "Keep one clear final response per turn, and avoid narrating every intermediate step in prose. "
         "For build requests, delegate to your specialist team via the Task tool and report their progress. "
+        "For product and UI work, involve the designer by default and ensure design choices match user purpose, audience, and workflow (avoid generic boilerplate output). "
         "When implementation work is completed, structure the final update using short sections in this order: "
         "'Outcome', 'Deliverables', 'Validation', 'Run Commands', 'Open Links', and 'Next Steps'. "
         "Include concrete commands and openable targets whenever available."
@@ -2702,6 +2704,323 @@ def _merge_structured_completion_with_project(
     return payload
 
 
+def _normalize_unique_strings(values: Any, *, limit: int = 12) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw_item in values:
+        item = str(raw_item or "").strip()
+        key = re.sub(r"\s+", " ", item).lower()
+        if not item or key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _is_ui_execution_turn(message: str) -> bool:
+    text = (message or "").lower()
+    ui_markers = (
+        "app",
+        "ui",
+        "ux",
+        "frontend",
+        "dashboard",
+        "landing page",
+        "website",
+        "mobile",
+        "screen",
+    )
+    return any(marker in text for marker in ui_markers)
+
+
+def _is_backend_or_infra_only_turn(message: str) -> bool:
+    text = (message or "").lower()
+    if not text:
+        return False
+    ui_markers = (
+        "ui",
+        "ux",
+        "frontend",
+        "design",
+        "dashboard",
+        "page",
+        "layout",
+        "theme",
+    )
+    backend_markers = (
+        "backend",
+        "api",
+        "database",
+        "schema",
+        "migration",
+        "infra",
+        "devops",
+        "kubernetes",
+        "terraform",
+        "pipeline",
+        "ci/cd",
+        "server",
+        "service",
+    )
+    has_ui = any(marker in text for marker in ui_markers)
+    has_backend = any(marker in text for marker in backend_markers)
+    return has_backend and not has_ui
+
+
+def _build_project_team_snapshot(
+    project_id: str,
+    *,
+    project: dict[str, Any] | None,
+    support_agents: list[str],
+    structured: dict[str, Any],
+    config: dict[str, Any],
+) -> list[str]:
+    existing_team = [
+        str(member).strip()
+        for member in list((project or {}).get("team") or [])
+        if str(member).strip()
+    ]
+    inferred_team = list(existing_team)
+    inferred_team.append(_configured_agent_name("ceo", config))
+
+    for agent_id in support_agents:
+        if agent_id in AGENT_REGISTRY:
+            inferred_team.append(_configured_agent_name(agent_id, config))
+
+    delegations = structured.get("delegations")
+    if isinstance(delegations, list):
+        for row in delegations:
+            if not isinstance(row, dict):
+                continue
+            agent_name = str(row.get("agent", "") or "").strip()
+            if not agent_name or agent_name.lower() == "team":
+                continue
+            inferred_team.append(agent_name)
+
+    for task in task_board.get_board(project_id):
+        assignee = str(task.get("assigned_to", "") or "").strip()
+        if assignee:
+            inferred_team.append(assignee)
+
+    return _ordered_unique(inferred_team)
+
+
+def _sync_project_completion_snapshot(
+    project_id: str,
+    *,
+    project: dict[str, Any] | None,
+    structured: dict[str, Any],
+    support_agents: list[str],
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not project_id:
+        return project
+    current = project or state_manager.get_project(project_id)
+    if not isinstance(current, dict):
+        return project
+
+    updates: dict[str, Any] = {}
+
+    summary = str(structured.get("summary", "") or "").strip()
+    if summary and summary != str(current.get("description", "") or "").strip():
+        updates["description"] = summary
+
+    run_commands = _normalize_unique_strings(structured.get("run_commands"), limit=16)
+    if run_commands:
+        run_instructions = "\n".join(run_commands)
+        if run_instructions != str(current.get("run_instructions", "") or "").strip():
+            updates["run_instructions"] = run_instructions
+
+    team_snapshot = _build_project_team_snapshot(
+        project_id,
+        project=current,
+        support_agents=support_agents,
+        structured=structured,
+        config=config,
+    )
+    if team_snapshot and team_snapshot != [str(member).strip() for member in list(current.get("team") or []) if str(member).strip()]:
+        updates["team"] = team_snapshot
+
+    if not updates:
+        return current
+
+    updated = state_manager.update_project(project_id, updates)
+    if updated:
+        _emit_chat_activity(
+            "ceo",
+            "UPDATED",
+            "Project summary synchronized from completion output.",
+            project_id=project_id,
+            metadata={"fields": sorted(updates.keys())},
+        )
+        return state_manager.get_project(project_id) or current
+    return current
+
+
+def _looks_like_launch_command(command: str) -> bool:
+    lower = command.strip().lower()
+    if not lower:
+        return False
+    hints = (
+        "npm run dev",
+        "npm start",
+        "npm run start",
+        "npm run preview",
+        "pnpm dev",
+        "pnpm start",
+        "yarn dev",
+        "yarn start",
+        "bun run dev",
+        "bun start",
+        "uvicorn ",
+        "flask run",
+        "streamlit run",
+        "next dev",
+        "vite",
+        "serve",
+        "make run",
+        "make dev",
+        "docker compose up",
+    )
+    return any(hint in lower for hint in hints)
+
+
+def _is_safe_auto_launch_command(command: str) -> bool:
+    value = str(command or "").strip()
+    if not value:
+        return False
+    blocked_tokens = ("&&", "||", ";", "|", "`", "$(", "\n", "\r", ">", "<")
+    if any(token in value for token in blocked_tokens):
+        return False
+    try:
+        parts = shlex.split(value)
+    except ValueError:
+        return False
+    if not parts:
+        return False
+    binary = parts[0].lower()
+
+    if binary in {"npm", "pnpm", "yarn", "bun"}:
+        return any(token in {"dev", "start", "preview"} for token in [part.lower() for part in parts[1:]])
+    if binary in {"uvicorn"}:
+        return True
+    if binary == "flask":
+        return len(parts) > 1 and parts[1].lower() == "run"
+    if binary == "streamlit":
+        return len(parts) > 1 and parts[1].lower() == "run"
+    if binary == "make":
+        return len(parts) > 1 and parts[1].lower() in {"run", "dev", "start", "serve"}
+    if binary in {"python", "python3"}:
+        blocked_args = {"-c", "-m"}
+        return len(parts) > 1 and parts[1] not in blocked_args
+    return False
+
+
+def _extract_preferred_open_url(structured: dict[str, Any], project: dict[str, Any] | None = None) -> str:
+    links: list[str] = []
+    for key in ("open_links", "deliverables"):
+        value = structured.get(key)
+        if not isinstance(value, list):
+            continue
+        for row in value:
+            if not isinstance(row, dict):
+                continue
+            target = str(row.get("target", "") or "").strip()
+            if re.match(r"^https?://", target, flags=re.IGNORECASE):
+                links.append(target)
+    for target in links:
+        parsed = urllib.parse.urlparse(target)
+        host = (parsed.hostname or "").lower()
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return target
+    if links:
+        return links[0]
+
+    run_notes = str((project or {}).get("run_instructions", "") or "")
+    match = re.search(r"https?://[^\s)>\]]+", run_notes)
+    return match.group(0) if match else ""
+
+
+def _resolve_autostart_command(structured: dict[str, Any], project: dict[str, Any] | None = None) -> str:
+    primary_commands = _normalize_unique_strings(structured.get("run_commands"), limit=16)
+    if not primary_commands:
+        parsed = _structured_response_payload(str((project or {}).get("run_instructions", "") or ""))
+        primary_commands = _normalize_unique_strings(parsed.get("run_commands"), limit=16)
+
+    for command in primary_commands:
+        if _looks_like_launch_command(command):
+            return command
+    return ""
+
+
+def _attempt_local_project_autostart(
+    *,
+    project: dict[str, Any] | None,
+    structured: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "attempted": False,
+        "started": False,
+        "command": "",
+        "message": "",
+    }
+    if not isinstance(project, dict):
+        return result
+    if str(project.get("delivery_mode", "local") or "local").strip().lower() != "local":
+        return result
+    if str(structured.get("completion_kind", "general") or "general").strip().lower() != "build_complete":
+        return result
+
+    command = _resolve_autostart_command(structured, project)
+    if not command:
+        return result
+
+    result["attempted"] = True
+    result["command"] = command
+
+    if not _is_safe_auto_launch_command(command):
+        result["message"] = "Auto-start command was blocked by safety rules."
+        return result
+
+    workspace_path = str(project.get("workspace_path", "") or "").strip()
+    if not workspace_path or not os.path.isdir(workspace_path):
+        result["message"] = "Auto-start skipped because workspace path is unavailable."
+        return result
+
+    try:
+        argv = shlex.split(command)
+        if not argv:
+            result["message"] = "Auto-start skipped because no command arguments were parsed."
+            return result
+        subprocess.Popen(  # noqa: S603
+            argv,
+            cwd=workspace_path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        result["started"] = True
+        open_url = _extract_preferred_open_url(structured, project)
+        if open_url:
+            result["open_url"] = open_url
+        result["message"] = "App start command executed."
+        _emit_chat_activity(
+            "ceo",
+            "STARTED",
+            f"Auto-start command executed: {command[:160]}",
+            project_id=str(project.get("id", "") or ""),
+            metadata={"run_id": run_id, "workspace_path": workspace_path, "auto_launch": True},
+        )
+    except Exception as exc:
+        result["message"] = f"Auto-start failed: {str(exc)[:180]}"
+    return result
+
+
 def _lightweight_ceo_response(
     *,
     intent: dict[str, Any],
@@ -3058,7 +3377,7 @@ _SUPPORT_AGENT_TASKS: dict[str, str] = {
     "vp-engineering": "Break implementation into concrete engineering workstreams.",
     "lead-frontend": "Implement user-facing UI flow and interaction logic.",
     "lead-backend": "Implement server/data logic and integration endpoints.",
-    "lead-designer": "Refine UX copy, layout clarity, and interaction polish.",
+    "lead-designer": "Shape purpose-driven UX direction, visual hierarchy, and interaction patterns tied to user workflow.",
     "qa-lead": "Define validation checks and run functional regression pass.",
     "devops": "Prepare local run instructions and deployment path.",
     "security-engineer": "Review security-sensitive surfaces and constraints.",
@@ -3073,7 +3392,7 @@ _DELEGATION_ROLE_REASONS: dict[str, str] = {
     "vp-engineering": "Break work into implementation streams and assign execution ownership.",
     "lead-frontend": "Own user-facing flow and frontend implementation details.",
     "lead-backend": "Own backend APIs, service logic, and integration contracts.",
-    "lead-designer": "Refine UX clarity, interaction patterns, and visual hierarchy.",
+    "lead-designer": "Ensure the UI direction is purpose-driven for target users, with clear interaction patterns and strong visual hierarchy.",
     "qa-lead": "Drive validation strategy, regression coverage, and acceptance confidence.",
     "devops": "Prepare release path, environments, and operational reliability checks.",
     "security-engineer": "Review security-sensitive surfaces and permission boundaries.",
@@ -3260,6 +3579,10 @@ def _infer_support_agents(
             if strategy == "balanced":
                 inferred.append("qa-lead")
                 inferred.append("tech-writer")
+        # Purpose-driven product builds should include design leadership by default,
+        # except when request scope is explicitly backend/infra-only.
+        if _is_ui_execution_turn(user_message) and not _is_backend_or_infra_only_turn(user_message):
+            inferred.append("lead-designer")
     elif intent_class != "planning":
         inferred.extend(keyword_inferred)
 
@@ -5823,9 +6146,30 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 "intent_class": intent_class,
                 "planning_packet_status": plan_packet_status,
             }
+            structured_payload: dict[str, Any] | None = None
             if structured_enabled:
                 base_structured = _structured_response_payload(full_response or "")
-                done_payload["structured"] = _merge_structured_completion_with_project(base_structured, active_project)
+                structured_payload = _merge_structured_completion_with_project(base_structured, active_project)
+                if active_project_id and full_response:
+                    synced_project = _sync_project_completion_snapshot(
+                        active_project_id,
+                        project=active_project,
+                        structured=structured_payload,
+                        support_agents=support_agents,
+                        config=config,
+                    )
+                    if isinstance(synced_project, dict):
+                        active_project = synced_project
+                        structured_payload = _merge_structured_completion_with_project(structured_payload, active_project)
+                done_payload["structured"] = structured_payload
+                if active_project_id and structured_payload:
+                    auto_launch = _attempt_local_project_autostart(
+                        project=active_project,
+                        structured=structured_payload,
+                        run_id=run_id,
+                    )
+                    if bool(auto_launch.get("attempted")):
+                        done_payload["auto_launch"] = auto_launch
             if deploy_offer:
                 done_payload["deploy_offer"] = deploy_offer
             await websocket.send_json(done_payload)

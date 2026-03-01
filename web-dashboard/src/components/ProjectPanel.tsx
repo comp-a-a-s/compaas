@@ -156,10 +156,10 @@ function statusIcon(status: string): string {
   if (s === 'blocked')   return '\u2716'; // x
   return '\u25CB'; // open circle
 }
+void statusIcon; // kept for potential future use
 
 function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) {
   const accent = statusAccent(project.status);
-  const sbadge = statusBadge(project.status);
 
   const teamNames = project.team ?? [];
 
@@ -201,20 +201,13 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
 
         <div className="flex-1 p-3.5 flex flex-col gap-2 min-w-0">
           {/* Row 1: Name + status */}
-          <div className="flex items-center justify-between gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
             <h3
               className="text-sm font-semibold truncate"
               style={{ color: 'var(--tf-text)', lineHeight: '1.3' }}
             >
               {project.name}
             </h3>
-            <span
-              className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 flex items-center gap-1"
-              style={{ backgroundColor: sbadge.bg, color: sbadge.text, fontSize: '10px', letterSpacing: '0.02em' }}
-            >
-              <span style={{ fontSize: '7px', lineHeight: 1 }}>{statusIcon(project.status)}</span>
-              {project.status.charAt(0).toUpperCase() + project.status.slice(1)}
-            </span>
           </div>
 
           {/* Description */}
@@ -490,6 +483,7 @@ function KanbanBoard({ tasks }: KanbanProps) {
     </div>
   );
 }
+void KanbanBoard; // retained for potential future expansion
 
 // ---- Task templates panel ----
 interface TemplatesPanelProps {
@@ -760,6 +754,7 @@ function PlanTab({ project, onApproved }: PlanTabProps) {
     </div>
   );
 }
+void PlanTab; // retained for potential future expansion
 
 // ---- Discussions tab (decisions grouped as meeting sessions) ----
 interface DiscussionsTabProps {
@@ -898,6 +893,7 @@ function DiscussionsTab({ projectId }: DiscussionsTabProps) {
     </div>
   );
 }
+void DiscussionsTab; // retained for potential future expansion
 
 // ---- Overview tab (project summary, team, stats, how-to-run) ----
 interface OverviewTabProps {
@@ -1075,6 +1071,7 @@ function OverviewTab({ project, tasks }: OverviewTabProps) {
     </div>
   );
 }
+void OverviewTab; // retained for potential future expansion
 
 // ---- Milestones tab (available for future use) ----
 interface MilestonesTabProps {
@@ -1515,24 +1512,44 @@ interface ProjectDetailProps {
   onApproved?: () => void;
 }
 function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: ProjectDetailProps) {
-  const [activeTab, setActiveTab] = useState<ProjectTab>(initialTab ?? 'overview');
-  const [localProject, setLocalProject] = useState(project);
-  const sbadge = statusBadge(localProject.status);
+  void initialTab;
+  void onApproved;
+  const teamMembers = useMemo(() => {
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    for (const member of project.team ?? []) {
+      const name = String(member || '').trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      ordered.push(name);
+    }
+    for (const task of tasks) {
+      const assignee = String(task.assigned_to || '').trim();
+      if (!assignee || seen.has(assignee)) continue;
+      seen.add(assignee);
+      ordered.push(assignee);
+    }
+    return ordered;
+  }, [project.team, tasks]);
 
-  useEffect(() => {
-    setLocalProject(project);
-  }, [project]);
+  const tasksByAssignee = useMemo(() => {
+    const grouped: Record<string, string[]> = {};
+    for (const task of tasks) {
+      const assignee = String(task.assigned_to || '').trim();
+      const title = String(task.title || '').trim();
+      if (!assignee || !title) continue;
+      if (!grouped[assignee]) grouped[assignee] = [];
+      if (!grouped[assignee].includes(title)) grouped[assignee].push(title);
+    }
+    return grouped;
+  }, [tasks]);
 
-  useEffect(() => {
-    if (initialTab) setActiveTab(initialTab);
-  }, [initialTab]);
-
-  const tabs: { id: ProjectTab; label: string }[] = [
-    { id: 'overview',    label: 'Overview' },
-    { id: 'tasks',       label: 'Tasks' },
-    { id: 'plan',        label: 'Plan' },
-    { id: 'discussions', label: 'Discussions' },
-  ];
+  const runCommands = useMemo(() => (
+    String(project.run_instructions || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+  ), [project.run_instructions]);
 
   return (
     <div
@@ -1548,19 +1565,7 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
           <h3 className="text-sm font-bold truncate" style={{ color: 'var(--tf-text)' }}>
             {project.name}
           </h3>
-          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-            <span
-              className="text-xs px-2 py-0.5 rounded-full font-medium"
-              style={{ backgroundColor: sbadge.bg, color: sbadge.text }}
-            >
-              {project.status}
-            </span>
-            {project.type && (
-              <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
-                {project.type}
-              </span>
-            )}
-          </div>
+          <p className="text-xs mt-1.5" style={{ color: 'var(--tf-text-muted)' }}>{project.status}</p>
         </div>
         <button
           onClick={onClose}
@@ -1580,52 +1585,103 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
         </button>
       </div>
 
-      {/* Tabs */}
-      <div
-        className="flex gap-1 px-4 pt-3 flex-shrink-0"
-        style={{ borderBottom: '1px solid var(--tf-surface-raised)' }}
-        role="tablist"
-      >
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className="px-3 py-1.5 text-xs font-medium rounded-t-lg transition-all duration-200 cursor-pointer"
-            style={{
-              color: activeTab === tab.id ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
-              borderBottom: activeTab === tab.id ? '2px solid var(--tf-accent-blue)' : '2px solid transparent',
-              backgroundColor: 'transparent',
-              outline: 'none',
-            }}
-            onMouseEnter={(e) => {
-              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-secondary)';
-            }}
-            onMouseLeave={(e) => {
-              if (activeTab !== tab.id) (e.currentTarget as HTMLButtonElement).style.color = 'var(--tf-text-muted)';
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-5">
+        <section>
+          <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+            Project Description
+          </p>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
+            {project.description || 'No description yet. Ask the CEO for a completion summary.'}
+          </p>
+        </section>
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-y-auto p-4" role="tabpanel">
-        {activeTab === 'overview' && <OverviewTab project={localProject} tasks={tasks} />}
-        {activeTab === 'tasks'    && <KanbanBoard tasks={tasks} />}
-        {activeTab === 'plan' && (
-          <PlanTab
-            key={localProject.id}
-            project={localProject}
-            onApproved={() => {
-              setLocalProject((p) => ({ ...p, plan_approved: true, status: 'active' }));
-              onApproved?.();
-            }}
-          />
-        )}
-        {activeTab === 'discussions' && <DiscussionsTab projectId={project.id} />}
+        <section>
+          <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+            Team + High-Level Tasks
+          </p>
+          {teamMembers.length === 0 ? (
+            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+              No team members yet.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {teamMembers.map((member, idx) => {
+                const memberTasks = (tasksByAssignee[member] || []).slice(0, 3);
+                return (
+                  <div
+                    key={`${member}-${idx}`}
+                    className="rounded-lg px-3 py-2"
+                    style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}
+                  >
+                    <p className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>{resolveTeamName(member)}</p>
+                    {memberTasks.length > 0 ? (
+                      <ul className="mt-1 space-y-1">
+                        {memberTasks.map((taskTitle) => (
+                          <li key={`${member}-${taskTitle}`} className="text-xs" style={{ color: 'var(--tf-text-secondary)' }}>
+                            • {taskTitle}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
+                        No high-level tasks assigned yet.
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+            Final Run Commands
+          </p>
+          {runCommands.length === 0 ? (
+            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+              No run commands yet.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {runCommands.map((command, idx) => (
+                <div
+                  key={`${command}-${idx}`}
+                  className="flex items-center gap-2 rounded-lg px-2 py-2"
+                  style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-bg)' }}
+                >
+                  <code
+                    className="text-xs"
+                    style={{
+                      color: 'var(--tf-text-secondary)',
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                      flex: 1,
+                      minWidth: 0,
+                      overflowWrap: 'anywhere',
+                    }}
+                  >
+                    {command}
+                  </code>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(command);
+                    }}
+                    title="Copy command"
+                    className="text-xs px-2 py-1 rounded-md"
+                    style={{
+                      border: '1px solid var(--tf-border)',
+                      backgroundColor: 'transparent',
+                      color: 'var(--tf-text-muted)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Copy
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );

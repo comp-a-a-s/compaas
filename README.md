@@ -1,33 +1,39 @@
+![COMPaaS Banner](docs/images/compaas-banner-final.png)
+
 # COMPaaS
 
-**COMPaaS turns one person into a full AI software company.**
+**Company as a Service.**
+Run a full AI software company from one command center.
 
-You give direction. Your virtual leadership team plans, delegates, builds, verifies, and reports back in one unified workspace.
-
-If you want the speed of AI without losing control, COMPaaS is built for you.
+COMPaaS turns one operator into an execution team with leadership, engineering, design, QA, security, and documentation built in. You define direction. COMPaaS plans, delegates, builds, validates, and hands work back with clear run instructions.
 
 ## Why COMPaaS
 
-Most AI tools give you isolated outputs.
-COMPaaS gives you coordinated execution.
+Most AI tools generate isolated answers.
+COMPaaS runs coordinated execution.
 
 With COMPaaS, you get:
 
-- A CEO-led execution flow instead of random one-off responses
-- A 15-agent virtual org (leadership, engineering, design, security, QA, docs)
-- Project-scoped chat, planning artifacts, and handoff docs
-- Real-time visibility into what agents are doing
-- Local or GitHub project delivery modes
-- Optional Vercel deployment and Telegram chat mirroring
+- CEO-led orchestration instead of disconnected prompts
+- A 15-agent virtual org that collaborates on real deliverables
+- Project-scoped planning, implementation, validation, and handoff flow
+- Live visibility into what is happening right now
+- Local and GitHub delivery modes
+- Optional deployment and chat integrations
 
-## What You Can Build
+## Screenshots
 
-- Full-stack web apps
-- Internal tools and dashboards
-- APIs and backend services
-- Landing pages and marketing sites
-- Prototypes with structured handoff docs
-- Multi-phase product execution plans
+### Organization Tree
+![Organization Tree](docs/images/org-tree.png)
+
+### Event Log
+![Event Log](docs/images/event-log.png)
+
+### Agents
+![Agents](docs/images/agents.png)
+
+### CEO Chat
+![CEO Chat](docs/images/chat.png)
 
 ## 60-Second Quick Start
 
@@ -35,144 +41,70 @@ With COMPaaS, you get:
 bash <(curl -fsSL https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bootstrap.sh)
 ```
 
-That bootstrap flow will:
-
-- Clone or update COMPaaS
-- Install Python and web dependencies
-- Verify setup
-- Offer to start immediately
-
 Private repo access:
 
 ```bash
 bash <(curl -fsSL -H "Authorization: Bearer $(gh auth token)" "https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bootstrap.sh")
 ```
 
-## The Experience
+## First Run Flow
 
-1. Open `compaas-web`
-2. Create/select a project (Local or GitHub)
-3. Message the CEO in **CEO Chat**
-4. Watch live delegation and execution
-5. Review deliverables, validation, and next actions
+1. Start COMPaaS with `compaas-web`
+2. Open [http://localhost:8420](http://localhost:8420)
+3. Create or select a project
+4. Message your CEO in chat with the outcome you want
+5. Review structured completion output with run commands and links
 
-You stay in control. COMPaaS does the coordination.
+## Core Capabilities
 
-## Screenshot Slots (Recommended)
+### CEO Orchestration
 
-I cannot create images here, but these are the best places to add them in this README.
+- Structured completion summaries
+- Clear run commands and open links
+- Delegation visibility for each stage
+- Transparent raw response toggle when needed
 
-Add image files under `docs/images/` and keep these references:
+### Project Delivery System
 
-```md
-![Hero dashboard](docs/images/hero-dashboard.png)
-![CEO chat structured response](docs/images/ceo-chat-structured.png)
-![Live org chart and workforce](docs/images/live-workforce.png)
-![Project plan and artifacts](docs/images/project-artifacts.png)
-![Integrations setup](docs/images/integrations-setup.png)
-```
+Each project is tracked through:
 
-Best placement:
-
-- Right below this intro: `hero-dashboard.png`
-- Right below "The Experience": `ceo-chat-structured.png`
-- Right below "Live Operations Visibility": `live-workforce.png`
-- Right below "Project Outputs": `project-artifacts.png`
-- Right below "Integrations": `integrations-setup.png`
-
-## Core Product Capabilities
-
-### CEO-Orchestrated Execution
-
-The CEO chat is your primary control surface.
-
-- Structured final responses
-- Clickable links and copyable path actions
-- Project-aware context and memory
-- Micro Project mode for quick solo execution
+- Project description
+- Team and high-level tasks
+- Final run commands
 
 ### Live Operations Visibility
 
-- Real-time activity stream (SSE)
-- Canonical workforce presence states
-- Org chart with active collaboration highlights
-- Action logs and technical execution details
+- Organization tree with active collaboration
+- Workforce and agent activity tracking
+- Event log for execution traceability
 
-### Project System That Ships
+### Integrations
 
-Every project can include:
+- GitHub for repository delivery
+- Vercel for deployment workflow
+- Telegram for chat mirroring
 
-- Stakeholder summary
-- Full execution plan
-- Activation guide
-- Project handoff document
+## Installation
 
-### Delivery Modes
-
-- **Local workspace**: write directly under the generated project workspace
-- **GitHub mode**: route project output to connected repository settings
-
-### Deployment Lifecycle
-
-When enabled, COMPaaS can offer Vercel deployment directly in CEO chat after build completion.
-
-## Architecture at a Glance
-
-```text
-You (Board Head)
-      |
-      v
-CEO (Marcus) ---> MCP Server (20+ tools)
-      |                    |
-      v                    v
-Specialist Agents      Project/Task/Memory State
-      |
-      v
-Web Dashboard + TUI + API
-```
-
-### 4-Layer Stack
-
-- **Agent definitions**: role-specific behavior and model routing
-- **MCP tool layer**: project, task, memory, metrics, integration operations
-- **State layer**: YAML-backed project and run state
-- **Interfaces**: React web dashboard, Textual TUI, and FastAPI APIs
-
-## Agent Roster
-
-| Team | Agents |
-|---|---|
-| Leadership | CEO, CTO, Chief Researcher, CISO, CFO, CPO, VP Engineering |
-| Engineering | Lead Backend, Lead Frontend, QA Lead, DevOps |
-| On-demand specialists | Security Engineer, Data Engineer, Tech Writer |
-
-Total: **15 specialized agents**.
-
-## Installation (Detailed)
-
-### Option A: One-command installer (recommended)
+### Option A (Recommended)
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bootstrap.sh)
 ```
 
-### Option B: Existing local checkout
+### Option B (Existing Checkout)
 
 ```bash
 ./install.sh
 ```
 
-### Option C: Manual setup
-
-1. Python dependencies
+### Option C (Manual)
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,local-models]"
 ```
-
-2. Web dashboard dependencies
 
 ```bash
 cd web-dashboard
@@ -181,21 +113,14 @@ npm run build
 cd ..
 ```
 
-3. Environment
-
 ```bash
 cp .env.example .env
-```
-
-4. Verify
-
-```bash
 pytest tests/ -v
 ```
 
 ## Run COMPaaS
 
-### Web dashboard
+### Web Dashboard
 
 ```bash
 compaas-web
@@ -209,49 +134,12 @@ Default URL: [http://localhost:8420](http://localhost:8420)
 compaas-tui
 ```
 
-## Integrations
-
-### GitHub
-
-Use GitHub mode to deliver into repositories.
-
-- Configure token/repo in Settings
-- Verify connector
-- Create projects in GitHub mode
-
-### Vercel
-
-Deploy built projects (not COMPaaS itself) from chat or API controls.
-
-- Add Vercel token + project
-- Verify connector
-- Approve deployment when offered in CEO chat
-
-### Telegram
-
-Mirror user/CEO messages from active project chat.
-
-- Configure bot token + chat ID in Settings
-- Toggle Telegram mirror in CEO chat toolbar
-
-## API Surface
-
-### Core API
+## API and Runtime
 
 - WebSocket chat: `/api/chat/ws`
 - Chat history: `/api/chat/history`
-- Workforce live state: `/api/workforce/live`
-
-### Versioned API (`/api/v1`)
-
-Includes advanced controls for:
-
-- Feature flags
-- Runs lifecycle
-- Project metadata and artifacts
-- Chat policy and memory controls
-- GitHub and Vercel operations
-- Workforce snapshots
+- Workforce snapshot: `/api/workforce/live`
+- Versioned APIs: `/api/v1/*`
 
 ## Configuration Highlights
 
@@ -263,58 +151,46 @@ Includes advanced controls for:
 | `COMPAAS_CORS_ORIGINS` | localhost defaults | Allowed origins |
 | `COMPAAS_CORS_METHODS` | `GET` | Allowed CORS methods |
 | `COMPAAS_ADMIN_TOKEN` | unset | Optional admin write guard |
-| `ANTHROPIC_API_KEY` | optional | Anthropic API mode |
-| `OPENAI_API_KEY` | optional | OpenAI API mode |
-
-## Runtime Options
-
-Supported model/runtime paths include:
-
-- Anthropic via Claude CLI or API key mode
-- OpenAI via API or Codex CLI mode
-- OpenAI-compatible endpoints (Ollama, LM Studio, llama.cpp)
-
-## First Prompt Ideas
-
-Use these in CEO chat to quickly evaluate the product:
-
-- "Build a lightweight expense tracker with local persistence and clean UI."
-- "Create a customer feedback dashboard with filtering and export."
-- "Plan and build a small CRM MVP in phases, then hand off run instructions."
-
-## Troubleshooting
-
-- **`compaas-web` not starting**: ensure Python deps are installed and venv is active
-- **Dashboard build issues**: run `cd web-dashboard && npm install && npm run build`
-- **CEO chat not connecting**: confirm server is running and runtime provider is configured
-- **Port conflict**: run with `COMPAAS_API_PORT=9000 compaas-web`
-- **CORS write requests blocked**: set `COMPAAS_CORS_METHODS=GET,POST,PATCH,DELETE`
-
-## Documentation
-
-- Live workforce semantics: [docs/live-workforce.md](docs/live-workforce.md)
 
 ## Contributing
 
-PRs are welcome. Focus areas:
+COMPaaS is actively evolving and contributions are welcome.
 
-- Agent quality and orchestration
+High-impact contribution areas:
+
+- Agent quality and orchestration logic
 - New tool adapters and integrations
-- UI/UX polish in CEO chat and operations visibility
+- CEO chat UX and structured completion improvements
 - Reliability, security, and test coverage
+- Documentation and onboarding quality
+
+### Contribution Workflow
+
+1. Fork the repo
+2. Create a branch
+3. Add tests for behavior changes
+4. Run:
+
+```bash
+pytest -q
+cd web-dashboard && npm run build && npm run test:e2e:smoke
+```
+
+5. Open a pull request with a clear summary
+
+## Troubleshooting
+
+- `compaas-web` not starting: verify Python env and package install
+- Dashboard build issues: run `cd web-dashboard && npm install && npm run build`
+- Port conflict: `COMPAAS_API_PORT=9000 compaas-web`
+- CORS write methods blocked: set `COMPAAS_CORS_METHODS=GET,POST,PATCH,DELETE`
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
----
+## Final Word
 
-## Final Pitch
+If you want AI to operate like a real company instead of a chat toy, COMPaaS is the platform.
 
-If you are tired of juggling prompts, tabs, and disconnected AI outputs, COMPaaS gives you a real operating model:
-
-- Strategic direction from you
-- Coordinated execution from an AI company
-- Transparent progress from plan to delivery
-
-**Install it once. Run your company in one command.**
+Use it. Ship with it. Improve it with us.

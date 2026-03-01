@@ -228,6 +228,38 @@ def test_infer_support_agents_execution_adds_qa_docs_for_validation_stage():
     assert "tech-writer" in agents
 
 
+def test_infer_support_agents_execution_defaults_to_designer_for_app_ui_work():
+    intent = {
+        "intent": "execution",
+        "class": "execution",
+        "actionable": True,
+        "delegate_allowed": True,
+    }
+    agents = api._infer_support_agents(
+        "Build a budgeting app dashboard with polished onboarding flow.",
+        intent=intent,
+        project={"status": "active", "plan_approved": True},
+        config={"chat_policy": {"delegation_strategy": "executive_first"}},
+    )
+    assert "lead-designer" in agents
+
+
+def test_infer_support_agents_execution_skips_designer_for_backend_only_turn():
+    intent = {
+        "intent": "execution",
+        "class": "execution",
+        "actionable": True,
+        "delegate_allowed": True,
+    }
+    agents = api._infer_support_agents(
+        "Implement backend API auth and database migration scripts.",
+        intent=intent,
+        project={"status": "active", "plan_approved": True},
+        config={"chat_policy": {"delegation_strategy": "executive_first"}},
+    )
+    assert "lead-designer" not in agents
+
+
 def test_infer_support_agents_direct_strategy_skips_default_qa_docs():
     intent = {
         "intent": "execution",
@@ -735,6 +767,122 @@ def test_merge_structured_completion_with_project_includes_run_hints():
     assert any(item["target"] == "/Users/idan/compaas/projects/cashtracker-b82e75d5" for item in merged["open_links"])
     assert any(item["target"] == "https://github.com/comp-a-a-s/compaas" for item in merged["open_links"])
     assert merged["completion_kind"] == "build_complete"
+
+
+def test_sync_project_completion_snapshot_updates_description_team_and_run_commands(monkeypatch):
+    project = {
+        "id": "abcd1234",
+        "description": "Old summary",
+        "team": ["Marcus"],
+        "run_instructions": "",
+    }
+    captured_updates: dict = {}
+
+    def _fake_update_project(project_id: str, updates: dict) -> bool:
+        assert project_id == "abcd1234"
+        captured_updates.update(updates)
+        project.update(updates)
+        return True
+
+    monkeypatch.setattr(api.state_manager, "update_project", _fake_update_project)
+    monkeypatch.setattr(api.state_manager, "get_project", lambda _project_id: project)
+    monkeypatch.setattr(
+        api.task_board,
+        "get_board",
+        lambda _project_id: [
+            {"assigned_to": "lead-backend", "title": "Implement API endpoint"},
+            {"assigned_to": "qa-lead", "title": "Validate regression flow"},
+        ],
+    )
+    monkeypatch.setattr(api, "_emit_chat_activity", lambda *args, **kwargs: None)
+
+    synced = api._sync_project_completion_snapshot(
+        "abcd1234",
+        project=project,
+        structured={
+            "summary": "CashTracker release candidate is ready.",
+            "run_commands": ["npm ci", "npm run dev"],
+            "delegations": [{"agent": "Priya", "why": "UI polish", "action": "Finalize dashboard layout"}],
+        },
+        support_agents=["lead-frontend"],
+        config={"agents": {"ceo": "Marcus", "lead-frontend": "Priya"}},
+    )
+
+    assert synced is not None
+    assert captured_updates["description"] == "CashTracker release candidate is ready."
+    assert captured_updates["run_instructions"] == "npm ci\nnpm run dev"
+    assert "Marcus" in captured_updates["team"]
+    assert "Priya" in captured_updates["team"]
+    assert "lead-backend" in captured_updates["team"]
+
+
+def test_attempt_local_project_autostart_runs_safe_command(monkeypatch, tmp_path):
+    workspace = tmp_path / "autostart-app"
+    workspace.mkdir()
+    captured: dict = {}
+
+    class _Proc:
+        pass
+
+    def _fake_popen(argv, cwd=None, stdout=None, stderr=None, start_new_session=None):  # type: ignore[no-untyped-def]
+        captured["argv"] = argv
+        captured["cwd"] = cwd
+        captured["start_new_session"] = start_new_session
+        return _Proc()
+
+    monkeypatch.setattr(api.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(api, "_emit_chat_activity", lambda *args, **kwargs: None)
+
+    result = api._attempt_local_project_autostart(
+        project={
+            "id": "abcd1234",
+            "delivery_mode": "local",
+            "workspace_path": str(workspace),
+        },
+        structured={
+            "completion_kind": "build_complete",
+            "run_commands": ["npm run dev"],
+            "open_links": [{"label": "Local App", "target": "http://localhost:5173", "kind": "url"}],
+        },
+        run_id="run-local-1",
+    )
+
+    assert result["attempted"] is True
+    assert result["started"] is True
+    assert result["command"] == "npm run dev"
+    assert result["open_url"] == "http://localhost:5173"
+    assert captured["argv"] == ["npm", "run", "dev"]
+    assert captured["cwd"] == str(workspace)
+
+
+def test_attempt_local_project_autostart_blocks_unsafe_command(monkeypatch, tmp_path):
+    workspace = tmp_path / "autostart-app-unsafe"
+    workspace.mkdir()
+    popen_calls: list = []
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        popen_calls.append((args, kwargs))
+        raise AssertionError("Popen should not be called for unsafe command")
+
+    monkeypatch.setattr(api.subprocess, "Popen", _fake_popen)
+
+    result = api._attempt_local_project_autostart(
+        project={
+            "id": "abcd1234",
+            "delivery_mode": "local",
+            "workspace_path": str(workspace),
+        },
+        structured={
+            "completion_kind": "build_complete",
+            "run_commands": ["npm run dev && rm -rf /"],
+        },
+        run_id="run-local-unsafe",
+    )
+
+    assert result["attempted"] is True
+    assert result["started"] is False
+    assert "blocked" in str(result.get("message", "")).lower()
+    assert popen_calls == []
 
 
 def test_apply_agent_name_overrides_replaces_agent_names():

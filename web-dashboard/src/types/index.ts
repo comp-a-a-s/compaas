@@ -134,6 +134,7 @@ export interface ChatMessage {
   timestamp: string;
   project_id?: string;
   structured?: StructuredChatResponse;
+  auto_launch?: AutoLaunchStatus;
 }
 
 export interface StructuredDeliverable {
@@ -152,6 +153,14 @@ export interface StructuredChatResponse {
   run_commands?: string[];
   open_links?: StructuredDeliverable[];
   completion_kind?: 'build_complete' | 'general';
+}
+
+export interface AutoLaunchStatus {
+  attempted: boolean;
+  started: boolean;
+  command: string;
+  open_url?: string;
+  message?: string;
 }
 
 export interface UpdateStatusResponse {

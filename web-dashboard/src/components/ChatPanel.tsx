@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatMessage, Project, StructuredChatResponse, StructuredDeliverable } from '../types';
+import type {
+  AutoLaunchStatus,
+  ChatMessage,
+  Project,
+  StructuredChatResponse,
+  StructuredDeliverable,
+} from '../types';
 import {
   fetchChatHistory,
   clearChatHistory,
@@ -235,6 +241,11 @@ const MICRO_COMPLEX_HINTS = [
 ];
 
 const EXECUTION_HINTS = ['build', 'create', 'develop', 'implement', 'fix', 'deploy', 'code', 'scaffold', 'ship'];
+
+const TYPEWRITER_MIN_DELAY_MS = 14;
+const TYPEWRITER_BASE_DELAY_MS = 34;
+const TYPEWRITER_COMMA_DELAY_MS = 26;
+const TYPEWRITER_SENTENCE_DELAY_MS = 52;
 
 function looksExecutionRequest(input: string): boolean {
   const lower = input.trim().toLowerCase();
@@ -597,6 +608,7 @@ function MessageBubble({
   const [hovered, setHovered] = useState(false);
   const [showFullResponse, setShowFullResponse] = useState(false);
   const showStructuredCard = !isUser && !isStreaming && !searchQuery && hasStructuredContent(message.structured);
+  const autoLaunch = !isUser && !isStreaming ? message.auto_launch : undefined;
 
   return (
     <div
@@ -656,6 +668,35 @@ function MessageBubble({
                     ? <p style={{ color: 'var(--tf-text)', fontSize: '13px', lineHeight: '1.6', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{highlightSearch(message.content, searchQuery)}</p>
                     : (!showStructuredCard || showFullResponse) && <MarkdownBody content={message.content} onCopyPath={onCopyPath} />
                   }
+                  {autoLaunch?.attempted && (
+                    <div className="chat-auto-launch-card">
+                      <div className="chat-auto-launch-header">
+                        <span className={`chat-auto-launch-dot ${autoLaunch.started ? 'chat-auto-launch-dot-ok' : 'chat-auto-launch-dot-fail'}`} />
+                        <span>{autoLaunch.started ? 'Auto-start completed' : 'Auto-start blocked'}</span>
+                      </div>
+                      {autoLaunch.command && (
+                        <div className="chat-auto-launch-command-row">
+                          <code className="chat-markdown-inline-code" style={{ flex: 1, minWidth: 0 }}>{autoLaunch.command}</code>
+                          <button
+                            type="button"
+                            className="chat-summary-copy-btn"
+                            onClick={() => onCopyCommand(autoLaunch.command)}
+                            title={`Copy command: ${autoLaunch.command}`}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      )}
+                      {autoLaunch.open_url && (
+                        <a href={autoLaunch.open_url} target="_blank" rel="noreferrer" className="chat-http-link">
+                          Open app: {autoLaunch.open_url}
+                        </a>
+                      )}
+                      {autoLaunch.message && (
+                        <p className="chat-auto-launch-message">{autoLaunch.message}</p>
+                      )}
+                    </div>
+                  )}
                   {isStreaming && <span className="blink-cursor" />}
                 </>
               ) : (
@@ -1013,6 +1054,7 @@ interface WsMessage {
     project_name?: string;
     target?: 'preview' | 'production';
   };
+  auto_launch?: AutoLaunchStatus;
 }
 function isWsMessage(data: unknown): data is WsMessage {
   return typeof data === 'object' && data !== null && typeof (data as Record<string, unknown>).type === 'string';
@@ -1102,6 +1144,7 @@ interface ChatPanelProps {
   onAgentActivity?: (agentId: string, task: string, flow: 'down' | 'up' | 'working') => void;
   onAgentRemove?: (agentId: string) => void;
   onWorkforceRefreshRequest?: () => void;
+  onProjectDataRefresh?: () => void;
 }
 
 export default function ChatPanel({
@@ -1124,6 +1167,7 @@ export default function ChatPanel({
   onAgentActivity,
   onAgentRemove,
   onWorkforceRefreshRequest,
+  onProjectDataRefresh,
 }: ChatPanelProps) {
   const { toast } = useToast();
   // Core state
@@ -1188,12 +1232,27 @@ export default function ChatPanel({
   const onAgentActivityRef = useRef(onAgentActivity);
   const onAgentRemoveRef = useRef(onAgentRemove);
   const onWorkforceRefreshRequestRef = useRef(onWorkforceRefreshRequest);
+  const onProjectDataRefreshRef = useRef(onProjectDataRefresh);
   const streamingAccumRef = useRef('');
   const turnErroredRef = useRef(false);
   const isWaitingRef = useRef(false);
   const lastOutboundMessageRef = useRef('');
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const telegramMirrorEnabledRef = useRef(telegramMirrorEnabled);
+
+  const focusInput = useCallback(() => {
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      const length = el.value.length;
+      try {
+        el.setSelectionRange(length, length);
+      } catch {
+        // ignored: some browsers may reject selection range on blurred nodes
+      }
+    });
+  }, []);
 
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
   useEffect(() => { ceoNameRef.current = ceoName; }, [ceoName]);
@@ -1204,6 +1263,7 @@ export default function ChatPanel({
   useEffect(() => { onAgentActivityRef.current = onAgentActivity; }, [onAgentActivity]);
   useEffect(() => { onAgentRemoveRef.current = onAgentRemove; }, [onAgentRemove]);
   useEffect(() => { onWorkforceRefreshRequestRef.current = onWorkforceRefreshRequest; }, [onWorkforceRefreshRequest]);
+  useEffect(() => { onProjectDataRefreshRef.current = onProjectDataRefresh; }, [onProjectDataRefresh]);
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
 
@@ -1393,13 +1453,19 @@ export default function ChatPanel({
     }
   }, [mirrorTelegram, onTelegramMirrorChange]);
 
-  const pushCeoMessage = useCallback((content: string, projectId: string, structured?: StructuredChatResponse) => {
+  const pushCeoMessage = useCallback((
+    content: string,
+    projectId: string,
+    structured?: StructuredChatResponse,
+    autoLaunch?: AutoLaunchStatus,
+  ) => {
     setMessages((prev) => [...prev, {
       role: 'ceo',
       content,
       timestamp: new Date().toISOString(),
       project_id: projectId,
       structured,
+      auto_launch: autoLaunch,
     }]);
     void safeMirrorTelegram(ceoNameRef.current, content, projectId);
   }, [safeMirrorTelegram]);
@@ -1411,28 +1477,34 @@ export default function ChatPanel({
     setActionLog([]);
     setDelegationContext(null);
     setIsWaiting(false);
+    focusInput();
     if (!chatOpenRef.current) onNewCeoMessageRef.current?.();
-  }, []);
+  }, [focusInput]);
 
-  const typewriteAndCommit = useCallback((content: string, projectId: string, structured?: StructuredChatResponse) => {
+  const typewriteAndCommit = useCallback((
+    content: string,
+    projectId: string,
+    structured?: StructuredChatResponse,
+    autoLaunch?: AutoLaunchStatus,
+  ) => {
     stopTypingAnimation();
     const tokens = content.split(/(\s+)/).filter((token) => token.length > 0);
     let cursor = 0;
-    const pace = tokens.length > 260 ? 0.65 : tokens.length > 140 ? 0.8 : 1;
+    const pace = tokens.length > 260 ? 0.78 : tokens.length > 140 ? 0.9 : 1;
 
     const step = () => {
       cursor = Math.min(tokens.length, cursor + 1);
       setStreamingContent(tokens.slice(0, cursor).join(''));
       if (cursor < tokens.length) {
         const prev = (tokens[cursor - 1] || '').trim();
-        let delay = Math.max(28, Math.round(62 * pace));
-        if (/[,;:]$/.test(prev)) delay += Math.round(65 * pace);
-        if (/[.!?]$/.test(prev)) delay += Math.round(125 * pace);
+        let delay = Math.max(TYPEWRITER_MIN_DELAY_MS, Math.round(TYPEWRITER_BASE_DELAY_MS * pace));
+        if (/[,;:]$/.test(prev)) delay += Math.round(TYPEWRITER_COMMA_DELAY_MS * pace);
+        if (/[.!?]$/.test(prev)) delay += Math.round(TYPEWRITER_SENTENCE_DELAY_MS * pace);
         typingTimerRef.current = setTimeout(step, delay);
         return;
       }
       typingTimerRef.current = null;
-      pushCeoMessage(content, projectId, structured);
+      pushCeoMessage(content, projectId, structured, autoLaunch);
       completeAssistantTurn();
     };
 
@@ -1622,9 +1694,11 @@ export default function ChatPanel({
               const streamedContent = streamingAccumRef.current;
               const finalContent = wsContentText(data.content, '') || streamedContent;
               const structured = normalizeStructuredResponse(data.structured);
+              const autoLaunch = data.auto_launch;
               streamingAccumRef.current = '';
               if (data.run_id) setLatestRunId(data.run_id);
               const projectId = data.project_id || activeProjectIdRef.current;
+              onProjectDataRefreshRef.current?.();
               const offer = data.deploy_offer;
               if (offer && typeof offer === 'object') {
                 const offerProjectId = String(offer.project_id || projectId || '').trim();
@@ -1639,7 +1713,7 @@ export default function ChatPanel({
                 setDeployOffer(null);
               }
               if (!turnErroredRef.current && finalContent.trim()) {
-                typewriteAndCommit(finalContent, projectId, structured);
+                typewriteAndCommit(finalContent, projectId, structured, autoLaunch);
                 onWorkforceRefreshRequestRef.current?.();
                 break;
               }
@@ -1662,6 +1736,7 @@ export default function ChatPanel({
               setActionLog([]);
               setDelegationContext(null);
               setIsWaiting(false);
+              focusInput();
               setDeployOffer(null);
               onWorkforceRefreshRequestRef.current?.();
               break;
@@ -1699,6 +1774,7 @@ export default function ChatPanel({
                 });
               }
               setIsWaiting(false);
+              focusInput();
               setThinkingContent('');
               setDelegationContext(null);
               break;
@@ -1720,6 +1796,7 @@ export default function ChatPanel({
         setThinkingContent('');
         setActionLog([]);
         setIsWaiting(false);
+        focusInput();
         wsRef.current = null;
         if (shouldReconnectRef.current) {
           reconnectTimerRef.current = setTimeout(connectWebSocketImpl, 3000);
@@ -1735,10 +1812,11 @@ export default function ChatPanel({
             project_id: activeProjectIdRef.current,
           }]);
           setIsWaiting(false);
+          focusInput();
         }
       };
     } catch { setConnectionStatus('error'); }
-  }, [completeAssistantTurn, stopTypingAnimation, typewriteAndCommit]);
+  }, [completeAssistantTurn, focusInput, stopTypingAnimation, typewriteAndCommit]);
 
   useEffect(() => {
     shouldReconnectRef.current = true;
@@ -1817,6 +1895,7 @@ export default function ChatPanel({
     }]);
     void safeMirrorTelegram(userName, text, activeProjectId || '');
     setInput('');
+    focusInput();
     setIsWaiting(true);
     setStreamingContent('');
     setThinkingContent('');
@@ -1847,7 +1926,7 @@ export default function ChatPanel({
       return;
     }
     ws.send(payload);
-  }, [activeProjectId, connectWebSocket, input, isWaiting, microProjectMode, safeMirrorTelegram, stopTypingAnimation, userName]);
+  }, [activeProjectId, connectWebSocket, focusInput, input, isWaiting, microProjectMode, safeMirrorTelegram, stopTypingAnimation, userName]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -2511,7 +2590,7 @@ export default function ChatPanel({
         <div className="flex-1 rounded-xl overflow-hidden" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
           <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
             placeholder={isWaiting ? `${ceoName} is working…` : microProjectMode ? `Message ${ceoName} (Micro Project)…` : `Message ${ceoName}…`}
-            disabled={isWaiting} rows={1}
+            rows={1}
             className="w-full resize-none px-4 py-3 text-sm outline-none"
             style={{ backgroundColor: 'transparent', color: 'var(--tf-text)', maxHeight: '120px', minHeight: '44px' }}
             onInput={(e) => {

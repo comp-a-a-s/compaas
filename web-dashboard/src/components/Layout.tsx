@@ -818,14 +818,32 @@ export default function Layout({
                   <button
                     onClick={() => setChatMaximized((prev) => !prev)}
                     title={chatMaximized ? 'Restore previous chat width' : 'Maximize chat panel width'}
+                    aria-label={chatMaximized ? 'Restore previous chat width' : 'Maximize chat panel width'}
                     style={{
                       ...splitHeaderButtonBase,
+                      padding: '4px',
+                      width: '28px',
+                      height: '28px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
                       borderColor: chatMaximized ? 'var(--tf-accent-blue)' : 'var(--tf-border)',
                       backgroundColor: chatMaximized ? 'color-mix(in srgb, var(--tf-accent-blue) 16%, transparent)' : 'transparent',
                       color: chatMaximized ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
                     }}
                   >
-                    {chatMaximized ? 'Restore' : 'Maximize'}
+                    {chatMaximized ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                        <rect x="4" y="7" width="13" height="13" rx="1.5" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M10 4h10v10" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M20 4l-6 6" />
+                      </svg>
+                    ) : (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 8h8v8" />
+                      </svg>
+                    )}
                   </button>
                   <button
                     onClick={onChatToggle}

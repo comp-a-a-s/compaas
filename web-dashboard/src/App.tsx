@@ -1145,6 +1145,9 @@ export default function App() {
               onAgentActivity={handleAgentActivity}
               onAgentRemove={removeLiveAgent}
               onWorkforceRefreshRequest={() => requestWorkforceRefresh(120)}
+              onProjectDataRefresh={() => {
+                void loadProjects(true);
+              }}
             />
           </Suspense>
         }

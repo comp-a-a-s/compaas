@@ -40,6 +40,7 @@ const projectsPayload = [
     type: 'app',
     description: 'Synthetic project for UI smoke',
     team: ['ceo'],
+    run_instructions: 'npm install\nnpm run dev',
     task_counts: { todo: 1, in_progress: 0, done: 0, blocked: 0 },
     total_tasks: 1,
     plan_packet: { ready: false, missing_items: [], summary: '' },
@@ -335,6 +336,14 @@ test('dashboard navigation and connector validation @smoke', async ({ page }) =>
   await expect(page.getByRole('button', { name: 'Projects' })).toBeVisible();
   await page.getByRole('button', { name: 'Projects' }).click();
   await expect(page.getByText('Smoke Project')).toBeVisible();
+  await page.getByRole('button', { name: /Smoke Project/i }).first().click();
+  await expect(page.getByText('Project Description')).toBeVisible();
+  await expect(page.getByText('Team + High-Level Tasks')).toBeVisible();
+  await expect(page.getByText('Final Run Commands')).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Overview' })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: 'Tasks' })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: 'Plan' })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: 'Discussions' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Settings' }).click();
   await expect(page.getByText('Update Center')).toBeVisible();
@@ -377,7 +386,7 @@ test('workforce states stay consistent across overview and agents @smoke', async
   await expect(page.getByText('Implement signup form validation').first()).toBeVisible();
 });
 
-test('ceo chat renders structured response with links, wrapping, and maximize toggle @smoke', async ({ page }) => {
+test('ceo chat renders structured response with links, wrapping, focus, and icon maximize toggle @smoke', async ({ page }) => {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   chatHistoryPayload = [
     {
@@ -433,6 +442,13 @@ test('ceo chat renders structured response with links, wrapping, and maximize to
         delegations: [],
         risks: [],
       },
+      auto_launch: {
+        attempted: true,
+        started: true,
+        command: 'npm run dev',
+        open_url: 'http://localhost:5173',
+        message: 'App start command executed.',
+      },
     },
   ];
   projectsListPayload = [];
@@ -447,13 +463,22 @@ test('ceo chat renders structured response with links, wrapping, and maximize to
 
   const chatPane = page.locator('aside.split-chat-panel');
   const widthBefore = await chatPane.evaluate((el) => el.getBoundingClientRect().width);
-  await page.getByRole('button', { name: 'Maximize' }).click();
-  await expect(page.getByRole('button', { name: 'Restore' })).toBeVisible();
+  await page.getByRole('button', { name: 'Maximize chat panel width' }).click();
+  await expect(page.getByRole('button', { name: 'Restore previous chat width' })).toBeVisible();
   const widthAfter = await chatPane.evaluate((el) => el.getBoundingClientRect().width);
   expect(widthAfter).toBeGreaterThan(widthBefore + 40);
-  await page.getByRole('button', { name: 'Restore' }).click();
+  await page.getByRole('button', { name: 'Restore previous chat width' }).click();
+
+  const chatInput = page.locator('textarea').first();
+  await chatInput.click();
+  await chatInput.fill('hello');
+  await page.keyboard.press('Enter');
+  await expect(chatInput).toBeFocused();
+  await expect(chatInput).toBeEditable();
 
   await expect(page.getByText('Completion Summary')).toBeVisible();
+  await expect(page.getByText('Auto-start completed')).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open app: http:\/\/localhost:5173/i })).toBeVisible();
   await page.getByRole('button', { name: /Activation Guide/i }).click();
   await expect(page.getByText(/Path copied to clipboard|Unable to copy path/i)).toBeVisible();
 
