@@ -241,6 +241,20 @@ test.beforeEach(async ({ page }) => {
   });
 
   await page.route('**/api/projects/*', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      const url = new URL(route.request().url());
+      const projectId = url.pathname.split('/').pop() || '';
+      projectsListPayload = projectsListPayload.filter((project) => project.id !== projectId);
+      await route.fulfill({
+        json: {
+          status: 'ok',
+          project_id: projectId,
+          project_deleted: true,
+          workspace_deleted: true,
+        },
+      });
+      return;
+    }
     await route.fulfill({ json: projectDetailPayload });
   });
 
@@ -336,6 +350,7 @@ test('dashboard navigation and connector validation @smoke', async ({ page }) =>
   await expect(page.getByRole('button', { name: 'Projects' })).toBeVisible();
   await page.getByRole('button', { name: 'Projects' }).click();
   await expect(page.getByText('Smoke Project')).toBeVisible();
+  await expect(page.getByText('npm install')).toBeVisible();
   await page.getByRole('button', { name: /Smoke Project/i }).first().click();
   await expect(page.getByText('Project Description')).toBeVisible();
   await expect(page.getByText('Team + High-Level Tasks')).toBeVisible();
@@ -384,6 +399,23 @@ test('workforce states stay consistent across overview and agents @smoke', async
 
   await expect(page.getByRole('heading', { name: 'Live State: Working' })).toBeVisible();
   await expect(page.getByText('Implement signup form validation').first()).toBeVisible();
+});
+
+test('project detail delete removes project from list and clears detail pane @smoke', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Projects' }).click();
+  await page.getByRole('button', { name: /Smoke Project/i }).first().click();
+  await expect(page.getByText('Project Description')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete Project' })).toBeVisible();
+  await expect(page.locator('code', { hasText: 'npm run dev' }).first()).toBeVisible();
+
+  page.once('dialog', async (dialog) => {
+    await dialog.accept();
+  });
+  await page.getByRole('button', { name: 'Delete Project' }).click();
+
+  await expect(page.getByText('No projects found yet. Start one here or ask the CEO to initialize one from chat.')).toBeVisible();
+  await expect(page.getByText('Project Description')).toHaveCount(0);
 });
 
 test('ceo chat renders structured response with links, wrapping, focus, and icon maximize toggle @smoke', async ({ page }) => {

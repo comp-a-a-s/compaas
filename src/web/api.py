@@ -642,6 +642,45 @@ def get_org_chart() -> dict:
 # Projects
 # ---------------------------------------------------------------------------
 
+
+def _backfill_project_run_instructions(project_id: str) -> str:
+    """Best-effort run command backfill from artifacts/02_activation_guide.md."""
+    if not project_id:
+        return ""
+    try:
+        validate_safe_id(project_id, "project_id")
+    except ValueError:
+        return ""
+
+    activation_guide_path = safe_path_join(
+        state_manager.projects_dir,
+        project_id,
+        "artifacts",
+        "02_activation_guide.md",
+    )
+    if not os.path.exists(activation_guide_path):
+        return ""
+
+    try:
+        with open(activation_guide_path) as f:
+            activation_guide = f.read()
+    except OSError:
+        return ""
+
+    parsed = _structured_response_payload(activation_guide)
+    run_commands = _normalize_unique_strings(parsed.get("run_commands"), limit=16)
+    if not run_commands:
+        return ""
+
+    run_instructions = "\n".join(run_commands).strip()
+    project = state_manager.get_project(project_id)
+    if isinstance(project, dict):
+        current = str(project.get("run_instructions", "") or "").strip()
+        if not current and run_instructions:
+            state_manager.update_project(project_id, {"run_instructions": run_instructions})
+    return run_instructions
+
+
 @app.get("/api/projects", summary="List all projects with status and task progress")
 def list_projects() -> list[dict]:
     """Return every project with its status and a summary of task counts by
@@ -650,6 +689,11 @@ def list_projects() -> list[dict]:
     projects = state_manager.list_projects()
     result: list[dict] = []
     for proj in projects:
+        run_instructions = str(proj.get("run_instructions", "") or "").strip()
+        if not run_instructions:
+            run_instructions = _backfill_project_run_instructions(str(proj.get("id", "") or ""))
+            if run_instructions:
+                proj = {**proj, "run_instructions": run_instructions}
         tasks = task_board.get_board(proj["id"])
         status_counts: dict[str, int] = {}
         for t in tasks:
@@ -774,6 +818,56 @@ def get_project(project_id: str) -> dict:
             "summary": "Planning packet could not be evaluated.",
         }
     return {**project, "tasks": tasks, "project": project, "plan_packet": plan_packet}
+
+
+@app.delete("/api/projects/{project_id}", summary="Delete a project and workspace")
+def delete_project(request: Request, project_id: str) -> dict:
+    _require_write_auth(request)
+    try:
+        validate_safe_id(project_id, "project_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
+
+    existing = state_manager.get_project(project_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+
+    try:
+        outcome = state_manager.delete_project(project_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(exc)}")
+
+    if not isinstance(outcome, dict):
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+
+    workspace_path = str(outcome.get("workspace_path", "") or "").strip()
+    workspace_skip_reason = str(outcome.get("workspace_skip_reason", "") or "").strip()
+    payload = {
+        "status": "ok",
+        "project_id": project_id,
+        "project_deleted": bool(outcome.get("project_deleted")),
+        "workspace_deleted": bool(outcome.get("workspace_deleted")),
+    }
+    if workspace_path:
+        payload["workspace_path"] = workspace_path
+    if workspace_skip_reason:
+        payload["workspace_skip_reason"] = workspace_skip_reason
+
+    emit_activity(
+        DATA_DIR,
+        "ceo",
+        "DELETED",
+        f"Project '{existing.get('name', project_id)}' deleted",
+        project_id=project_id,
+        metadata={
+            "workspace_deleted": payload["workspace_deleted"],
+            "workspace_path": workspace_path,
+            "workspace_skip_reason": workspace_skip_reason,
+        },
+    )
+    return payload
 
 
 # ---------------------------------------------------------------------------

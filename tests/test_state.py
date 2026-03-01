@@ -89,6 +89,56 @@ class TestProjectState:
         mgr = ProjectStateManager(data_dir)
         assert mgr.list_projects() == []
 
+    def test_delete_project_removes_project_directory(self, data_dir):
+        mgr = ProjectStateManager(data_dir)
+        pid = mgr.create_project("Delete Me", "Temporary project", "general")
+        project_dir = os.path.join(data_dir, "projects", pid)
+        assert os.path.isdir(project_dir)
+
+        result = mgr.delete_project(pid)
+        assert result is not None
+        assert result["project_deleted"] is True
+        assert not os.path.exists(project_dir)
+        assert mgr.get_project(pid) is None
+
+    def test_delete_project_removes_workspace_inside_allowed_root(self, data_dir):
+        mgr = ProjectStateManager(data_dir)
+        pid = mgr.create_project("Workspace Delete", "Project", "general")
+        project = mgr.get_project(pid)
+        assert project is not None
+        workspace_path = project["workspace_path"]
+        assert os.path.isdir(workspace_path)
+
+        marker_file = os.path.join(workspace_path, "marker.txt")
+        with open(marker_file, "w") as f:
+            f.write("delete me")
+        assert os.path.exists(marker_file)
+
+        result = mgr.delete_project(pid)
+        assert result is not None
+        assert result["workspace_deleted"] is True
+        assert not os.path.exists(workspace_path)
+
+    def test_delete_project_skips_workspace_outside_allowed_root(self, data_dir):
+        mgr = ProjectStateManager(data_dir)
+        pid = mgr.create_project("Unsafe Workspace", "Project", "general")
+        with tempfile.TemporaryDirectory() as outside_workspace:
+            outside_path = os.path.abspath(outside_workspace)
+            marker_file = os.path.join(outside_path, "outside.txt")
+            with open(marker_file, "w") as f:
+                f.write("outside")
+            assert os.path.exists(marker_file)
+
+            ok = mgr.update_project(pid, {"workspace_path": outside_path})
+            assert ok
+
+            result = mgr.delete_project(pid)
+            assert result is not None
+            assert result["project_deleted"] is True
+            assert result["workspace_deleted"] is False
+            assert result["workspace_skip_reason"]
+            assert os.path.exists(marker_file)
+
 
 class TestTaskBoard:
     def test_create_task(self, data_dir):

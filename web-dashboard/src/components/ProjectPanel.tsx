@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Project, Task, Decision } from '../types';
-import { fetchProjectDecisions, fetchProjectSpecs, approveProjectPlan, createProject } from '../api/client';
+import { fetchProjectDecisions, fetchProjectSpecs, approveProjectPlan, createProject, deleteProject as deleteProjectApi } from '../api/client';
 import FloatingSelect from './ui/FloatingSelect';
 
 interface ProjectPanelProps {
@@ -1508,10 +1508,22 @@ interface ProjectDetailProps {
   project: Project;
   tasks: Task[];
   onClose: () => void;
+  onDelete?: () => void;
+  deleting?: boolean;
+  deleteError?: string;
   initialTab?: ProjectTab;
   onApproved?: () => void;
 }
-function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: ProjectDetailProps) {
+function ProjectDetail({
+  project,
+  tasks,
+  onClose,
+  onDelete,
+  deleting = false,
+  deleteError = '',
+  initialTab,
+  onApproved,
+}: ProjectDetailProps) {
   void initialTab;
   void onApproved;
   const teamMembers = useMemo(() => {
@@ -1567,25 +1579,55 @@ function ProjectDetail({ project, tasks, onClose, initialTab, onApproved }: Proj
           </h3>
           <p className="text-xs mt-1.5" style={{ color: 'var(--tf-text-muted)' }}>{project.status}</p>
         </div>
-        <button
-          onClick={onClose}
-          className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer flex-shrink-0"
-          style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
-          aria-label="Close project detail"
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {onDelete && (
+            <button
+              onClick={onDelete}
+              disabled={deleting}
+              className="px-2.5 py-1.5 rounded-md text-xs font-semibold transition-colors duration-200 cursor-pointer disabled:cursor-not-allowed"
+              style={{
+                backgroundColor: deleting ? 'var(--tf-surface-raised)' : '#2d1519',
+                border: '1px solid var(--tf-error)',
+                color: deleting ? 'var(--tf-text-muted)' : 'var(--tf-error)',
+              }}
+              aria-label="Delete Project"
+              title="Delete project permanently"
+            >
+              {deleting ? 'Deleting…' : 'Delete Project'}
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200 cursor-pointer flex-shrink-0"
+            style={{ color: 'var(--tf-text-muted)', backgroundColor: 'transparent' }}
+            aria-label="Close project detail"
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--tf-surface-raised)';
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-5">
+        {deleteError && (
+          <div
+            className="rounded-lg px-3 py-2 text-xs"
+            style={{
+              border: '1px solid var(--tf-error)',
+              backgroundColor: '#2d1519',
+              color: 'var(--tf-error)',
+            }}
+          >
+            {deleteError}
+          </div>
+        )}
         <section>
           <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
             Project Description
@@ -1707,6 +1749,8 @@ export default function ProjectPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [creatingProject, setCreatingProject] = useState(false);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
+  const [deleteProjectError, setDeleteProjectError] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectMode, setNewProjectMode] = useState<'local' | 'github'>(defaultWorkspaceMode === 'github' ? 'github' : 'local');
@@ -1766,8 +1810,33 @@ export default function ProjectPanel({
   const handleSelect = (id: string) => {
     const next = effectiveSelectedId === id ? null : id;
     setSelectedId(next);
+    setDeleteProjectError('');
     onSelectProject?.(next || '');
   };
+
+  const handleDeleteProject = useCallback(async () => {
+    if (!selectedProject || deletingProjectId) return;
+    const projectName = selectedProject.name || selectedProject.id;
+    const confirmed = window.confirm(
+      `Delete project "${projectName}"?\n\nThis permanently deletes the project data and its workspace files. This action cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setDeleteProjectError('');
+    setDeletingProjectId(selectedProject.id);
+    const result = await deleteProjectApi(selectedProject.id);
+    setDeletingProjectId(null);
+    if (!result.ok) {
+      setDeleteProjectError(result.detail || 'Unable to delete project.');
+      return;
+    }
+    if (result.detail) {
+      window.alert(`Project deleted, but workspace cleanup was skipped: ${result.detail}`);
+    }
+    setSelectedId(null);
+    onSelectProject?.('');
+    onRefresh?.();
+  }, [deletingProjectId, onRefresh, onSelectProject, selectedProject]);
 
   const handleCreateProject = async () => {
     const name = newProjectName.trim();
@@ -2089,9 +2158,13 @@ export default function ProjectPanel({
             project={selectedProject}
             tasks={selectedTasks}
             onClose={() => {
+              setDeleteProjectError('');
               setSelectedId(null);
               onSelectProject?.('');
             }}
+            onDelete={handleDeleteProject}
+            deleting={deletingProjectId === selectedProject.id}
+            deleteError={deleteProjectError}
             initialTab={initialProjectId ? 'overview' : undefined}
           />
         </div>

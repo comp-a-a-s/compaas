@@ -75,6 +75,50 @@ export async function fetchProjectDetail(
   return safeFetch(`${BASE}/projects/${encodeURIComponent(id)}`, fallback, options);
 }
 
+export async function deleteProject(projectId: string): Promise<{
+  ok: boolean;
+  workspaceDeleted?: boolean;
+  detail?: string;
+}> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE}/projects/${encodeURIComponent(projectId)}`, {
+      method: 'DELETE',
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const payload = await res.json();
+        const value = payload && typeof payload === 'object' && 'detail' in payload
+          ? (payload as { detail?: unknown }).detail
+          : '';
+        if (typeof value === 'string' && value.trim()) detail = value.trim();
+      } catch {
+        // keep fallback detail
+      }
+      return { ok: false, detail };
+    }
+    const payload = await res.json();
+    const workspaceDeleted = Boolean(
+      payload && typeof payload === 'object' && (payload as { workspace_deleted?: unknown }).workspace_deleted
+    );
+    const workspaceSkipReason = payload && typeof payload === 'object'
+      ? String((payload as { workspace_skip_reason?: unknown }).workspace_skip_reason || '').trim()
+      : '';
+    return {
+      ok: true,
+      workspaceDeleted,
+      detail: workspaceSkipReason || undefined,
+    };
+  } catch {
+    return { ok: false, detail: 'Network error while deleting project.' };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function fetchProjectDecisions(id: string): Promise<Decision[]> {
   return safeFetch<Decision[]>(`${BASE}/projects/${encodeURIComponent(id)}/decisions`, []);
 }

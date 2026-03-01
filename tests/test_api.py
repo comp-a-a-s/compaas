@@ -161,6 +161,45 @@ class TestListProjectsEndpoint:
         names = {p["name"] for p in data}
         assert names == {"Project Alpha", "Project Beta"}
 
+    def test_list_includes_run_instructions(self, client):
+        import src.web.api as api_module
+
+        pid = _create_project(client)
+        api_module.state_manager.update_project(pid, {"run_instructions": "npm run dev"})
+
+        data = client.get("/api/projects").json()
+        project = next((p for p in data if p.get("id") == pid), None)
+        assert project is not None
+        assert project.get("run_instructions") == "npm run dev"
+
+    def test_backfills_run_instructions_from_activation_guide(self, client, temp_data_dir):
+        import src.web.api as api_module
+
+        pid = _create_project(client)
+        activation_guide_path = os.path.join(
+            temp_data_dir,
+            "projects",
+            pid,
+            "artifacts",
+            "02_activation_guide.md",
+        )
+        with open(activation_guide_path, "w") as f:
+            f.write(
+                "## Run Commands\n"
+                "- npm ci\n"
+                "- npm run dev\n"
+            )
+        api_module.state_manager.update_project(pid, {"run_instructions": ""})
+
+        data = client.get("/api/projects").json()
+        project = next((p for p in data if p.get("id") == pid), None)
+        assert project is not None
+        assert project.get("run_instructions") == "npm ci\nnpm run dev"
+
+        persisted = api_module.state_manager.get_project(pid)
+        assert persisted is not None
+        assert persisted.get("run_instructions") == "npm ci\nnpm run dev"
+
 
 class TestCreateProjectEndpoint:
     def test_creates_project_and_returns_metadata(self, client):
@@ -203,6 +242,37 @@ class TestCreateProjectEndpoint:
         detail = response.json()["detail"]
         assert detail["code"] == "github_not_configured"
         assert detail["settings_target"] == "github"
+
+
+class TestDeleteProjectEndpoint:
+    def test_delete_project_success(self, client):
+        import src.web.api as api_module
+
+        pid = _create_project(client, name="Delete API Project")
+        project = api_module.state_manager.get_project(pid)
+        assert project is not None
+        workspace_path = project.get("workspace_path", "")
+        assert workspace_path
+        assert os.path.isdir(workspace_path)
+
+        response = client.delete(f"/api/projects/{pid}")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["project_id"] == pid
+        assert payload["project_deleted"] is True
+        assert payload["workspace_deleted"] is True
+
+        assert api_module.state_manager.get_project(pid) is None
+        assert not os.path.exists(workspace_path)
+
+    def test_delete_project_missing_returns_404(self, client):
+        response = client.delete("/api/projects/nonexistent1")
+        assert response.status_code == 404
+
+    def test_delete_project_invalid_id_returns_400(self, client):
+        response = client.delete("/api/projects/..secret")
+        assert response.status_code == 400
 
 
 class TestApproveProjectPlanEndpoint:

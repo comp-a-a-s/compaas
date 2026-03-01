@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import uuid
 import yaml
 from datetime import datetime, timezone
@@ -200,6 +201,48 @@ class ProjectStateManager:
             atomic_yaml_write(path, data)
         return True
 
+    def _workspace_path_allowed(self, workspace_path: str) -> bool:
+        root = os.path.realpath(self.workspace_root)
+        candidate = os.path.realpath(workspace_path)
+        if candidate == root:
+            return False
+        return candidate.startswith(root.rstrip(os.sep) + os.sep)
+
+    def delete_project(self, project_id: str) -> dict | None:
+        """Hard-delete a project record directory and its workspace when safe."""
+        validate_safe_id(project_id, "project_id")
+        project = self.get_project(project_id)
+        if not isinstance(project, dict):
+            return None
+
+        project_path = safe_path_join(self.projects_dir, project_id)
+        project_deleted = False
+        if os.path.exists(project_path):
+            shutil.rmtree(project_path)
+            project_deleted = True
+
+        workspace_deleted = False
+        workspace_path = str(project.get("workspace_path", "") or "").strip()
+        workspace_skip_reason = ""
+        if workspace_path:
+            resolved_workspace = os.path.realpath(os.path.abspath(workspace_path))
+            if self._workspace_path_allowed(resolved_workspace):
+                if os.path.exists(resolved_workspace):
+                    shutil.rmtree(resolved_workspace)
+                    workspace_deleted = True
+                else:
+                    workspace_skip_reason = "Workspace path did not exist."
+            else:
+                workspace_skip_reason = "Workspace path is outside allowed workspace root."
+
+        return {
+            "project_id": project_id,
+            "project_deleted": project_deleted,
+            "workspace_deleted": workspace_deleted,
+            "workspace_path": workspace_path,
+            "workspace_skip_reason": workspace_skip_reason,
+        }
+
     def list_projects(self) -> list[dict]:
         if not os.path.exists(self.projects_dir):
             return []
@@ -233,6 +276,7 @@ class ProjectStateManager:
                     "delivery_mode": data.get("delivery_mode", "local"),
                     "github_repo": data.get("github_repo", ""),
                     "github_branch": data.get("github_branch", "master"),
+                    "run_instructions": data.get("run_instructions", ""),
                 })
             except (yaml.YAMLError, KeyError, OSError):
                 continue
