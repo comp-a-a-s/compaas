@@ -1639,8 +1639,11 @@ def get_project_decisions(project_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/activity/recent", summary="Get recent activity events")
-def recent_activity(limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
-    """Return the most recent activity events as JSON (non-streaming)."""
+def recent_activity(
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, le=100000),
+) -> list[dict]:
+    """Return recent activity events as JSON (non-streaming, newest-window pagination)."""
     import json as _json
     activity_log_path = os.path.join(DATA_DIR, "activity.log")
     if not os.path.exists(activity_log_path):
@@ -1655,7 +1658,11 @@ def recent_activity(limit: int = Query(default=100, ge=1, le=500)) -> list[dict]
                 events.append(_json.loads(line))
             except (ValueError, KeyError):
                 continue
-    return events[-limit:]
+    if not events:
+        return []
+    end = max(0, len(events) - offset)
+    start = max(0, end - limit)
+    return events[start:end]
 
 
 @app.get("/api/workforce/live", summary="Get canonical live workforce presence state")

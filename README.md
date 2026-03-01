@@ -146,6 +146,23 @@ Default URL: [http://localhost:8420](http://localhost:8420)
 | `COMPAAS_CORS_METHODS` | `GET` | Allowed CORS methods |
 | `COMPAAS_ADMIN_TOKEN` | unset | Optional admin write guard |
 
+## Local Models (Complete Guide)
+
+Running COMPaaS with local/self-hosted models is fully supported.
+
+Full guide (all methods, model selection, install/pull steps, and troubleshooting):
+
+- [Local Models Guide](docs/local-models-guide.md)
+
+Included runtimes:
+
+- Ollama
+- LM Studio
+- llama.cpp
+- Jan
+- vLLM
+- Custom OpenAI-compatible servers
+
 ## Contributing
 
 COMPaaS is actively evolving and contributions are welcome.

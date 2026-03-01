@@ -178,8 +178,12 @@ export async function fetchProjectDecisions(id: string): Promise<Decision[]> {
   return safeFetch<Decision[]>(`${BASE}/projects/${encodeURIComponent(id)}/decisions`, []);
 }
 
-export async function fetchRecentActivity(limit = 50): Promise<ActivityEvent[]> {
-  return safeFetch<ActivityEvent[]>(`${BASE}/activity/recent?limit=${limit}`, []);
+export async function fetchRecentActivity(limit = 50, offset = 0): Promise<ActivityEvent[]> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(Math.max(0, offset)),
+  });
+  return safeFetch<ActivityEvent[]>(`${BASE}/activity/recent?${params.toString()}`, []);
 }
 
 export function emptyWorkforceLiveSnapshot(projectId = ''): WorkforceLiveSnapshot {

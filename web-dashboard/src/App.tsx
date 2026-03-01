@@ -29,7 +29,7 @@ import {
 
 import type { Agent, Project, Task, ActivityEvent, AppConfig, WorkforceLiveSnapshot } from './types';
 
-const MAX_EVENTS = 200;
+const MAX_EVENTS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 3000;
 const MAX_POLL_INTERVAL_MS = 30000;
@@ -594,8 +594,8 @@ export default function App() {
         setActivityEvents((prev) => {
           const seen = new Set(prev.map(eventKey));
           const newEvents = fetched.filter((e) => !seen.has(eventKey(e)));
-          const merged = [...newEvents, ...prev].slice(0, MAX_EVENTS);
-          return merged;
+          const merged = [...newEvents, ...prev];
+          return merged.length > MAX_EVENTS ? merged.slice(-MAX_EVENTS) : merged;
         });
       }
     }).catch(() => {

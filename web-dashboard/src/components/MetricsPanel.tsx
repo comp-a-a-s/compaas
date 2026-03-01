@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { ActivityEvent } from '../types';
 import FloatingSelect from './ui/FloatingSelect';
 
@@ -77,6 +77,11 @@ const ACTION_TYPES = [
   'MESSAGE',
   'WARNING',
   'ERROR',
+];
+const PAGE_SIZE_OPTIONS = [
+  { value: '50', label: '50 / page', description: 'Show 50 events per page.' },
+  { value: '100', label: '100 / page', description: 'Show 100 events per page.' },
+  { value: '200', label: '200 / page', description: 'Show 200 events per page.' },
 ];
 
 function escapeCSVField(value: string): string {
@@ -316,6 +321,8 @@ export default function EventLogPanel({ events }: EventLogPanelProps) {
   const [search, setSearch] = useState('');
   const [agentFilter, setAgentFilter] = useState('');
   const [actionFilter, setActionFilter] = useState('ALL');
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(1);
 
   // Build unique agent list — include delegation metadata agents
   const agentNames = useMemo(() => {
@@ -376,6 +383,16 @@ export default function EventLogPanel({ events }: EventLogPanelProps) {
         return true;
       });
   }, [events, search, agentFilter, actionFilter]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredEvents.length / pageSize));
+  const normalizedPage = Math.min(page, pageCount);
+  const pageStart = (normalizedPage - 1) * pageSize;
+  const pageEnd = pageStart + pageSize;
+  const pagedEvents = filteredEvents.slice(pageStart, pageEnd);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, agentFilter, actionFilter, pageSize]);
 
   const handleExport = useCallback(() => {
     exportToCSV(filteredEvents);
@@ -619,6 +636,57 @@ export default function EventLogPanel({ events }: EventLogPanelProps) {
               );
             })}
           </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
+            <FloatingSelect
+              value={String(pageSize)}
+              options={PAGE_SIZE_OPTIONS}
+              onChange={(value) => setPageSize(Number(value))}
+              ariaLabel="Event log page size"
+              size="sm"
+              variant="input"
+              style={{ width: '125px' }}
+            />
+            <span style={{ fontSize: '11px', color: 'var(--tf-text-muted)', minWidth: '82px', textAlign: 'right' }}>
+              Page {normalizedPage}/{pageCount}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+              disabled={normalizedPage <= 1}
+              style={{
+                fontSize: '10px',
+                padding: '3px 9px',
+                borderRadius: '99px',
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-surface)',
+                color: normalizedPage <= 1 ? 'var(--tf-text-muted)' : 'var(--tf-text)',
+                cursor: normalizedPage <= 1 ? 'not-allowed' : 'pointer',
+                opacity: normalizedPage <= 1 ? 0.6 : 1,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Newer
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((prev) => Math.min(pageCount, prev + 1))}
+              disabled={normalizedPage >= pageCount}
+              style={{
+                fontSize: '10px',
+                padding: '3px 9px',
+                borderRadius: '99px',
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-surface)',
+                color: normalizedPage >= pageCount ? 'var(--tf-text-muted)' : 'var(--tf-text)',
+                cursor: normalizedPage >= pageCount ? 'not-allowed' : 'pointer',
+                opacity: normalizedPage >= pageCount ? 0.6 : 1,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Older
+            </button>
+          </div>
         </div>
       </div>
 
@@ -693,7 +761,7 @@ export default function EventLogPanel({ events }: EventLogPanelProps) {
             {filteredEvents.length === 0 ? (
               <EmptyState />
             ) : (
-              filteredEvents.map((event, i) => (
+              pagedEvents.map((event, i) => (
                 <EventRow
                   key={`${event.timestamp}-${event.agent}-${i}`}
                   event={event}

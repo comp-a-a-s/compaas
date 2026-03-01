@@ -620,6 +620,14 @@ function StepAiProvider({
         {/* Sub-mode tabs */}
         <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
           <SubTab
+            label="Codex CLI (Recommended)"
+            active={openaiMode === 'codex'}
+            onClick={() => {
+              setOpenaiMode('codex');
+              setLlmApiKey('');
+            }}
+          />
+          <SubTab
             label="API Key"
             active={openaiMode === 'apikey'}
             onClick={() => {
@@ -628,14 +636,6 @@ function StepAiProvider({
               if (localPlaceholders.has(llmApiKey.trim().toLowerCase())) {
                 setLlmApiKey('');
               }
-            }}
-          />
-          <SubTab
-            label="Codex CLI (Recommended)"
-            active={openaiMode === 'codex'}
-            onClick={() => {
-              setOpenaiMode('codex');
-              setLlmApiKey('');
             }}
           />
         </div>
@@ -2009,7 +2009,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [anthropicApiKey, setAnthropicApiKey] = useState('');
   const [anthropicModelPreset, setAnthropicModelPreset] = useState('claude-opus-4-6');
   // OpenAI sub-options
-  const [openaiMode, setOpenaiMode] = useState<OpenaiMode>('apikey');
+  const [openaiMode, setOpenaiMode] = useState<OpenaiMode>('codex');
   // Local / shared
   const [localPreset, setLocalPreset] = useState<LocalPreset>('ollama');
   const [llmBaseUrl, setLlmBaseUrl] = useState('http://localhost:11434/v1');

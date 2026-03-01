@@ -696,7 +696,7 @@ function AiProviderSection({
 }) {
   const [provider, setProvider]         = useState<LlmConfig['provider']>(llm?.provider ?? 'anthropic');
   const [anthropicMode, setAnthropicMode] = useState<'cli' | 'apikey'>(llm?.anthropic_mode ?? 'cli');
-  const [openaiMode, setOpenaiMode]     = useState<'apikey' | 'codex'>(llm?.openai_mode ?? 'apikey');
+  const [openaiMode, setOpenaiMode]     = useState<'apikey' | 'codex'>(llm?.openai_mode ?? 'codex');
   const [baseUrl, setBaseUrl]           = useState(llm?.base_url ?? 'http://localhost:11434/v1');
   const [model, setModel]               = useState(llm?.model ?? 'llama3.2');
   const [apiKey, setApiKey]             = useState(llm?.api_key ?? '');
@@ -917,6 +917,24 @@ function AiProviderSection({
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button
                 onClick={() => {
+                  setOpenaiMode('codex');
+                  setApiKey('');
+                  clearTestStatus();
+                }}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '5px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  border: `1px solid ${openaiMode === 'codex' ? C.accent : C.border}`,
+                  backgroundColor: openaiMode === 'codex' ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
+                  color: openaiMode === 'codex' ? C.accent : C.textSecondary,
+                }}
+              >
+                Codex CLI (Recommended)
+              </button>
+              <button
+                onClick={() => {
                   setOpenaiMode('apikey');
                   const localPlaceholders = new Set(['ollama', 'lm-studio', 'none', 'jan', 'vllm']);
                   if (localPlaceholders.has(apiKey.trim().toLowerCase())) {
@@ -935,24 +953,6 @@ function AiProviderSection({
                 }}
               >
                 API
-              </button>
-              <button
-                onClick={() => {
-                  setOpenaiMode('codex');
-                  setApiKey('');
-                  clearTestStatus();
-                }}
-                style={{
-                  padding: '4px 10px',
-                  borderRadius: '5px',
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                  border: `1px solid ${openaiMode === 'codex' ? C.accent : C.border}`,
-                  backgroundColor: openaiMode === 'codex' ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
-                  color: openaiMode === 'codex' ? C.accent : C.textSecondary,
-                }}
-              >
-                Codex CLI (Recommended)
               </button>
             </div>
           </div>

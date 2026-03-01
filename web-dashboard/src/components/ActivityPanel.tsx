@@ -22,6 +22,11 @@ function actionBadgeStyle(action: string): { bg: string; text: string } {
 }
 
 const ACTION_TYPES = ['ALL', 'DELEGATED', 'STARTED', 'COMPLETED', 'BLOCKED', 'ASSIGNED', 'UPDATED', 'CREATED', 'MESSAGE', 'WARNING', 'ERROR'];
+const PAGE_SIZE_OPTIONS = [
+  { value: '50', label: '50 / page', description: 'Show 50 events per page.' },
+  { value: '100', label: '100 / page', description: 'Show 100 events per page.' },
+  { value: '200', label: '200 / page', description: 'Show 200 events per page.' },
+];
 
 function agentAvatarColor(name: string): string {
   const colors = [
@@ -278,18 +283,23 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
   const [actionFilter, setActionFilter] = useState<string>('ALL');
   const [activeTab, setActiveTab] = useState<'live' | 'audit'>('live');
   const [auditSearch, setAuditSearch] = useState('');
+  const [livePageSize, setLivePageSize] = useState<number>(50);
+  const [auditPageSize, setAuditPageSize] = useState<number>(50);
+  const [livePage, setLivePage] = useState<number>(1);
+  const [auditPage, setAuditPage] = useState<number>(1);
   const feedRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom on new events
   useEffect(() => {
+    if (livePage !== 1) return;
     const feed = feedRef.current;
     if (!feed) return;
     const distanceToBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
     if (distanceToBottom <= 120) {
       bottomRef.current?.scrollIntoView({ behavior: 'auto' });
     }
-  }, [events.length]);
+  }, [events.length, livePage]);
 
   // Build unique agent list for filter — include delegation metadata agents
   const agentNames = useMemo(() => {
@@ -329,6 +339,12 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
     });
   }, [events, agentFilter, actionFilter]);
 
+  const livePageCount = Math.max(1, Math.ceil(filteredEvents.length / livePageSize));
+  const normalizedLivePage = Math.min(livePage, livePageCount);
+  const liveSliceEnd = Math.max(0, filteredEvents.length - ((normalizedLivePage - 1) * livePageSize));
+  const liveSliceStart = Math.max(0, liveSliceEnd - livePageSize);
+  const pagedLiveEvents = filteredEvents.slice(liveSliceStart, liveSliceEnd);
+
   // Audit log derived state
   const auditEvents = useMemo(() => {
     const all = [...events].reverse(); // newest first
@@ -341,6 +357,20 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
       JSON.stringify(e.metadata || {}).toLowerCase().includes(q)
     );
   }, [events, auditSearch]);
+
+  const auditPageCount = Math.max(1, Math.ceil(auditEvents.length / auditPageSize));
+  const normalizedAuditPage = Math.min(auditPage, auditPageCount);
+  const auditSliceStart = (normalizedAuditPage - 1) * auditPageSize;
+  const auditSliceEnd = auditSliceStart + auditPageSize;
+  const pagedAuditEvents = auditEvents.slice(auditSliceStart, auditSliceEnd);
+
+  useEffect(() => {
+    setLivePage(1);
+  }, [agentFilter, actionFilter, livePageSize]);
+
+  useEffect(() => {
+    setAuditPage(1);
+  }, [auditSearch, auditPageSize]);
 
   return (
     <div className="flex flex-col animate-fade-in" style={{ height: '100%', minHeight: 0 }}>
@@ -372,6 +402,50 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
             {auditSearch && <button onClick={() => setAuditSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--tf-text-muted)', fontSize: '11px' }}>✕</button>}
             {auditSearch && <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>{auditEvents.length} results</span>}
           </div>
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <FloatingSelect
+              value={String(auditPageSize)}
+              options={PAGE_SIZE_OPTIONS}
+              onChange={(value) => setAuditPageSize(Number(value))}
+              ariaLabel="Audit page size"
+              size="sm"
+              variant="input"
+              style={{ width: '125px' }}
+            />
+            <span className="text-xs ml-auto" style={{ color: 'var(--tf-text-muted)' }}>
+              Page {normalizedAuditPage} / {auditPageCount}
+            </span>
+            <button
+              type="button"
+              onClick={() => setAuditPage((prev) => Math.max(1, prev - 1))}
+              disabled={normalizedAuditPage <= 1}
+              className="text-xs px-2 py-1 rounded-md"
+              style={{
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-surface)',
+                color: normalizedAuditPage <= 1 ? 'var(--tf-text-muted)' : 'var(--tf-text)',
+                opacity: normalizedAuditPage <= 1 ? 0.6 : 1,
+                cursor: normalizedAuditPage <= 1 ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Newer
+            </button>
+            <button
+              type="button"
+              onClick={() => setAuditPage((prev) => Math.min(auditPageCount, prev + 1))}
+              disabled={normalizedAuditPage >= auditPageCount}
+              className="text-xs px-2 py-1 rounded-md"
+              style={{
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-surface)',
+                color: normalizedAuditPage >= auditPageCount ? 'var(--tf-text-muted)' : 'var(--tf-text)',
+                opacity: normalizedAuditPage >= auditPageCount ? 0.6 : 1,
+                cursor: normalizedAuditPage >= auditPageCount ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Older
+            </button>
+          </div>
           <div className="flex-1 overflow-y-auto rounded-xl px-3" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
             {/* Header row */}
             <div className="flex items-center gap-3 py-2 text-xs sticky top-0" style={{ borderBottom: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)', fontFamily: 'ui-monospace, monospace', fontWeight: 600, color: 'var(--tf-text-muted)' }}>
@@ -382,7 +456,7 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
             </div>
             {auditEvents.length === 0
               ? <p className="text-xs text-center py-8" style={{ color: 'var(--tf-text-muted)' }}>No audit entries yet.</p>
-              : auditEvents.map((e, i) => <AuditEntry key={`${e.timestamp}-${i}`} event={e} index={i} />)
+              : pagedAuditEvents.map((e, i) => <AuditEntry key={`${e.timestamp}-${i}`} event={e} index={i} />)
             }
           </div>
         </div>
@@ -459,6 +533,51 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
         </div>
       </div>
 
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <FloatingSelect
+          value={String(livePageSize)}
+          options={PAGE_SIZE_OPTIONS}
+          onChange={(value) => setLivePageSize(Number(value))}
+          ariaLabel="Live feed page size"
+          size="sm"
+          variant="input"
+          style={{ width: '125px' }}
+        />
+        <span className="text-xs ml-auto" style={{ color: 'var(--tf-text-muted)' }}>
+          Page {normalizedLivePage} / {livePageCount}
+        </span>
+        <button
+          type="button"
+          onClick={() => setLivePage((prev) => Math.max(1, prev - 1))}
+          disabled={normalizedLivePage <= 1}
+          className="text-xs px-2 py-1 rounded-md"
+          style={{
+            border: '1px solid var(--tf-border)',
+            backgroundColor: 'var(--tf-surface)',
+            color: normalizedLivePage <= 1 ? 'var(--tf-text-muted)' : 'var(--tf-text)',
+            opacity: normalizedLivePage <= 1 ? 0.6 : 1,
+            cursor: normalizedLivePage <= 1 ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Newer
+        </button>
+        <button
+          type="button"
+          onClick={() => setLivePage((prev) => Math.min(livePageCount, prev + 1))}
+          disabled={normalizedLivePage >= livePageCount}
+          className="text-xs px-2 py-1 rounded-md"
+          style={{
+            border: '1px solid var(--tf-border)',
+            backgroundColor: 'var(--tf-surface)',
+            color: normalizedLivePage >= livePageCount ? 'var(--tf-text-muted)' : 'var(--tf-text)',
+            opacity: normalizedLivePage >= livePageCount ? 0.6 : 1,
+            cursor: normalizedLivePage >= livePageCount ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Older
+        </button>
+      </div>
+
       {/* Events feed */}
       <div
         ref={feedRef}
@@ -475,7 +594,7 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
           <EmptyState />
         ) : (
           <div className="px-4">
-            {filteredEvents.map((event, i) => (
+            {pagedLiveEvents.map((event, i) => (
               <EventBubble
                 key={`${event.timestamp}-${event.agent}-${i}`}
                 event={event}
