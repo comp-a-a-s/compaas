@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { ChatMessage, Project } from '../types';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { ChatMessage, Project, StructuredChatResponse, StructuredDeliverable } from '../types';
 import {
   fetchChatHistory,
   clearChatHistory,
@@ -15,6 +17,7 @@ import {
   deployProjectToVercel,
 } from '../api/client';
 import FloatingSelect from './ui/FloatingSelect';
+import { useToast } from './Toast';
 
 // ---- Helpers ----
 
@@ -273,140 +276,198 @@ function microComplexityReason(input: string): string | null {
 
 // ---- Markdown renderers ----
 
-function splitTrailingPunctuation(token: string): { core: string; trailing: string } {
-  const match = token.match(/^(.+?)([.,!?;:)\]]*)$/);
-  if (!match) return { core: token, trailing: '' };
-  return { core: match[1], trailing: match[2] || '' };
+function trimLinkTarget(target: string): string {
+  return target.trim().replace(/^<|>$/g, '').replace(/[),.;!?]+$/, '');
 }
 
-function linkifyInlineText(text: string, keyBase: string): React.ReactNode[] {
-  const pattern = /(https?:\/\/[^\s<>"`]+|(?:\/[A-Za-z0-9._-]+){2,})/g;
-  const parts: React.ReactNode[] = [];
-  let cursor = 0;
-  let match: RegExpExecArray | null = null;
-  let idx = 0;
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > cursor) {
-      parts.push(text.slice(cursor, match.index));
-    }
-    const token = match[0];
-    const { core, trailing } = splitTrailingPunctuation(token);
-    const isUrl = /^https?:\/\//i.test(core);
-    if (isUrl) {
-      parts.push(
-        <a
-          key={`${keyBase}-url-${idx}`}
-          href={core}
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: 'var(--tf-accent-blue)', textDecoration: 'underline', textUnderlineOffset: '2px' }}
-          title={core}
-        >
-          {core}
-        </a>
-      );
-    } else {
-      parts.push(
-        <button
-          key={`${keyBase}-path-${idx}`}
-          type="button"
-          onClick={() => {
-            void navigator.clipboard.writeText(core).catch(() => {});
-          }}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            padding: 0,
-            margin: 0,
-            color: 'var(--tf-accent)',
-            cursor: 'copy',
-            textDecoration: 'underline',
-            textUnderlineOffset: '2px',
-            font: 'inherit',
-          }}
-          title={`Copy path: ${core}`}
-        >
-          {core}
-        </button>
-      );
-    }
-    if (trailing) parts.push(trailing);
-    cursor = match.index + token.length;
-    idx += 1;
-  }
-  if (cursor < text.length) {
-    parts.push(text.slice(cursor));
-  }
-  return parts;
+function isHttpUrl(target: string): boolean {
+  return /^https?:\/\//i.test(target);
 }
 
-function renderInlineMarkdown(text: string): React.ReactNode {
-  const parts: React.ReactNode[] = [];
-  let remaining = text;
-  let key = 0;
-  const pushInlineText = (value: string) => {
-    const linked = linkifyInlineText(value, `inline-${key++}`);
-    parts.push(...linked);
+function isPathLikeTarget(target: string): boolean {
+  if (!target) return false;
+  if (isHttpUrl(target)) return false;
+  if (target.startsWith('#') || target.startsWith('mailto:') || target.startsWith('tel:')) return false;
+  if (/\s/.test(target)) return false;
+  return target.includes('/');
+}
+
+function normalizeStructuredResponse(value: unknown): StructuredChatResponse | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const summary = typeof raw.summary === 'string' ? raw.summary.trim() : '';
+  const nextActions = Array.isArray(raw.next_actions) ? raw.next_actions.map((item) => String(item)).filter(Boolean) : [];
+  const risks = Array.isArray(raw.risks) ? raw.risks.map((item) => String(item)).filter(Boolean) : [];
+  const validation = Array.isArray(raw.validation) ? raw.validation.map((item) => String(item)).filter(Boolean) : [];
+  const delegations = Array.isArray(raw.delegations)
+    ? raw.delegations
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const payload = item as Record<string, unknown>;
+        const agent = String(payload.agent || '').trim();
+        const why = String(payload.why || '').trim();
+        const action = String(payload.action || '').trim();
+        if (!agent && !why && !action) return null;
+        return { agent, why, action };
+      })
+      .filter(Boolean) as Array<{ agent: string; why: string; action: string }>
+    : [];
+  const deliverables = Array.isArray(raw.deliverables)
+    ? raw.deliverables
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const payload = item as Record<string, unknown>;
+        const target = trimLinkTarget(String(payload.target || ''));
+        if (!target) return null;
+        const normalizedKind = String(payload.kind || '').toLowerCase();
+        const kind: StructuredDeliverable['kind'] = normalizedKind === 'url' || isHttpUrl(target) ? 'url' : 'path';
+        const label = String(payload.label || target).trim() || target;
+        return { label, target, kind };
+      })
+      .filter(Boolean) as StructuredDeliverable[]
+    : [];
+  if (!summary && nextActions.length === 0 && risks.length === 0 && validation.length === 0 && deliverables.length === 0 && delegations.length === 0) {
+    return undefined;
+  }
+  return {
+    summary,
+    next_actions: nextActions,
+    risks,
+    validation,
+    deliverables,
+    delegations,
   };
-  while (remaining.length > 0) {
-    const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
-    const italicMatch = remaining.match(/\*(.+?)\*/);
-    const codeMatch = remaining.match(/`(.+?)`/);
-    const matches = [
-      boldMatch   ? { index: boldMatch.index!,   match: boldMatch,   type: 'bold' }   : null,
-      italicMatch ? { index: italicMatch.index!, match: italicMatch, type: 'italic' } : null,
-      codeMatch   ? { index: codeMatch.index!,   match: codeMatch,   type: 'code' }   : null,
-    ].filter(Boolean) as { index: number; match: RegExpMatchArray; type: string }[];
-    if (matches.length === 0) { pushInlineText(remaining); break; }
-    const first = matches.reduce((a, b) => a.index <= b.index ? a : b);
-    if (first.index > 0) pushInlineText(remaining.slice(0, first.index));
-    if (first.type === 'bold')
-      parts.push(<strong key={key++} style={{ fontWeight: 700, color: 'var(--tf-text)' }}>{first.match[1]}</strong>);
-    else if (first.type === 'italic')
-      parts.push(<em key={key++} style={{ fontStyle: 'italic' }}>{first.match[1]}</em>);
-    else
-      parts.push(<code key={key++} style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '1px 4px', borderRadius: '3px', fontFamily: 'ui-monospace, monospace', fontSize: '11px' }}>{first.match[1]}</code>);
-    remaining = remaining.slice(first.index + first.match[0].length);
-  }
-  return <>{parts}</>;
 }
 
-function renderMarkdown(content: string): React.ReactNode {
-  const lines = content.split('\n');
-  const result: React.ReactNode[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.startsWith('### '))
-      result.push(<h3 key={i} style={{ fontSize: '13px', fontWeight: 700, color: 'var(--tf-text)', margin: '8px 0 4px' }}>{renderInlineMarkdown(line.slice(4))}</h3>);
-    else if (line.startsWith('## '))
-      result.push(<h2 key={i} style={{ fontSize: '14px', fontWeight: 700, color: 'var(--tf-text)', margin: '10px 0 4px' }}>{renderInlineMarkdown(line.slice(3))}</h2>);
-    else if (line.startsWith('# '))
-      result.push(<h1 key={i} style={{ fontSize: '15px', fontWeight: 700, color: 'var(--tf-text)', margin: '12px 0 4px' }}>{renderInlineMarkdown(line.slice(2))}</h1>);
-    else if (line.startsWith('- ') || line.startsWith('* '))
-      result.push(<div key={i} style={{ display: 'flex', gap: '6px', margin: '2px 0' }}>
-        <span style={{ color: 'var(--tf-accent-blue)', flexShrink: 0 }}>•</span>
-        <span style={{ color: 'var(--tf-text)' }}>{renderInlineMarkdown(line.slice(2))}</span>
-      </div>);
-    else if (/^\d+\. /.test(line)) {
-      const num = line.match(/^(\d+)\. /)?.[1] ?? '';
-      result.push(<div key={i} style={{ display: 'flex', gap: '6px', margin: '2px 0' }}>
-        <span style={{ color: 'var(--tf-accent-blue)', flexShrink: 0, minWidth: '16px' }}>{num}.</span>
-        <span style={{ color: 'var(--tf-text)' }}>{renderInlineMarkdown(line.replace(/^\d+\. /, ''))}</span>
-      </div>);
-    } else if (line.startsWith('```')) {
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith('```')) { codeLines.push(lines[i]); i++; }
-      result.push(<pre key={i} style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)', borderRadius: '6px', padding: '10px 12px', margin: '6px 0', fontSize: '11px', color: 'var(--tf-text)', overflowX: 'auto', fontFamily: 'ui-monospace, monospace' }}><code>{codeLines.join('\n')}</code></pre>);
-    } else if (line.trim() === '') {
-      result.push(<div key={i} style={{ height: '6px' }} />);
-    } else {
-      result.push(<p key={i} style={{ color: 'var(--tf-text)', fontSize: '13px', lineHeight: '1.6', margin: '2px 0' }}>{renderInlineMarkdown(line)}</p>);
-    }
-    i++;
-  }
-  return <>{result}</>;
+function hasStructuredContent(value?: StructuredChatResponse): boolean {
+  if (!value) return false;
+  const summary = (value.summary || '').trim();
+  return Boolean(
+    summary
+    || (value.deliverables && value.deliverables.length > 0)
+    || (value.validation && value.validation.length > 0)
+    || (value.next_actions && value.next_actions.length > 0)
+  );
+}
+
+function MarkdownBody({ content, onCopyPath }: { content: string; onCopyPath: (path: string) => void }) {
+  return (
+    <div className="chat-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="chat-markdown-p">{children}</p>,
+          ul: ({ children }) => <ul className="chat-markdown-ul">{children}</ul>,
+          ol: ({ children }) => <ol className="chat-markdown-ol">{children}</ol>,
+          li: ({ children }) => <li className="chat-markdown-li">{children}</li>,
+          pre: ({ children }) => <pre className="chat-markdown-pre">{children}</pre>,
+          code: ({ children, className }) => (
+            <code className={className ? `chat-markdown-code ${className}` : 'chat-markdown-inline-code'}>
+              {children}
+            </code>
+          ),
+          a: ({ href = '', children }) => {
+            const target = trimLinkTarget(String(href));
+            if (isPathLikeTarget(target)) {
+              return (
+                <button
+                  type="button"
+                  className="chat-path-link"
+                  onClick={() => onCopyPath(target)}
+                  title={`Copy path: ${target}`}
+                >
+                  {children}
+                </button>
+              );
+            }
+            const safeHref = target || '#';
+            return (
+              <a href={safeHref} target="_blank" rel="noreferrer" className="chat-http-link" title={safeHref}>
+                {children}
+              </a>
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+interface StructuredCompletionCardProps {
+  structured: StructuredChatResponse;
+  showFullResponse: boolean;
+  onToggleFullResponse: () => void;
+  onCopyPath: (path: string) => void;
+}
+
+function StructuredCompletionCard({
+  structured,
+  showFullResponse,
+  onToggleFullResponse,
+  onCopyPath,
+}: StructuredCompletionCardProps) {
+  const summary = (structured.summary || '').trim();
+  const deliverables = structured.deliverables || [];
+  const validation = structured.validation || [];
+  const nextActions = structured.next_actions || [];
+  return (
+    <div className="chat-summary-card">
+      <div className="chat-summary-card-header">
+        <span className="chat-summary-card-title">Completion Summary</span>
+        <button type="button" onClick={onToggleFullResponse} className="chat-summary-toggle">
+          {showFullResponse ? 'Hide full response' : 'Show full response'}
+        </button>
+      </div>
+
+      {summary && (
+        <div className="chat-summary-block">
+          <p className="chat-summary-label">Outcome</p>
+          <p className="chat-summary-text">{summary}</p>
+        </div>
+      )}
+
+      {deliverables.length > 0 && (
+        <div className="chat-summary-block">
+          <p className="chat-summary-label">Deliverables</p>
+          <ul className="chat-summary-list">
+            {deliverables.map((item, idx) => (
+              <li key={`${item.target}-${idx}`} className="chat-summary-list-item">
+                {item.kind === 'url' ? (
+                  <a href={item.target} target="_blank" rel="noreferrer" className="chat-http-link">
+                    {item.label}
+                  </a>
+                ) : (
+                  <button type="button" className="chat-path-link" onClick={() => onCopyPath(item.target)} title={`Copy path: ${item.target}`}>
+                    {item.label}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {validation.length > 0 && (
+        <div className="chat-summary-block">
+          <p className="chat-summary-label">Validation</p>
+          <ul className="chat-summary-list">
+            {validation.map((item, idx) => <li key={`${item}-${idx}`} className="chat-summary-list-item">{item}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {nextActions.length > 0 && (
+        <div className="chat-summary-block">
+          <p className="chat-summary-label">Next Actions</p>
+          <ol className="chat-summary-list chat-summary-list-numbered">
+            {nextActions.map((item, idx) => <li key={`${item}-${idx}`} className="chat-summary-list-item">{item}</li>)}
+          </ol>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ---- Search highlight helper ----
@@ -436,16 +497,19 @@ interface MessageBubbleProps {
   pinned?: boolean;
   onPin?: () => void;
   searchQuery?: string;
+  onCopyPath: (path: string) => void;
 }
 
-function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You', pinned, onPin, searchQuery }: MessageBubbleProps) {
+function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You', pinned, onPin, searchQuery, onCopyPath }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [hovered, setHovered] = useState(false);
+  const [showFullResponse, setShowFullResponse] = useState(false);
+  const showStructuredCard = !isUser && !isStreaming && !searchQuery && hasStructuredContent(message.structured);
 
   return (
     <div
       className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3 animate-slide-up`}
-      style={{ position: 'relative' }}
+      style={{ position: 'relative', minWidth: 0 }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -456,7 +520,7 @@ function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You'
         </div>
       )}
 
-      <div style={{ maxWidth: '75%', position: 'relative' }}>
+      <div style={{ maxWidth: isUser ? '75%' : '82%', minWidth: 0, position: 'relative' }}>
         {pinned && (
           <div style={{ position: 'absolute', top: '-8px', right: isUser ? '8px' : 'auto', left: !isUser ? '8px' : 'auto', fontSize: '10px', color: 'var(--tf-warning)', zIndex: 1 }}>
             PIN
@@ -484,12 +548,20 @@ function MessageBubble({ message, isStreaming, ceoName = 'CEO', userName = 'You'
               {highlightSearch(message.content || (isStreaming ? '' : '(empty)'), searchQuery)}
             </p>
           ) : (
-            <div className="text-sm leading-relaxed break-words">
+            <div className="text-sm leading-relaxed break-words" style={{ minWidth: 0 }}>
               {message.content ? (
                 <>
+                  {showStructuredCard && (
+                    <StructuredCompletionCard
+                      structured={message.structured || {}}
+                      showFullResponse={showFullResponse}
+                      onToggleFullResponse={() => setShowFullResponse((prev) => !prev)}
+                      onCopyPath={onCopyPath}
+                    />
+                  )}
                   {searchQuery
-                    ? <p style={{ color: 'var(--tf-text)', fontSize: '13px', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>{highlightSearch(message.content, searchQuery)}</p>
-                    : renderMarkdown(message.content)
+                    ? <p style={{ color: 'var(--tf-text)', fontSize: '13px', lineHeight: '1.6', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{highlightSearch(message.content, searchQuery)}</p>
+                    : (!showStructuredCard || showFullResponse) && <MarkdownBody content={message.content} onCopyPath={onCopyPath} />
                   }
                   {isStreaming && <span className="blink-cursor" />}
                 </>
@@ -842,12 +914,7 @@ interface WsMessage {
   created?: boolean;
   project?: Project;
   run_id?: string;
-  structured?: {
-    summary?: string;
-    delegations?: Array<Record<string, unknown>>;
-    risks?: string[];
-    next_actions?: string[];
-  };
+  structured?: StructuredChatResponse;
   deploy_offer?: {
     project_id?: string;
     project_name?: string;
@@ -965,6 +1032,7 @@ export default function ChatPanel({
   onAgentRemove,
   onWorkforceRefreshRequest,
 }: ChatPanelProps) {
+  const { toast } = useToast();
   // Core state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -1186,6 +1254,14 @@ export default function ChatPanel({
     }
   }, []);
 
+  const handleCopyPath = useCallback((path: string) => {
+    void navigator.clipboard.writeText(path).then(() => {
+      toast('Path copied to clipboard.', 'success');
+    }).catch(() => {
+      toast('Unable to copy path.', 'warning');
+    });
+  }, [toast]);
+
   const mirrorTelegram = useCallback(async (speaker: string, content: string, projectId: string) => {
     if (!telegramMirrorEnabledRef.current) return;
     const creds = readTelegramCredentials();
@@ -1216,12 +1292,13 @@ export default function ChatPanel({
     }
   }, [mirrorTelegram, onTelegramMirrorChange]);
 
-  const pushCeoMessage = useCallback((content: string, projectId: string) => {
+  const pushCeoMessage = useCallback((content: string, projectId: string, structured?: StructuredChatResponse) => {
     setMessages((prev) => [...prev, {
       role: 'ceo',
       content,
       timestamp: new Date().toISOString(),
       project_id: projectId,
+      structured,
     }]);
     void safeMirrorTelegram(ceoNameRef.current, content, projectId);
   }, [safeMirrorTelegram]);
@@ -1236,7 +1313,7 @@ export default function ChatPanel({
     if (!chatOpenRef.current) onNewCeoMessageRef.current?.();
   }, []);
 
-  const typewriteAndCommit = useCallback((content: string, projectId: string) => {
+  const typewriteAndCommit = useCallback((content: string, projectId: string, structured?: StructuredChatResponse) => {
     stopTypingAnimation();
     const tokens = content.split(/(\s+)/).filter((token) => token.length > 0);
     let cursor = 0;
@@ -1254,7 +1331,7 @@ export default function ChatPanel({
         return;
       }
       typingTimerRef.current = null;
-      pushCeoMessage(content, projectId);
+      pushCeoMessage(content, projectId, structured);
       completeAssistantTurn();
     };
 
@@ -1443,6 +1520,7 @@ export default function ChatPanel({
             case 'done': {
               const streamedContent = streamingAccumRef.current;
               const finalContent = wsContentText(data.content, '') || streamedContent;
+              const structured = normalizeStructuredResponse(data.structured);
               streamingAccumRef.current = '';
               if (data.run_id) setLatestRunId(data.run_id);
               const projectId = data.project_id || activeProjectIdRef.current;
@@ -1460,7 +1538,7 @@ export default function ChatPanel({
                 setDeployOffer(null);
               }
               if (!turnErroredRef.current && finalContent.trim()) {
-                typewriteAndCommit(finalContent, projectId);
+                typewriteAndCommit(finalContent, projectId, structured);
                 onWorkforceRefreshRequestRef.current?.();
                 break;
               }
@@ -1987,7 +2065,7 @@ export default function ChatPanel({
                   <button
                     type="button"
                     onClick={() => {
-                      void navigator.clipboard.writeText(activeProject.workspace_path || '').catch(() => {});
+                      handleCopyPath(activeProject.workspace_path || '');
                     }}
                     style={{
                       background: 'transparent',
@@ -2257,7 +2335,7 @@ export default function ChatPanel({
               const key = msgKey(msg);
               return (
                 <MessageBubble key={`${key}-${i}`} message={msg} ceoName={ceoName} userName={userName}
-                  pinned={pinnedIds.has(key)} onPin={() => handlePin(key)} searchQuery={searchQuery} />
+                  pinned={pinnedIds.has(key)} onPin={() => handlePin(key)} searchQuery={searchQuery} onCopyPath={handleCopyPath} />
               );
             })}
 
@@ -2269,7 +2347,7 @@ export default function ChatPanel({
             )}
             {streamingContent && (
               <MessageBubble message={{ role: 'ceo', content: streamingContent, timestamp: new Date().toISOString() }}
-                isStreaming ceoName={ceoName} userName={userName} />
+                isStreaming ceoName={ceoName} userName={userName} onCopyPath={handleCopyPath} />
             )}
             {isWaiting && !streamingContent && actionLog.length === 0 && showThinking && (
               <ThinkingIndicator ceoName={ceoName} customText={thinkingContent || undefined} />

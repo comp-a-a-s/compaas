@@ -180,9 +180,13 @@ const workforcePayload = {
 };
 
 let projectsRequestCount = 0;
+let chatHistoryPayload: Array<Record<string, unknown>> = [];
+let projectsListPayload = projectsPayload;
 
 test.beforeEach(async ({ page }) => {
   projectsRequestCount = 0;
+  chatHistoryPayload = [];
+  projectsListPayload = projectsPayload;
 
   await page.route('**/api/config', async (route) => {
     if (route.request().method() === 'GET') {
@@ -206,10 +210,10 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/projects', async (route) => {
     projectsRequestCount += 1;
     if (route.request().method() === 'GET') {
-      await route.fulfill({ json: projectsPayload });
+      await route.fulfill({ json: projectsListPayload });
       return;
     }
-    await route.fulfill({ json: { status: 'ok', project: projectsPayload[0] } });
+    await route.fulfill({ json: { status: 'ok', project: projectsPayload[0] || null } });
   });
 
   await page.route('**/api/workforce/live**', async (route) => {
@@ -252,7 +256,7 @@ test.beforeEach(async ({ page }) => {
   });
 
   await page.route('**/api/chat/history*', async (route) => {
-    await route.fulfill({ json: [] });
+    await route.fulfill({ json: chatHistoryPayload });
   });
 
   await page.route('**/api/memory', async (route) => {
@@ -322,4 +326,80 @@ test('workforce states stay consistent across overview and agents @smoke', async
 
   await expect(page.getByRole('heading', { name: 'Live State: Working' })).toBeVisible();
   await expect(page.getByText('Implement signup form validation').first()).toBeVisible();
+});
+
+test('ceo chat renders structured response with links, wrapping, and maximize toggle @smoke', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  chatHistoryPayload = [
+    {
+      role: 'ceo',
+      content: [
+        '## Outcome',
+        'CashTracker build is complete.',
+        '',
+        '## Deliverables',
+        '- [Activation Guide](/Users/idan/compaas/projects/cashtracker/artifacts/02_activation_guide.md)',
+        '- [Dashboard URL](https://cashtracker.example.com)',
+        '',
+        '## Validation',
+        '- npm run build passed.',
+        '',
+        '## Next Steps',
+        '1. Open the activation guide.',
+      ].join('\n'),
+      timestamp: '2026-02-28T10:22:00.000Z',
+      project_id: '',
+      structured: {
+        summary: 'CashTracker build is complete.',
+        deliverables: [
+          {
+            label: 'Activation Guide',
+            target: '/Users/idan/compaas/projects/cashtracker/artifacts/02_activation_guide.md',
+            kind: 'path',
+          },
+          {
+            label: 'Dashboard URL',
+            target: 'https://cashtracker.example.com',
+            kind: 'url',
+          },
+        ],
+        validation: ['npm run build passed.'],
+        next_actions: ['Open the activation guide.'],
+        delegations: [],
+        risks: [],
+      },
+    },
+  ];
+  projectsListPayload = [];
+
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/');
+  const openChatButton = page.getByRole('button', { name: 'Open CEO chat' });
+  if (await openChatButton.count()) {
+    await openChatButton.first().click();
+  }
+  await expect(page.locator('aside.split-chat-panel.split-chat-panel-open')).toBeVisible();
+
+  const chatPane = page.locator('aside.split-chat-panel');
+  const widthBefore = await chatPane.evaluate((el) => el.getBoundingClientRect().width);
+  await page.getByRole('button', { name: 'Maximize' }).click();
+  await expect(page.getByRole('button', { name: 'Restore' })).toBeVisible();
+  const widthAfter = await chatPane.evaluate((el) => el.getBoundingClientRect().width);
+  expect(widthAfter).toBeGreaterThan(widthBefore + 40);
+  await page.getByRole('button', { name: 'Restore' }).click();
+
+  await expect(page.getByText('Completion Summary')).toBeVisible();
+  await page.getByRole('button', { name: /Activation Guide/i }).click();
+  await expect(page.getByText(/Path copied to clipboard|Unable to copy path/i)).toBeVisible();
+
+  const dashboardLink = page.getByRole('link', { name: 'Dashboard URL' });
+  await expect(dashboardLink).toHaveAttribute('href', 'https://cashtracker.example.com');
+  await expect(dashboardLink).toHaveAttribute('target', '_blank');
+
+  await page.getByRole('button', { name: 'Show full response' }).click();
+  await expect(page.getByRole('heading', { name: 'Outcome' })).toBeVisible();
+  const markdownWraps = await page.locator('.chat-markdown').first().evaluate(
+    (el) => el.scrollWidth <= (el.clientWidth + 2),
+  );
+  expect(markdownWraps).toBeTruthy();
 });

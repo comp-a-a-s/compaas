@@ -363,6 +363,153 @@ textarea:focus-visible {
   animation: live-border 2s ease-in-out infinite;
 }
 
+/* ---- Chat markdown + structured completion card ---- */
+.chat-markdown {
+  min-width: 0;
+  color: var(--tf-text);
+  font-size: 13px;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-markdown-p {
+  margin: 3px 0;
+}
+
+.chat-markdown-ul,
+.chat-markdown-ol {
+  margin: 4px 0 4px 18px;
+  padding: 0;
+}
+
+.chat-markdown-li {
+  margin: 2px 0;
+  min-width: 0;
+}
+
+.chat-markdown-pre {
+  margin: 6px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--tf-border);
+  background-color: var(--tf-surface);
+  overflow-x: auto;
+  max-width: 100%;
+  white-space: pre;
+}
+
+.chat-markdown-code {
+  font-family: "IBM Plex Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--tf-text);
+}
+
+.chat-markdown-inline-code {
+  font-family: "IBM Plex Mono", "SFMono-Regular", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--tf-text);
+  background-color: color-mix(in srgb, var(--tf-bg) 70%, transparent);
+  border: 1px solid var(--tf-border-subtle);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.chat-http-link,
+.chat-path-link {
+  color: var(--tf-accent-blue);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-path-link {
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  cursor: copy;
+  font: inherit;
+  text-align: left;
+  color: var(--tf-accent);
+}
+
+.chat-summary-card {
+  border: 1px solid color-mix(in srgb, var(--tf-accent-blue) 35%, var(--tf-border));
+  background-color: color-mix(in srgb, var(--tf-surface) 82%, var(--tf-surface-raised));
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.chat-summary-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.chat-summary-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--tf-accent-blue);
+  text-transform: uppercase;
+}
+
+.chat-summary-toggle {
+  border: 1px solid var(--tf-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tf-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.chat-summary-block + .chat-summary-block {
+  margin-top: 8px;
+}
+
+.chat-summary-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tf-text-secondary);
+  margin: 0 0 3px;
+}
+
+.chat-summary-text {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--tf-text);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-summary-list {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 3px;
+}
+
+.chat-summary-list-numbered {
+  list-style: decimal;
+}
+
+.chat-summary-list-item {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--tf-text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* ---- Split chat panel motion ---- */
 @keyframes split-panel-open {
   from {
