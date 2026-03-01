@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Project, Task, Decision } from '../types';
-import { fetchProjectDecisions, fetchProjectSpecs, approveProjectPlan, createProject, deleteProject as deleteProjectApi } from '../api/client';
+import {
+  fetchProjectDecisions,
+  fetchProjectSpecs,
+  approveProjectPlan,
+  createProject,
+  deleteProject as deleteProjectApi,
+  updateProjectTags as updateProjectTagsApi,
+} from '../api/client';
 import FloatingSelect from './ui/FloatingSelect';
 
 interface ProjectPanelProps {
@@ -137,6 +144,41 @@ function resolveTeamName(raw: string): string {
   return AGENT_DISPLAY_NAMES[lower] || raw;
 }
 
+function normalizeTagList(rawTags: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of rawTags) {
+    const tag = String(raw || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9 _-]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    result.push(tag);
+    if (result.length >= 8) break;
+  }
+  return result;
+}
+
+function parseTagInput(value: string): string[] {
+  return normalizeTagList(value.split(','));
+}
+
+function openWorkspaceFolder(pathValue: string): void {
+  const target = String(pathValue || '').trim();
+  if (!target) return;
+  const normalized = target.replace(/\\/g, '/');
+  const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`;
+  try {
+    window.open(fileUrl, '_blank', 'noopener,noreferrer');
+  } catch {
+    // ignore popup/open failures and still copy path below
+  }
+  void navigator.clipboard.writeText(target).catch(() => undefined);
+}
+
 function statusAccent(status: string): string {
   const s = status.toLowerCase();
   if (s === 'active')    return 'var(--tf-success)';
@@ -162,6 +204,7 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
   const accent = statusAccent(project.status);
 
   const teamNames = project.team ?? [];
+  const tagLabels = normalizeTagList(project.tags ?? []);
 
   return (
     <button
@@ -231,6 +274,24 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
             </div>
           )}
 
+          {tagLabels.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {tagLabels.slice(0, 3).map((tag) => (
+                <span
+                  key={tag}
+                  className="px-1.5 py-0.5 rounded-full text-[10px]"
+                  style={{
+                    border: '1px solid var(--tf-border)',
+                    color: 'var(--tf-accent-blue)',
+                    backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)',
+                  }}
+                >
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          )}
+
           {/* How to run */}
           {project.run_instructions && (
             <div style={{ position: 'relative' }}>
@@ -280,6 +341,27 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
                 }}
               >
                 ⎘
+              </button>
+            </div>
+          )}
+
+          {project.workspace_path && (
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openWorkspaceFolder(project.workspace_path || '');
+                }}
+                className="text-[10px] px-2 py-1 rounded-md"
+                style={{
+                  border: '1px solid var(--tf-border)',
+                  backgroundColor: 'var(--tf-bg)',
+                  color: 'var(--tf-text-secondary)',
+                  cursor: 'pointer',
+                }}
+                title="Open workspace folder (copies path as fallback)"
+              >
+                Open Workspace
               </button>
             </div>
           )}
@@ -1511,6 +1593,9 @@ interface ProjectDetailProps {
   onDelete?: () => void;
   deleting?: boolean;
   deleteError?: string;
+  onSaveTags?: (tags: string[]) => void;
+  savingTags?: boolean;
+  tagsError?: string;
   initialTab?: ProjectTab;
   onApproved?: () => void;
 }
@@ -1521,6 +1606,9 @@ function ProjectDetail({
   onDelete,
   deleting = false,
   deleteError = '',
+  onSaveTags,
+  savingTags = false,
+  tagsError = '',
   initialTab,
   onApproved,
 }: ProjectDetailProps) {
@@ -1562,6 +1650,12 @@ function ProjectDetail({
       .map((line) => line.trim())
       .filter((line) => line.length > 0)
   ), [project.run_instructions]);
+  const tagLabels = useMemo(() => normalizeTagList(project.tags ?? []), [project.tags]);
+  const [tagDraft, setTagDraft] = useState(() => tagLabels.join(', '));
+
+  useEffect(() => {
+    setTagDraft(tagLabels.join(', '));
+  }, [project.id, tagLabels]);
 
   return (
     <div
@@ -1628,13 +1722,70 @@ function ProjectDetail({
             {deleteError}
           </div>
         )}
+        {tagsError && (
+          <div
+            className="rounded-lg px-3 py-2 text-xs"
+            style={{
+              border: '1px solid var(--tf-error)',
+              backgroundColor: '#2d1519',
+              color: 'var(--tf-error)',
+            }}
+          >
+            {tagsError}
+          </div>
+        )}
         <section>
           <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
             Project Description
           </p>
+          {tagLabels.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap mb-2">
+              {tagLabels.map((tag) => (
+                <span
+                  key={tag}
+                  className="px-2 py-0.5 rounded-full text-[11px]"
+                  style={{
+                    border: '1px solid var(--tf-border)',
+                    color: 'var(--tf-accent-blue)',
+                    backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 10%, transparent)',
+                  }}
+                >
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          )}
           <p className="text-sm leading-relaxed" style={{ color: 'var(--tf-text-secondary)' }}>
             {project.description || 'No description yet. Ask the CEO for a completion summary.'}
           </p>
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              type="text"
+              value={tagDraft}
+              onChange={(e) => setTagDraft(e.target.value)}
+              placeholder="Add tags (comma-separated)"
+              className="text-xs px-2 py-1.5 rounded-md flex-1 min-w-0"
+              style={{
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-bg)',
+                color: 'var(--tf-text)',
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => onSaveTags?.(parseTagInput(tagDraft))}
+              disabled={!onSaveTags || savingTags}
+              className="text-xs px-2.5 py-1.5 rounded-md"
+              style={{
+                border: '1px solid var(--tf-border)',
+                backgroundColor: savingTags ? 'var(--tf-surface-raised)' : 'transparent',
+                color: savingTags ? 'var(--tf-text-muted)' : 'var(--tf-text-secondary)',
+                cursor: !onSaveTags || savingTags ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {savingTags ? 'Saving…' : 'Save Tags'}
+            </button>
+          </div>
         </section>
 
         <section>
@@ -1680,6 +1831,21 @@ function ProjectDetail({
           <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
             Final Run Commands
           </p>
+          {project.workspace_path && (
+            <button
+              type="button"
+              onClick={() => openWorkspaceFolder(project.workspace_path || '')}
+              className="text-xs px-2.5 py-1.5 rounded-md mb-2"
+              style={{
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-surface-raised)',
+                color: 'var(--tf-text-secondary)',
+                cursor: 'pointer',
+              }}
+            >
+              Open Workspace Folder
+            </button>
+          )}
           {runCommands.length === 0 ? (
             <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
               No run commands yet.
@@ -1751,6 +1917,8 @@ export default function ProjectPanel({
   const [creatingProject, setCreatingProject] = useState(false);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [deleteProjectError, setDeleteProjectError] = useState('');
+  const [savingTags, setSavingTags] = useState(false);
+  const [tagsError, setTagsError] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectMode, setNewProjectMode] = useState<'local' | 'github'>(defaultWorkspaceMode === 'github' ? 'github' : 'local');
@@ -1811,6 +1979,7 @@ export default function ProjectPanel({
     const next = effectiveSelectedId === id ? null : id;
     setSelectedId(next);
     setDeleteProjectError('');
+    setTagsError('');
     onSelectProject?.(next || '');
   };
 
@@ -1837,6 +2006,19 @@ export default function ProjectPanel({
     onSelectProject?.('');
     onRefresh?.();
   }, [deletingProjectId, onRefresh, onSelectProject, selectedProject]);
+
+  const handleSaveTags = useCallback(async (tags: string[]) => {
+    if (!selectedProject || savingTags) return;
+    setTagsError('');
+    setSavingTags(true);
+    const result = await updateProjectTagsApi(selectedProject.id, tags);
+    setSavingTags(false);
+    if (!result.ok) {
+      setTagsError(result.detail || 'Unable to save project tags.');
+      return;
+    }
+    onRefresh?.();
+  }, [onRefresh, savingTags, selectedProject]);
 
   const handleCreateProject = async () => {
     const name = newProjectName.trim();
@@ -2159,12 +2341,16 @@ export default function ProjectPanel({
             tasks={selectedTasks}
             onClose={() => {
               setDeleteProjectError('');
+              setTagsError('');
               setSelectedId(null);
               onSelectProject?.('');
             }}
             onDelete={handleDeleteProject}
             deleting={deletingProjectId === selectedProject.id}
             deleteError={deleteProjectError}
+            onSaveTags={handleSaveTags}
+            savingTags={savingTags}
+            tagsError={tagsError}
             initialTab={initialProjectId ? 'overview' : undefined}
           />
         </div>

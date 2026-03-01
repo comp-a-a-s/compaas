@@ -862,7 +862,7 @@ export default function App() {
   const filteredProjects = useMemo(() => {
     if (!normalizedSearch) return projects;
     return projects.filter((p) => {
-      const hay = `${p.name} ${p.description ?? ''} ${p.type ?? ''} ${p.status ?? ''}`.toLowerCase();
+      const hay = `${p.name} ${p.description ?? ''} ${p.type ?? ''} ${p.status ?? ''} ${(p.tags ?? []).join(' ')}`.toLowerCase();
       return hay.includes(normalizedSearch);
     });
   }, [projects, normalizedSearch]);

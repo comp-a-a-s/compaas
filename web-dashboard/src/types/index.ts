@@ -27,6 +27,7 @@ export interface Project {
   updated_at?: string;
   phases?: string[];
   team?: string[];
+  tags?: string[];
   task_counts?: Record<string, number>;
   total_tasks?: number;
   plan_approved?: boolean;

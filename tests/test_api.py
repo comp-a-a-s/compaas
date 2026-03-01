@@ -274,6 +274,37 @@ class TestDeleteProjectEndpoint:
         response = client.delete("/api/projects/..secret")
         assert response.status_code == 400
 
+    def test_delete_project_post_alias_success(self, client):
+        import src.web.api as api_module
+
+        pid = _create_project(client, name="Delete Alias Project")
+        project = api_module.state_manager.get_project(pid)
+        assert project is not None
+
+        response = client.post(f"/api/projects/{pid}/delete")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["project_id"] == pid
+        assert api_module.state_manager.get_project(pid) is None
+
+
+class TestPatchProjectEndpoint:
+    def test_patch_project_updates_tags(self, client):
+        import src.web.api as api_module
+
+        pid = _create_project(client, name="Taggable Project")
+        response = client.patch(f"/api/projects/{pid}", json={"tags": ["frontend", "urgent", "frontend"]})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["updated_fields"] == ["tags"]
+        assert payload["project"]["tags"] == ["frontend", "urgent"]
+
+        persisted = api_module.state_manager.get_project(pid)
+        assert persisted is not None
+        assert persisted.get("tags") == ["frontend", "urgent"]
+
 
 class TestApproveProjectPlanEndpoint:
     def test_approve_releases_active_planning_runs(self, client, monkeypatch, temp_data_dir):

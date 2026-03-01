@@ -84,6 +84,9 @@ class TestProjectState:
         assert len(projects) == 2
         names = {p["name"] for p in projects}
         assert names == {"App A", "App B"}
+        for project in projects:
+            assert "tags" in project
+            assert isinstance(project["tags"], list)
 
     def test_list_empty_projects(self, data_dir):
         mgr = ProjectStateManager(data_dir)

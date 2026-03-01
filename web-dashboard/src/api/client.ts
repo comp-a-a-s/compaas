@@ -83,10 +83,17 @@ export async function deleteProject(projectId: string): Promise<{
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(`${BASE}/projects/${encodeURIComponent(projectId)}`, {
+    let res = await fetch(`${BASE}/projects/${encodeURIComponent(projectId)}`, {
       method: 'DELETE',
       signal: controller.signal,
     });
+    // Some deployments/proxies block DELETE; fall back to POST alias.
+    if (res.status === 405) {
+      res = await fetch(`${BASE}/projects/${encodeURIComponent(projectId)}/delete`, {
+        method: 'POST',
+        signal: controller.signal,
+      });
+    }
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
       try {
@@ -114,6 +121,45 @@ export async function deleteProject(projectId: string): Promise<{
     };
   } catch {
     return { ok: false, detail: 'Network error while deleting project.' };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export async function updateProjectTags(projectId: string, tags: string[]): Promise<{
+  ok: boolean;
+  project?: Project;
+  detail?: string;
+}> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE}/projects/${encodeURIComponent(projectId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const payload = await res.json();
+        const value = payload && typeof payload === 'object' && 'detail' in payload
+          ? (payload as { detail?: unknown }).detail
+          : '';
+        if (typeof value === 'string' && value.trim()) detail = value.trim();
+      } catch {
+        // keep fallback detail
+      }
+      return { ok: false, detail };
+    }
+    const payload = await res.json();
+    const project = payload && typeof payload === 'object'
+      ? (payload as { project?: Project }).project
+      : undefined;
+    return { ok: true, project };
+  } catch {
+    return { ok: false, detail: 'Network error while updating project tags.' };
   } finally {
     clearTimeout(timeoutId);
   }

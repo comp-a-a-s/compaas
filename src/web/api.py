@@ -643,6 +643,28 @@ def get_org_chart() -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _normalize_project_tags(values: Any, *, limit: int = 8) -> list[str]:
+    if isinstance(values, str):
+        raw_values: list[str] = [part for part in values.split(",")]
+    elif isinstance(values, list):
+        raw_values = [str(item or "") for item in values]
+    else:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        tag = re.sub(r"\s+", " ", str(raw or "").strip().lower())
+        tag = re.sub(r"[^a-z0-9 _-]", "", tag).strip(" -_")
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        normalized.append(tag)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
 def _backfill_project_run_instructions(project_id: str) -> str:
     """Best-effort run command backfill from artifacts/02_activation_guide.md."""
     if not project_id:
@@ -738,6 +760,7 @@ def create_project(request: Request, body: dict | None = None) -> dict:
     workspace_path = str(payload.get("workspace_path", "") or "").strip()
     github_repo = str(payload.get("github_repo", "") or "").strip()
     github_branch = str(payload.get("github_branch", "") or "master").strip() or "master"
+    tags = _normalize_project_tags(payload.get("tags"))
     cfg = _load_config()
     integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
     if requested_mode in {"local", "github"}:
@@ -781,6 +804,9 @@ def create_project(request: Request, body: dict | None = None) -> dict:
         workspace_path=workspace_path,
     )
     project_id = str(project.get("id", "") or "")
+    if project_id and tags:
+        state_manager.update_project(project_id, {"tags": tags})
+        project = state_manager.get_project(project_id) or project
     plan_packet = project_service.plan_packet_status(project_id)
     emit_activity(
         DATA_DIR,
@@ -820,8 +846,7 @@ def get_project(project_id: str) -> dict:
     return {**project, "tasks": tasks, "project": project, "plan_packet": plan_packet}
 
 
-@app.delete("/api/projects/{project_id}", summary="Delete a project and workspace")
-def delete_project(request: Request, project_id: str) -> dict:
+def _delete_project_impl(request: Request, project_id: str) -> dict:
     _require_write_auth(request)
     try:
         validate_safe_id(project_id, "project_id")
@@ -868,6 +893,53 @@ def delete_project(request: Request, project_id: str) -> dict:
         },
     )
     return payload
+
+
+@app.delete("/api/projects/{project_id}", summary="Delete a project and workspace")
+def delete_project(request: Request, project_id: str) -> dict:
+    return _delete_project_impl(request, project_id)
+
+
+@app.post("/api/projects/{project_id}/delete", summary="Delete a project and workspace (POST alias)")
+def delete_project_post_alias(request: Request, project_id: str) -> dict:
+    return _delete_project_impl(request, project_id)
+
+
+@app.patch("/api/projects/{project_id}", summary="Update mutable project metadata")
+def patch_project(request: Request, project_id: str, body: dict | None = None) -> dict:
+    _require_write_auth(request)
+    try:
+        validate_safe_id(project_id, "project_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
+
+    project = state_manager.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+
+    payload = body or {}
+    updates: dict[str, Any] = {}
+
+    if "tags" in payload:
+        updates["tags"] = _normalize_project_tags(payload.get("tags"))
+
+    if not updates:
+        return {"status": "ok", "project": project, "updated_fields": []}
+
+    updated = state_manager.update_project(project_id, updates)
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update project.")
+
+    refreshed = state_manager.get_project(project_id) or project
+    emit_activity(
+        DATA_DIR,
+        "ceo",
+        "UPDATED",
+        f"Project '{project_id}' metadata updated",
+        project_id=project_id,
+        metadata={"fields": sorted(updates.keys())},
+    )
+    return {"status": "ok", "project": refreshed, "updated_fields": sorted(updates.keys())}
 
 
 # ---------------------------------------------------------------------------

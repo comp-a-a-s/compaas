@@ -43,6 +43,8 @@ const SIDEBAR_COLLAPSED_KEY = 'compaas_sidebar_collapsed';
 const CHAT_SPLIT_WIDTH_KEY = 'compaas_chat_split_width';
 const CHAT_MAXIMIZED_KEY = 'compaas_chat_maximized';
 const PROJECT_CREATE_SENTINEL = '__create_new_project__';
+const PROJECT_PINNED_KEY = 'compaas_pinned_projects';
+const PROJECT_PIN_TOGGLE_SENTINEL = '__toggle_pin_active_project__';
 
 const PAGE_LABELS: Record<string, string> = {
   overview: 'Overview',
@@ -318,6 +320,16 @@ export default function Layout({
   const [chatMaximized, setChatMaximized] = useState(() => getStoredBoolean(CHAT_MAXIMIZED_KEY));
   const [draggingSplit, setDraggingSplit] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(false);
+  const [pinnedProjectIds, setPinnedProjectIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(PROJECT_PINNED_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.map((value) => String(value || '').trim()).filter(Boolean);
+    } catch {
+      return [];
+    }
+  });
 
   useEffect(() => {
     const onResize = () => {
@@ -379,6 +391,18 @@ export default function Layout({
   };
 
   const handleProjectSelection = (projectId: string) => {
+    if (projectId === PROJECT_PIN_TOGGLE_SENTINEL) {
+      if (!activeProjectId) return;
+      setPinnedProjectIds((prev) => {
+        const hasPinned = prev.includes(activeProjectId);
+        const next = hasPinned
+          ? prev.filter((id) => id !== activeProjectId)
+          : [...prev, activeProjectId];
+        localStorage.setItem(PROJECT_PINNED_KEY, JSON.stringify(next));
+        return next;
+      });
+      return;
+    }
     if (projectId === PROJECT_CREATE_SENTINEL) {
       onCreateProjectRequest?.();
       return;
@@ -386,22 +410,50 @@ export default function Layout({
     onActiveProjectChange?.(projectId);
   };
 
+  useEffect(() => {
+    const valid = new Set(projects.map((project) => project.id));
+    setPinnedProjectIds((prev) => {
+      const next = prev.filter((id) => valid.has(id));
+      if (next.length !== prev.length) {
+        localStorage.setItem(PROJECT_PINNED_KEY, JSON.stringify(next));
+      }
+      return next;
+    });
+  }, [projects]);
+
   const projectSelectOptions = useMemo(() => {
+    const pinnedSet = new Set(pinnedProjectIds);
+    const sortedProjects = [...projects].sort((a, b) => {
+      const aPinned = pinnedSet.has(a.id) ? 1 : 0;
+      const bPinned = pinnedSet.has(b.id) ? 1 : 0;
+      if (aPinned !== bPinned) return bPinned - aPinned;
+      return a.name.localeCompare(b.name);
+    });
     const base = [
+      ...(activeProjectId ? [{
+        value: PROJECT_PIN_TOGGLE_SENTINEL,
+        label: pinnedSet.has(activeProjectId) ? '★ Unpin Current Project' : '☆ Pin Current Project',
+        description: pinnedSet.has(activeProjectId)
+          ? 'Remove current project from favorites'
+          : 'Keep current project at top of selector',
+      }] : []),
       {
         value: PROJECT_CREATE_SENTINEL,
         label: '+ Create New Project...',
         description: 'Start a new project workspace',
       },
-      ...projects.map((project) => ({
+      ...sortedProjects.map((project) => ({
         value: project.id,
-        label: project.name,
-        description: project.status ? `Status: ${project.status}` : undefined,
-        keywords: [project.id, project.name, project.status || ''],
+        label: pinnedSet.has(project.id) ? `★ ${project.name}` : project.name,
+        description: project.status
+          ? `Status: ${project.status}${project.tags && project.tags.length > 0 ? ` • ${project.tags.map((tag) => `#${tag}`).join(' ')}` : ''}`
+          : undefined,
+        badge: pinnedSet.has(project.id) ? 'Pinned' : undefined,
+        keywords: [project.id, project.name, project.status || '', ...(project.tags || [])],
       })),
     ];
     return base;
-  }, [projects]);
+  }, [activeProjectId, pinnedProjectIds, projects]);
 
   const splitHeaderButtonBase: React.CSSProperties = {
     padding: '4px 8px',

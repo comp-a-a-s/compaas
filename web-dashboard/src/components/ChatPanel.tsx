@@ -1954,6 +1954,27 @@ export default function ChatPanel({
   const visibleApprovals = pendingApprovalProjects.filter((p) => !dismissedProjectIds.has(p.id));
   const hasMessages = messages.length > 0 || streamingContent;
   const activeProject = projects.find((p) => p.id === activeProjectId) || null;
+  const promptTemplates = useMemo(() => {
+    const projectName = activeProject?.name || 'this project';
+    return [
+      {
+        label: 'Build MVP',
+        prompt: `Build an MVP for ${projectName}. Include scope, milestones, and begin implementation.`,
+      },
+      {
+        label: 'Fix Bug',
+        prompt: `Investigate and fix a critical bug in ${projectName}. Provide root cause, patch, and validation steps.`,
+      },
+      {
+        label: 'Deploy Preview',
+        prompt: `Prepare ${projectName} for preview deployment and share exact run/verification steps.`,
+      },
+    ];
+  }, [activeProject?.name]);
+  const applyPromptTemplate = useCallback((prompt: string) => {
+    setInput(prompt);
+    focusInput();
+  }, [focusInput]);
   const showConversationPanel = Boolean(
     hasMessages
     || isWaiting
@@ -2585,6 +2606,25 @@ export default function ChatPanel({
       </div>
 
       {/* Input */}
+      <div className={`flex flex-wrap gap-1.5 ${floating ? 'px-3 pt-2' : ''}`}>
+        {promptTemplates.map((template) => (
+          <button
+            key={template.label}
+            type="button"
+            onClick={() => applyPromptTemplate(template.prompt)}
+            className="text-xs px-2.5 py-1 rounded-full"
+            style={{
+              border: '1px solid var(--tf-border)',
+              backgroundColor: 'var(--tf-surface-raised)',
+              color: 'var(--tf-text-secondary)',
+              cursor: 'pointer',
+            }}
+            title={template.prompt}
+          >
+            {template.label}
+          </button>
+        ))}
+      </div>
       <div className={`flex items-end gap-2 flex-shrink-0 ${floating ? 'px-3 py-2' : 'mt-3'}`}
         style={floating ? { borderTop: '1px solid var(--tf-surface-raised)' } : undefined}>
         <div className="flex-1 rounded-xl overflow-hidden" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>
