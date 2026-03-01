@@ -822,6 +822,22 @@ def test_structured_response_payload_keeps_clarification_turn_as_general():
     assert payload["deliverables"] == []
 
 
+def test_structured_response_payload_requires_run_commands_for_build_complete():
+    payload = api._structured_response_payload(
+        """
+        ## Outcome
+        Build complete.
+
+        ## Deliverables
+        - [Workspace](/Users/idan/compaas/projects/demo)
+
+        ## Validation
+        - Smoke checks passed.
+        """
+    )
+    assert payload["completion_kind"] == "general"
+
+
 def test_structured_response_payload_is_backward_compatible_for_empty_text():
     payload = api._structured_response_payload("")
     assert payload["summary"] == ""
@@ -879,6 +895,27 @@ def test_merge_structured_completion_with_project_keeps_general_turn_unpromoted(
     assert merged["completion_kind"] == "general"
     assert merged["run_commands"] == []
     assert merged["open_links"] == []
+
+
+def test_merge_structured_completion_with_project_downgrades_build_complete_without_commands():
+    merged = api._merge_structured_completion_with_project(
+        {
+            "summary": "Build completed.",
+            "deliverables": [{"label": "Workspace", "target": "/Users/idan/compaas/projects/demo", "kind": "path"}],
+            "validation": ["Checks passed."],
+            "next_actions": ["Run it locally."],
+            "run_commands": [],
+            "open_links": [],
+            "completion_kind": "build_complete",
+        },
+        {
+            "workspace_path": "/Users/idan/compaas/projects/demo",
+            "run_instructions": "npm run dev",
+        },
+    )
+    assert merged["completion_kind"] == "general"
+    assert merged["run_commands"] == []
+    assert not any(item.get("label") == "Workspace Path" for item in merged["open_links"])
 
 
 def test_sync_project_completion_snapshot_updates_description_team_and_run_commands(monkeypatch):

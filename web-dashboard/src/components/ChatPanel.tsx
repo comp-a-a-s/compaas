@@ -607,10 +607,18 @@ function MessageBubble({
   const isUser = message.role === 'user';
   const [hovered, setHovered] = useState(false);
   const [showFullResponse, setShowFullResponse] = useState(false);
+  const structuredRunCommands = message.structured?.run_commands || [];
+  const structuredHasDeliverySignals = structuredRunCommands.length > 0
+    && (
+      (message.structured?.deliverables?.length || 0) > 0
+      || (message.structured?.open_links?.length || 0) > 0
+      || (message.structured?.validation?.length || 0) > 0
+    );
   const showStructuredCard = !isUser
     && !isStreaming
     && !searchQuery
     && message.structured?.completion_kind === 'build_complete'
+    && structuredHasDeliverySignals
     && hasStructuredContent(message.structured);
   const autoLaunch = !isUser && !isStreaming ? message.auto_launch : undefined;
 

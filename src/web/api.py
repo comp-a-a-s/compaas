@@ -2775,26 +2775,34 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
 
     completion_kind = "general"
     lower_raw = raw.lower()
-    has_completion_sections = bool(sections["summary"]) and bool(
-        sections["deliverables"]
+    has_completion_sections = bool(sections["run_commands"]) and bool(
+        sections["summary"]
+        or sections["deliverables"]
         or sections["validation"]
-        or sections["run_commands"]
         or sections["open_links"]
         or sections["next_actions"]
     )
     completion_markers = (
         "build complete",
+        "build completed",
         "implementation complete",
+        "implementation completed",
         "execution complete",
+        "execution completed",
         "delivery complete",
+        "delivery completed",
         "release handoff",
         "project handoff",
         "ready to run",
         "shipped",
+        "delivered",
+        "final handoff",
     )
     has_completion_phrase = any(marker in lower_raw for marker in completion_markers)
-    has_completion_evidence = bool(run_commands or section_validation or deliverables)
-    if has_completion_sections or (has_completion_phrase and has_completion_evidence):
+    has_delivery_evidence = bool(run_commands) and bool(
+        deliverables or open_links or section_validation or validation or section_next
+    )
+    if has_delivery_evidence and (has_completion_sections or has_completion_phrase):
         completion_kind = "build_complete"
 
     return {
@@ -2859,9 +2867,11 @@ def _merge_structured_completion_with_project(
     completion_kind = str(payload.get("completion_kind", "") or "").strip().lower()
     if completion_kind not in {"build_complete", "general"}:
         completion_kind = "general"
-    is_build_complete = completion_kind == "build_complete"
 
     base_commands = _normalize_string_list(payload.get("run_commands"))
+    if completion_kind == "build_complete" and not base_commands:
+        completion_kind = "general"
+    is_build_complete = completion_kind == "build_complete"
     payload["run_commands"] = base_commands
     base_links = _normalize_links(payload.get("open_links"))
     deliverable_links = _normalize_links(payload.get("deliverables"), limit=20)
