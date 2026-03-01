@@ -41,6 +41,7 @@ const NAV_ITEMS = [
 
 const SIDEBAR_COLLAPSED_KEY = 'compaas_sidebar_collapsed';
 const CHAT_SPLIT_WIDTH_KEY = 'compaas_chat_split_width';
+const CHAT_MAXIMIZED_KEY = 'compaas_chat_maximized';
 const PROJECT_CREATE_SENTINEL = '__create_new_project__';
 
 const PAGE_LABELS: Record<string, string> = {
@@ -314,6 +315,7 @@ export default function Layout({
     const parsed = Number(raw || 420);
     return Number.isFinite(parsed) ? Math.max(300, Math.min(760, parsed)) : 420;
   });
+  const [chatMaximized, setChatMaximized] = useState(() => getStoredBoolean(CHAT_MAXIMIZED_KEY));
   const [draggingSplit, setDraggingSplit] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(false);
 
@@ -332,7 +334,12 @@ export default function Layout({
   const isMobileViewport = viewportWidth <= 900;
   const sidebarIsCollapsed = isMobileViewport ? false : sidebarCollapsed;
   const maxChatWidth = Math.min(760, Math.round(viewportWidth * 0.58));
-  const effectiveChatWidth = Math.max(300, Math.min(maxChatWidth, chatSplitWidth));
+  const defaultChatWidth = Math.max(300, Math.min(maxChatWidth, chatSplitWidth));
+  const effectiveChatWidth = !isMobileViewport && chatMaximized ? maxChatWidth : defaultChatWidth;
+
+  useEffect(() => {
+    localStorage.setItem(CHAT_MAXIMIZED_KEY, String(chatMaximized));
+  }, [chatMaximized]);
 
   useEffect(() => {
     if (!isMobileViewport) {
@@ -758,13 +765,13 @@ export default function Layout({
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize CEO chat panel"
-              onMouseDown={() => chatOpen && setDraggingSplit(true)}
+              onMouseDown={() => chatOpen && !chatMaximized && setDraggingSplit(true)}
               style={{
-                cursor: chatOpen ? 'col-resize' : 'default',
+                cursor: chatOpen && !chatMaximized ? 'col-resize' : 'default',
                 backgroundColor: draggingSplit ? 'var(--tf-accent-blue)' : 'var(--tf-border)',
-                opacity: chatOpen ? 0.45 : 0,
+                opacity: chatOpen && !chatMaximized ? 0.45 : 0,
                 transition: 'opacity 160ms ease, background-color 160ms ease',
-                pointerEvents: chatOpen ? 'auto' : 'none',
+                pointerEvents: chatOpen && !chatMaximized ? 'auto' : 'none',
               }}
             />
 
@@ -807,6 +814,18 @@ export default function Layout({
                     }}
                   >
                     Telegram {telegramMirrorEnabled ? 'On' : 'Off'}
+                  </button>
+                  <button
+                    onClick={() => setChatMaximized((prev) => !prev)}
+                    title={chatMaximized ? 'Restore previous chat width' : 'Maximize chat panel width'}
+                    style={{
+                      ...splitHeaderButtonBase,
+                      borderColor: chatMaximized ? 'var(--tf-accent-blue)' : 'var(--tf-border)',
+                      backgroundColor: chatMaximized ? 'color-mix(in srgb, var(--tf-accent-blue) 16%, transparent)' : 'transparent',
+                      color: chatMaximized ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+                    }}
+                  >
+                    {chatMaximized ? 'Restore' : 'Maximize'}
                   </button>
                   <button
                     onClick={onChatToggle}

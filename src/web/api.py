@@ -1780,7 +1780,9 @@ def _build_context_prompt(
         "Use an executive, human tone for a Chairman/CEO conversation: concise, clear, respectful, practical. "
         "Do not re-introduce yourself every turn (avoid phrases like '<CEO> here'). "
         "Keep one clear final response per turn, and avoid narrating every intermediate step in prose. "
-        "For build requests, delegate to your specialist team via the Task tool and report their progress."
+        "For build requests, delegate to your specialist team via the Task tool and report their progress. "
+        "When implementation work is completed, structure the final update using short sections in this order: "
+        "'Outcome', 'Deliverables', 'Validation', and 'Next Steps'."
     )
     return "\n".join(parts)
 
@@ -2137,25 +2139,155 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
     """Best-effort structured response projection for UI automation."""
     raw = (text or "").strip()
     if not raw:
-        return {"summary": "", "delegations": [], "risks": [], "next_actions": []}
-    lines = [line.strip("- ").strip() for line in raw.splitlines() if line.strip()]
-    summary = lines[0] if lines else raw[:240]
+        return {
+            "summary": "",
+            "delegations": [],
+            "risks": [],
+            "next_actions": [],
+            "deliverables": [],
+            "validation": [],
+        }
+
+    def _clean_bullet_prefix(line: str) -> str:
+        return re.sub(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", "", line).strip()
+
+    def _section_name(raw_name: str) -> str:
+        name = raw_name.strip().lower()
+        if name in {"outcome", "summary"}:
+            return "summary"
+        if name in {"deliverable", "deliverables", "artifact", "artifacts"}:
+            return "deliverables"
+        if name in {"validation"}:
+            return "validation"
+        if name in {"next step", "next steps", "next action", "next actions"}:
+            return "next_actions"
+        if name in {"risk", "risks"}:
+            return "risks"
+        return "body"
+
+    def _extract_markdown_links(line: str) -> list[tuple[str, str]]:
+        links: list[tuple[str, str]] = []
+        for match in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", line):
+            label = match.group(1).strip()
+            target_raw = match.group(2).strip()
+            # Markdown links can include a title after whitespace.
+            target = re.split(r'\s+"[^"]*"$', target_raw, maxsplit=1)[0].strip()
+            if label and target:
+                links.append((label, target))
+        return links
+
+    def _deliverable_kind(target: str) -> str:
+        return "url" if re.match(r"^https?://", target, flags=re.IGNORECASE) else "path"
+
+    def _extract_deliverables(lines: list[str]) -> list[dict[str, str]]:
+        items: list[dict[str, str]] = []
+        seen_targets: set[str] = set()
+        path_pattern = re.compile(r"(?<![\w.-])((?:/[A-Za-z0-9._-]+){2,}|(?:[A-Za-z0-9._-]+/){1,}[A-Za-z0-9._-]+(?:\.[A-Za-z0-9._-]+)?)")
+        url_pattern = re.compile(r"https?://[^\s)>\]]+")
+
+        def _push(label: str, target: str) -> None:
+            clean_target = target.strip()
+            if not clean_target:
+                return
+            normalized = clean_target.rstrip(".,);!?")
+            if not normalized or normalized in seen_targets:
+                return
+            seen_targets.add(normalized)
+            clean_label = label.strip() or normalized
+            items.append({
+                "label": clean_label,
+                "target": normalized,
+                "kind": _deliverable_kind(normalized),
+            })
+
+        for raw_line in lines:
+            line = _clean_bullet_prefix(raw_line)
+            if not line:
+                continue
+
+            markdown_links = _extract_markdown_links(line)
+            for label, target in markdown_links:
+                _push(label, target)
+
+            for url in url_pattern.findall(line):
+                _push(url, url)
+
+            for path_match in path_pattern.findall(line):
+                if re.match(r"^https?://", path_match, flags=re.IGNORECASE):
+                    continue
+                _push(path_match, path_match)
+
+        return items[:20]
+
+    section_heading = re.compile(
+        r"^\s*(?:#{1,6}\s*)?(outcome|summary|deliverables?|artifacts?|validation|next steps?|next actions?|risks?)\s*:?\s*(.*)$",
+        flags=re.IGNORECASE,
+    )
+    sections: dict[str, list[str]] = {
+        "summary": [],
+        "deliverables": [],
+        "validation": [],
+        "next_actions": [],
+        "risks": [],
+        "body": [],
+    }
+    all_lines_raw = [line for line in raw.splitlines() if line.strip()]
+    all_lines = [_clean_bullet_prefix(line) for line in all_lines_raw if _clean_bullet_prefix(line)]
+    current_section = "body"
+    for raw_line in all_lines_raw:
+        stripped = raw_line.strip()
+        heading = section_heading.match(stripped)
+        if heading:
+            current_section = _section_name(heading.group(1))
+            remainder = _clean_bullet_prefix(heading.group(2))
+            if remainder:
+                sections[current_section].append(remainder)
+            continue
+        sections[current_section].append(stripped)
+
+    summary_source = sections["summary"] or all_lines
+    summary = summary_source[0] if summary_source else raw[:240]
     delegations: list[dict[str, str]] = []
     risks: list[str] = []
     next_actions: list[str] = []
-    for line in lines:
+    validation: list[str] = []
+    for line in all_lines:
         lower = line.lower()
         if "delegat" in lower:
             delegations.append({"agent": "team", "why": line, "action": line})
-        if "risk" in lower or "concern" in lower:
+        if "risk" in lower or "concern" in lower or "blocker" in lower:
             risks.append(line)
         if lower.startswith(("next", "do ", "run ", "create ", "update ", "verify ")):
             next_actions.append(line)
+        if any(token in lower for token in ("passed", "pass", "validated", "verified", "success", "checks", "check ", "tests", "lint", "build")):
+            validation.append(line)
+
+    section_risks = [_clean_bullet_prefix(line) for line in sections["risks"] if _clean_bullet_prefix(line)]
+    section_next = [_clean_bullet_prefix(line) for line in sections["next_actions"] if _clean_bullet_prefix(line)]
+    section_validation = [_clean_bullet_prefix(line) for line in sections["validation"] if _clean_bullet_prefix(line)]
+    deliverable_source = sections["deliverables"] if sections["deliverables"] else all_lines_raw
+    deliverables = _extract_deliverables(deliverable_source)
+
+    def _unique(items: list[str], limit: int = 10) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in items:
+            normalized = re.sub(r"\s+", " ", item.strip()).lower()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            result.append(item.strip())
+            if len(result) >= limit:
+                break
+        return result
+
     return {
         "summary": summary,
         "delegations": delegations[:10],
-        "risks": risks[:10],
-        "next_actions": next_actions[:10],
+        "risks": _unique(section_risks + risks, limit=10),
+        "next_actions": _unique(section_next + next_actions, limit=10),
+        "deliverables": deliverables,
+        "validation": _unique(section_validation + validation, limit=10),
     }
 
 

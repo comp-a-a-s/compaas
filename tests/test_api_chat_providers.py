@@ -648,6 +648,60 @@ def test_build_context_prompt_prefers_user_name_over_chairman(monkeypatch):
     assert "or 'Chairman'" not in prompt
 
 
+def test_build_context_prompt_includes_completion_sections_guidance(monkeypatch):
+    monkeypatch.setattr(api, "_load_chat_messages", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        api,
+        "_load_config",
+        lambda: {
+            "user": {"name": "Idan"},
+            "agents": {},
+            "integrations": {},
+        },
+    )
+
+    prompt = api._build_context_prompt("build a dashboard", user_name="Idan", ceo_name="Ari")
+
+    assert "'Outcome', 'Deliverables', 'Validation', and 'Next Steps'" in prompt
+
+
+def test_structured_response_payload_extracts_deliverables_validation_and_next_actions():
+    payload = api._structured_response_payload(
+        """
+        ## Outcome
+        Core feature is implemented.
+
+        ## Deliverables
+        - [Activation Guide](/Users/idan/compaas/projects/cashtracker/artifacts/02_activation_guide.md)
+        - [Production URL](https://cashtracker.example.com)
+
+        ## Validation
+        - npm run build passed.
+        - Smoke tests validated the chat flow.
+
+        ## Next Steps
+        1. Open [Handoff](/Users/idan/compaas/projects/cashtracker/artifacts/03_project_handoff.md)
+        2. Verify production telemetry.
+        """
+    )
+
+    assert payload["summary"] == "Core feature is implemented."
+    assert any(item["target"].endswith("02_activation_guide.md") and item["kind"] == "path" for item in payload["deliverables"])
+    assert any(item["target"] == "https://cashtracker.example.com" and item["kind"] == "url" for item in payload["deliverables"])
+    assert any("build passed" in item.lower() for item in payload["validation"])
+    assert any("verify production telemetry" in item.lower() for item in payload["next_actions"])
+
+
+def test_structured_response_payload_is_backward_compatible_for_empty_text():
+    payload = api._structured_response_payload("")
+    assert payload["summary"] == ""
+    assert payload["delegations"] == []
+    assert payload["risks"] == []
+    assert payload["next_actions"] == []
+    assert payload["deliverables"] == []
+    assert payload["validation"] == []
+
+
 def test_apply_agent_name_overrides_replaces_agent_names():
     config = {
         "agents": {"ceo": "Ari", "cto": "Nova"},

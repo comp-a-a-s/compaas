@@ -133,6 +133,22 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   project_id?: string;
+  structured?: StructuredChatResponse;
+}
+
+export interface StructuredDeliverable {
+  label: string;
+  target: string;
+  kind: 'url' | 'path';
+}
+
+export interface StructuredChatResponse {
+  summary?: string;
+  delegations?: Array<{ agent: string; why: string; action: string }>;
+  risks?: string[];
+  next_actions?: string[];
+  deliverables?: StructuredDeliverable[];
+  validation?: string[];
 }
 
 export interface ProjectMetadata {

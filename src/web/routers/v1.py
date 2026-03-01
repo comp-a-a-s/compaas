@@ -203,6 +203,19 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
                     },
                     "risks": {"type": "array", "items": {"type": "string"}},
                     "next_actions": {"type": "array", "items": {"type": "string"}},
+                    "deliverables": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["label", "target", "kind"],
+                            "properties": {
+                                "label": {"type": "string"},
+                                "target": {"type": "string"},
+                                "kind": {"type": "string", "enum": ["url", "path"]},
+                            },
+                        },
+                    },
+                    "validation": {"type": "array", "items": {"type": "string"}},
                 },
             },
         }
