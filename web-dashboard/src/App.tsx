@@ -1026,6 +1026,67 @@ export default function App() {
     });
   }, [agents, normalizedSearch]);
 
+  const handleRunStart = useCallback((runId: string, projectId: string) => {
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) return;
+    setActiveRunId(normalizedRunId);
+    setRunDrawerOpen(true);
+    setRunControlMessage('');
+    if (projectId && projectId !== activeProjectId) {
+      setActiveProjectId(projectId);
+    }
+    void refreshRunLive(normalizedRunId);
+  }, [activeProjectId, refreshRunLive]);
+
+  const handleRunStatusEvent = useCallback((event: RunStatusEvent) => {
+    setRunStatusEvent(event);
+    setRunLiveSnapshot((prev) => {
+      const sameRun = prev?.run?.id === event.run_id;
+      return {
+        status: 'ok',
+        run: sameRun
+          ? prev!.run
+          : {
+              id: event.run_id,
+              project_id: event.project_id,
+              status: event.state,
+              timeline: [],
+            },
+        run_status: event,
+        guardrails: sameRun && prev?.guardrails
+          ? prev.guardrails
+          : {
+              command_budget_remaining: event.guardrails.command_budget_remaining,
+              file_budget_remaining: event.guardrails.file_budget_remaining,
+              runtime_budget_remaining: event.guardrails.runtime_budget_remaining,
+              over_budget: event.guardrails.over_budget,
+            },
+        workforce: sameRun && prev?.workforce
+          ? prev.workforce
+          : emptyWorkforceLiveSnapshot(event.project_id),
+        incident: sameRun ? (prev?.incident ?? null) : null,
+      };
+    });
+    if (!activeRunId || activeRunId !== event.run_id) {
+      setActiveRunId(event.run_id);
+    }
+    const state = String(event.state || '').toLowerCase();
+    if (state === 'done' || state === 'failed' || state === 'cancelled') {
+      setRunIncidentEvent(null);
+    }
+  }, [activeRunId]);
+
+  const handleRunIncidentEvent = useCallback((event: RunIncidentEvent | null) => {
+    setRunIncidentEvent(event);
+    setRunLiveSnapshot((prev) => (prev ? { ...prev, incident: event } : prev));
+    if (event?.run_id && event.run_id !== activeRunId) {
+      setActiveRunId(event.run_id);
+    }
+    if (event) {
+      setRunDrawerOpen(true);
+    }
+  }, [activeRunId]);
+
   // ---- Loading / wizard screens ----
 
   if (configLoading) {
@@ -1198,67 +1259,6 @@ export default function App() {
   const runDrawerEnabled = config?.feature_flags?.run_progress_drawer !== false;
   const effectiveRunStatus = runStatusEvent ?? runLiveSnapshot?.run_status ?? null;
   const effectiveRunIncident = runIncidentEvent ?? runLiveSnapshot?.incident ?? null;
-
-  const handleRunStart = useCallback((runId: string, projectId: string) => {
-    const normalizedRunId = runId.trim();
-    if (!normalizedRunId) return;
-    setActiveRunId(normalizedRunId);
-    setRunDrawerOpen(true);
-    setRunControlMessage('');
-    if (projectId && projectId !== activeProjectId) {
-      setActiveProjectId(projectId);
-    }
-    void refreshRunLive(normalizedRunId);
-  }, [activeProjectId, refreshRunLive]);
-
-  const handleRunStatusEvent = useCallback((event: RunStatusEvent) => {
-    setRunStatusEvent(event);
-    setRunLiveSnapshot((prev) => {
-      const sameRun = prev?.run?.id === event.run_id;
-      return {
-        status: 'ok',
-        run: sameRun
-          ? prev!.run
-          : {
-              id: event.run_id,
-              project_id: event.project_id,
-              status: event.state,
-              timeline: [],
-            },
-        run_status: event,
-        guardrails: sameRun && prev?.guardrails
-          ? prev.guardrails
-          : {
-              command_budget_remaining: event.guardrails.command_budget_remaining,
-              file_budget_remaining: event.guardrails.file_budget_remaining,
-              runtime_budget_remaining: event.guardrails.runtime_budget_remaining,
-              over_budget: event.guardrails.over_budget,
-            },
-        workforce: sameRun && prev?.workforce
-          ? prev.workforce
-          : emptyWorkforceLiveSnapshot(event.project_id),
-        incident: sameRun ? (prev?.incident ?? null) : null,
-      };
-    });
-    if (!activeRunId || activeRunId !== event.run_id) {
-      setActiveRunId(event.run_id);
-    }
-    const state = String(event.state || '').toLowerCase();
-    if (state === 'done' || state === 'failed' || state === 'cancelled') {
-      setRunIncidentEvent(null);
-    }
-  }, [activeRunId]);
-
-  const handleRunIncidentEvent = useCallback((event: RunIncidentEvent | null) => {
-    setRunIncidentEvent(event);
-    setRunLiveSnapshot((prev) => (prev ? { ...prev, incident: event } : prev));
-    if (event?.run_id && event.run_id !== activeRunId) {
-      setActiveRunId(event.run_id);
-    }
-    if (event) {
-      setRunDrawerOpen(true);
-    }
-  }, [activeRunId]);
 
   const finishTour = () => {
     setTourOpen(false);
