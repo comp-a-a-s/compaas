@@ -5,6 +5,8 @@ import type {
   AutoLaunchStatus,
   ChatMessage,
   Project,
+  RunIncidentEvent,
+  RunStatusEvent,
   StructuredChatResponse,
   StructuredDeliverable,
 } from '../types';
@@ -399,6 +401,72 @@ function hasStructuredContent(value?: StructuredChatResponse): boolean {
     || (value.validation && value.validation.length > 0)
     || (value.next_actions && value.next_actions.length > 0)
   );
+}
+
+function normalizeRunStatusEvent(value: unknown): RunStatusEvent | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const runId = String(raw.run_id || '').trim();
+  const projectId = String(raw.project_id || '').trim();
+  const state = String(raw.state || '').trim();
+  const phaseLabel = String(raw.phase_label || '').trim();
+  const lastActivityAt = String(raw.last_activity_at || '').trim();
+  const elapsedSeconds = Number(raw.elapsed_seconds || 0);
+  const heartbeatSeq = Number(raw.heartbeat_seq || 0);
+  const guardrailsRaw = raw.guardrails && typeof raw.guardrails === 'object'
+    ? raw.guardrails as Record<string, unknown>
+    : {};
+  const activeAgentsRaw = Array.isArray(raw.active_agents) ? raw.active_agents : [];
+  const activeAgents = activeAgentsRaw
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const item = entry as Record<string, unknown>;
+      const agentId = String(item.agent_id || '').trim();
+      const agentName = String(item.agent_name || '').trim();
+      if (!agentId || !agentName) return null;
+      const payload: RunStatusEvent['active_agents'][number] = {
+        agent_id: agentId,
+        agent_name: agentName,
+        state: String(item.state || 'working').trim(),
+      };
+      const task = String(item.task || '').trim();
+      if (task) payload.task = task;
+      return payload;
+    })
+    .filter((entry): entry is RunStatusEvent['active_agents'][number] => entry !== null);
+  if (!runId) return null;
+  return {
+    run_id: runId,
+    project_id: projectId,
+    state,
+    phase_label: phaseLabel || 'Running',
+    elapsed_seconds: Number.isFinite(elapsedSeconds) ? Math.max(0, Math.floor(elapsedSeconds)) : 0,
+    last_activity_at: lastActivityAt || new Date().toISOString(),
+    active_agents: activeAgents,
+    guardrails: {
+      command_budget_remaining: Number(guardrailsRaw.command_budget_remaining || 0) || 0,
+      file_budget_remaining: Number(guardrailsRaw.file_budget_remaining || 0) || 0,
+      runtime_budget_remaining: Number(guardrailsRaw.runtime_budget_remaining || 0) || 0,
+      over_budget: Boolean(guardrailsRaw.over_budget),
+    },
+    heartbeat_seq: Number.isFinite(heartbeatSeq) ? Math.max(0, Math.floor(heartbeatSeq)) : 0,
+  };
+}
+
+function normalizeRunIncidentEvent(value: unknown): RunIncidentEvent | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const runId = String(raw.run_id || '').trim();
+  if (!runId) return null;
+  const suggestedRaw = Array.isArray(raw.suggested_actions) ? raw.suggested_actions : [];
+  return {
+    run_id: runId,
+    severity: String(raw.severity || 'warning').trim(),
+    reason: String(raw.reason || 'silent_run').trim(),
+    inactive_seconds: Math.max(0, Number(raw.inactive_seconds || 0) || 0),
+    suggested_actions: suggestedRaw.map((entry) => String(entry || '').trim()).filter(Boolean),
+    default_action: String(raw.default_action || 'status').trim(),
+  };
 }
 
 function MarkdownBody({ content, onCopyPath }: { content: string; onCopyPath: (path: string) => void }) {
@@ -1048,6 +1116,10 @@ interface WsMessage {
     | 'action_result'
     | 'action_detail'
     | 'run'
+    | 'run_status'
+    | 'run_phase'
+    | 'run_incident'
+    | 'run_control_ack'
     | 'micro_project_warning'
     | 'planning_approval_required'
     | 'project_context';
@@ -1075,6 +1147,8 @@ interface WsMessage {
     target?: 'preview' | 'production';
   };
   auto_launch?: AutoLaunchStatus;
+  run_status?: RunStatusEvent;
+  run_incident?: RunIncidentEvent;
 }
 function isWsMessage(data: unknown): data is WsMessage {
   return typeof data === 'object' && data !== null && typeof (data as Record<string, unknown>).type === 'string';
@@ -1165,6 +1239,9 @@ interface ChatPanelProps {
   onAgentRemove?: (agentId: string) => void;
   onWorkforceRefreshRequest?: () => void;
   onProjectDataRefresh?: () => void;
+  onRunStatus?: (event: RunStatusEvent) => void;
+  onRunIncident?: (event: RunIncidentEvent | null) => void;
+  onRunStart?: (runId: string, projectId: string) => void;
 }
 
 export default function ChatPanel({
@@ -1188,6 +1265,9 @@ export default function ChatPanel({
   onAgentRemove,
   onWorkforceRefreshRequest,
   onProjectDataRefresh,
+  onRunStatus,
+  onRunIncident,
+  onRunStart,
 }: ChatPanelProps) {
   const { toast } = useToast();
   // Core state
@@ -1254,6 +1334,9 @@ export default function ChatPanel({
   const onAgentRemoveRef = useRef(onAgentRemove);
   const onWorkforceRefreshRequestRef = useRef(onWorkforceRefreshRequest);
   const onProjectDataRefreshRef = useRef(onProjectDataRefresh);
+  const onRunStatusRef = useRef(onRunStatus);
+  const onRunIncidentRef = useRef(onRunIncident);
+  const onRunStartRef = useRef(onRunStart);
   const streamingAccumRef = useRef('');
   const turnErroredRef = useRef(false);
   const isWaitingRef = useRef(false);
@@ -1286,6 +1369,9 @@ export default function ChatPanel({
   useEffect(() => { onAgentRemoveRef.current = onAgentRemove; }, [onAgentRemove]);
   useEffect(() => { onWorkforceRefreshRequestRef.current = onWorkforceRefreshRequest; }, [onWorkforceRefreshRequest]);
   useEffect(() => { onProjectDataRefreshRef.current = onProjectDataRefresh; }, [onProjectDataRefresh]);
+  useEffect(() => { onRunStatusRef.current = onRunStatus; }, [onRunStatus]);
+  useEffect(() => { onRunIncidentRef.current = onRunIncident; }, [onRunIncident]);
+  useEffect(() => { onRunStartRef.current = onRunStart; }, [onRunStart]);
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
 
@@ -1578,7 +1664,10 @@ export default function ChatPanel({
                 const payload = wsContentObject(data.content);
                 if (!payload) break;
                 const rid = String(payload.id || '');
-                if (rid) setLatestRunId(rid);
+                if (rid) {
+                  setLatestRunId(rid);
+                  onRunStartRef.current?.(rid, activeProjectIdRef.current || '');
+                }
                 onWorkforceRefreshRequestRef.current?.();
                 const stage = String(payload.delegation_stage || '');
                 const summary = String(payload.delegation_summary || '');
@@ -1601,6 +1690,37 @@ export default function ChatPanel({
                 } else {
                   setDelegationContext(null);
                 }
+              }
+              break;
+            case 'run_status':
+              {
+                const parsed = normalizeRunStatusEvent(data.content);
+                if (!parsed) break;
+                setLatestRunId(parsed.run_id);
+                onRunStatusRef.current?.(parsed);
+              }
+              break;
+            case 'run_phase':
+              {
+                const parsed = normalizeRunStatusEvent(data.content);
+                if (!parsed) break;
+                setLatestRunId(parsed.run_id);
+                onRunStatusRef.current?.(parsed);
+              }
+              break;
+            case 'run_incident':
+              {
+                const parsed = normalizeRunIncidentEvent(data.content);
+                if (!parsed) break;
+                onRunIncidentRef.current?.(parsed);
+              }
+              break;
+            case 'run_control_ack':
+              {
+                const payload = wsContentObject(data.content);
+                if (!payload) break;
+                const message = String(payload.message || '').trim();
+                if (message) toast(message, payload.acknowledged === false ? 'warning' : 'success');
               }
               break;
             case 'action':
@@ -1735,6 +1855,7 @@ export default function ChatPanel({
               const autoLaunch = data.auto_launch;
               streamingAccumRef.current = '';
               if (data.run_id) setLatestRunId(data.run_id);
+              onRunIncidentRef.current?.(null);
               const projectId = data.project_id || activeProjectIdRef.current;
               onProjectDataRefreshRef.current?.();
               const offer = data.deploy_offer;
@@ -1763,6 +1884,7 @@ export default function ChatPanel({
               stopTypingAnimation();
               turnErroredRef.current = true;
               streamingAccumRef.current = '';
+              onRunIncidentRef.current?.(null);
               setMessages((prev) => [...prev, {
                 role: 'ceo',
                 content: `[Error] ${wsContentText(data.content, 'Unknown error')}`,

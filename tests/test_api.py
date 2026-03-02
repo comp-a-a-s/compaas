@@ -1209,3 +1209,147 @@ class TestIntegrationSecurity:
         assert payload["deployment_url"] == "https://demo-app-preview.vercel.app"
         assert project_id in updated_metadata
         assert isinstance(updated_metadata[project_id].get("deployments"), list)
+
+
+class TestV1RunProgressEndpoints:
+    def test_v1_list_runs_supports_status_and_cursor(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(
+            api_module.run_service,
+            "list_runs",
+            lambda project_id="", limit=5000: [
+                {"id": "run-a", "project_id": "p1", "status": "executing", "updated_at": "2026-03-01T10:00:00+00:00"},
+                {"id": "run-b", "project_id": "p1", "status": "planning", "updated_at": "2026-03-01T09:59:00+00:00"},
+                {"id": "run-c", "project_id": "p1", "status": "executing", "updated_at": "2026-03-01T09:58:00+00:00"},
+            ],
+        )
+
+        response = client.get("/api/v1/runs?project_id=p1&status=executing&limit=1&cursor=0")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert len(payload["runs"]) == 1
+        assert payload["runs"][0]["id"] == "run-a"
+        assert payload.get("next_cursor") == "1"
+
+    def test_v1_run_live_returns_status_guardrails_workforce_and_incident(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        run_row = {
+            "id": "run-live-1",
+            "project_id": "project_live",
+            "status": "executing",
+            "created_at": "2026-03-01T10:00:00+00:00",
+            "updated_at": "2026-03-01T10:00:01+00:00",
+            "timeline": [{"label": "Executing implementation"}],
+        }
+        monkeypatch.setattr(api_module.run_service, "get_run", lambda run_id: run_row if run_id == "run-live-1" else None)
+        monkeypatch.setattr(
+            api_module.run_service,
+            "guardrail_status",
+            lambda run_id: {
+                "command_budget_remaining": 8,
+                "file_budget_remaining": 14,
+                "runtime_budget_remaining": 420,
+                "elapsed_seconds": 220,
+                "over_budget": False,
+            } if run_id == "run-live-1" else None,
+        )
+        monkeypatch.setattr(
+            api_module.workforce_presence_service,
+            "snapshot",
+            lambda project_id=None, include_assigned=True, include_reporting=True: {
+                "status": "ok",
+                "as_of": datetime.now(timezone.utc).isoformat(),
+                "project_id": project_id,
+                "counts": {"assigned": 0, "working": 1, "reporting": 0, "blocked": 0},
+                "workers": [
+                    {
+                        "run_id": "run-live-1",
+                        "agent_id": "lead-frontend",
+                        "agent_name": "Lead Frontend",
+                        "state": "working",
+                        "task": "Rendering dashboard cards",
+                    }
+                ],
+            },
+        )
+
+        response = client.get("/api/v1/runs/run-live-1/live")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["run"]["id"] == "run-live-1"
+        assert payload["run_status"]["run_id"] == "run-live-1"
+        assert payload["run_status"]["guardrails"]["command_budget_remaining"] == 8
+        assert isinstance(payload["workforce"]["workers"], list)
+        assert payload["incident"] is None or payload["incident"]["reason"] in {
+            "silent_run",
+            "provider_stall",
+            "guardrail_risk",
+        }
+
+    def test_v1_run_control_status_and_cancel(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        run_row = {
+            "id": "run-control-1",
+            "project_id": "project_ctrl",
+            "status": "executing",
+            "created_at": "2026-03-01T10:00:00+00:00",
+            "updated_at": "2026-03-01T10:00:03+00:00",
+            "timeline": [{"label": "Executing tasks"}],
+        }
+        monkeypatch.setattr(api_module.run_service, "get_run", lambda _run_id: run_row)
+        monkeypatch.setattr(
+            api_module.run_service,
+            "guardrail_status",
+            lambda _run_id: {
+                "command_budget_remaining": 8,
+                "file_budget_remaining": 14,
+                "runtime_budget_remaining": 420,
+                "elapsed_seconds": 25,
+                "over_budget": False,
+            },
+        )
+        monkeypatch.setattr(
+            api_module.workforce_presence_service,
+            "snapshot",
+            lambda project_id=None, include_assigned=True, include_reporting=True: {
+                "status": "ok",
+                "as_of": datetime.now(timezone.utc).isoformat(),
+                "project_id": project_id,
+                "counts": {"assigned": 0, "working": 0, "reporting": 0, "blocked": 0},
+                "workers": [],
+            },
+        )
+        monkeypatch.setattr(
+            api_module.run_service,
+            "cancel_run",
+            lambda run_id, reason="Cancelled by user control": {
+                **run_row,
+                "id": run_id,
+                "status": "cancelled",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        monkeypatch.setattr(
+            api_module.workforce_presence_service,
+            "mark_run_terminal",
+            lambda run_id, project_id="", terminal_state="": None,
+        )
+
+        status_response = client.post("/api/v1/runs/run-control-1/control", json={"action": "status"})
+        assert status_response.status_code == 200
+        status_payload = status_response.json()
+        assert status_payload["status"] == "ok"
+        assert status_payload["run_control_ack"]["acknowledged"] is True
+        assert status_payload["run_control_ack"]["action"] == "status"
+
+        cancel_response = client.post("/api/v1/runs/run-control-1/control", json={"action": "cancel"})
+        assert cancel_response.status_code == 200
+        cancel_payload = cancel_response.json()
+        assert cancel_payload["status"] == "ok"
+        assert cancel_payload["run"]["status"] == "cancelled"
+        assert cancel_payload["run_control_ack"]["action"] == "cancel"

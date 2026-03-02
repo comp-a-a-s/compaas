@@ -1221,7 +1221,7 @@ def test_chat_history_scopes_by_project_id(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_websocket_marks_inflight_run_failed_on_disconnect(monkeypatch, tmp_path):
+async def test_chat_websocket_does_not_force_fail_inflight_run_on_disconnect(monkeypatch, tmp_path):
     data_dir = tmp_path / "company_data"
     data_dir.mkdir(parents=True, exist_ok=True)
     workspace_root = tmp_path / "workspace"
@@ -1289,8 +1289,8 @@ async def test_chat_websocket_marks_inflight_run_failed_on_disconnect(monkeypatc
     runs = run_service.list_runs(project_id=project_id, limit=10)
     assert runs
     run = runs[0]
-    assert run["status"] == "failed"
-    assert any(
+    assert run["status"] != "failed"
+    assert not any(
         "Client disconnected before run completion" in str(item.get("label", ""))
         for item in run.get("timeline", [])
     )

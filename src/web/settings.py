@@ -38,6 +38,8 @@ class FeatureFlags(BaseModel):
     org_chart_advanced_layouts: bool = True
     ui_global_search: bool = True
     onboarding_tours: bool = True
+    run_progress_drawer: bool = True
+    run_watchdog: bool = True
 
 
 class RuntimeSettings(BaseSettings):

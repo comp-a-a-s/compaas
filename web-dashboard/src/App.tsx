@@ -4,6 +4,8 @@ import Layout from './components/Layout';
 import Overview from './components/Overview';
 import AgentPanel from './components/AgentPanel';
 import ProjectPanel from './components/ProjectPanel';
+import RunDrawer from './components/RunDrawer';
+import RunStatusChip from './components/RunStatusChip';
 const ActivityPanel = lazy(() => import('./components/ActivityPanel'));
 const EventLogPanel = lazy(() => import('./components/MetricsPanel'));
 const ChatPanel = lazy(() => import('./components/ChatPanel'));
@@ -25,9 +27,22 @@ import {
   createProject,
   fetchWorkforceLive,
   emptyWorkforceLiveSnapshot,
+  fetchRunLive,
+  listRuns,
+  controlRun,
 } from './api/client';
 
-import type { Agent, Project, Task, ActivityEvent, AppConfig, WorkforceLiveSnapshot } from './types';
+import type {
+  Agent,
+  Project,
+  Task,
+  ActivityEvent,
+  AppConfig,
+  RunIncidentEvent,
+  RunLiveSnapshot,
+  RunStatusEvent,
+  WorkforceLiveSnapshot,
+} from './types';
 
 const MAX_EVENTS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
@@ -232,6 +247,13 @@ export default function App() {
   });
   const [microToggleRequestToken, setMicroToggleRequestToken] = useState(0);
   const [telegramMirrorEnabled, setTelegramMirrorEnabled] = useState(() => readTelegramSnapshot().mirrorEnabled);
+  const [activeRunId, setActiveRunId] = useState('');
+  const [runLiveSnapshot, setRunLiveSnapshot] = useState<RunLiveSnapshot | null>(null);
+  const [runStatusEvent, setRunStatusEvent] = useState<RunStatusEvent | null>(null);
+  const [runIncidentEvent, setRunIncidentEvent] = useState<RunIncidentEvent | null>(null);
+  const [runDrawerOpen, setRunDrawerOpen] = useState(false);
+  const [runControlBusyAction, setRunControlBusyAction] = useState<'' | 'status' | 'retry_step' | 'cancel' | 'continue'>('');
+  const [runControlMessage, setRunControlMessage] = useState('');
 
   // Create-project modal state
   const [showCreateProject, setShowCreateProject] = useState(false);
@@ -327,6 +349,7 @@ export default function App() {
   const workforceFailureCountRef = useRef(0);
   const workforceNextAllowedAtRef = useRef(0);
   const workforceLastSuccessAtRef = useRef(0);
+  const runLivePollAbortRef = useRef<AbortController | null>(null);
 
   // ---- Config check ----
   useEffect(() => {
@@ -367,6 +390,12 @@ export default function App() {
     const configured = config?.ui?.poll_interval_ms ?? DEFAULT_POLL_INTERVAL_MS;
     return Math.max(MIN_POLL_INTERVAL_MS, Math.min(MAX_POLL_INTERVAL_MS, configured));
   }, [config?.ui?.poll_interval_ms]);
+
+  const runHeartbeatIntervalMs = useMemo(() => {
+    const configured = Number(config?.ui?.run_heartbeat_seconds ?? 5);
+    const seconds = Number.isFinite(configured) ? configured : 5;
+    return Math.max(2000, Math.min(30000, Math.round(seconds * 1000)));
+  }, [config?.ui?.run_heartbeat_seconds]);
 
   const taskPollIntervalMs = useMemo(() => (
     Math.max(MIN_TASK_POLL_INTERVAL_MS, pollIntervalMs * TASK_POLL_MULTIPLIER)
@@ -527,9 +556,66 @@ export default function App() {
     return runner;
   }, [activeProjectId, pollIntervalMs]);
 
+  const applyRunLiveSnapshot = useCallback((snapshot: RunLiveSnapshot | null) => {
+    if (!snapshot) return;
+    setRunLiveSnapshot(snapshot);
+    if (snapshot.run_status) {
+      setRunStatusEvent(snapshot.run_status);
+      if (snapshot.run_status.run_id) {
+        setActiveRunId(snapshot.run_status.run_id);
+      }
+    }
+    setRunIncidentEvent(snapshot.incident ?? null);
+  }, []);
+
+  const refreshRunLive = useCallback(async (runId: string) => {
+    const normalized = runId.trim();
+    if (!normalized) return;
+    runLivePollAbortRef.current?.abort();
+    const controller = new AbortController();
+    runLivePollAbortRef.current = controller;
+    const snapshot = await fetchRunLive(normalized, { signal: controller.signal });
+    if (!controller.signal.aborted && snapshot) {
+      applyRunLiveSnapshot(snapshot);
+    }
+  }, [applyRunLiveSnapshot]);
+
+  const handleRunControl = useCallback(async (action: 'status' | 'retry_step' | 'cancel' | 'continue') => {
+    const runId = activeRunId.trim();
+    if (!runId || runControlBusyAction) return;
+    setRunControlBusyAction(action);
+    setRunControlMessage('');
+    const response = await controlRun(runId, action, action === 'retry_step' ? 'watchdog retry' : undefined);
+    setRunControlBusyAction('');
+    if (response.status !== 'ok') {
+      setRunControlMessage('Run control request failed.');
+      return;
+    }
+    const ackMessage = response.run_control_ack?.message || 'Run control request completed.';
+    setRunControlMessage(ackMessage);
+    if (
+      response.run
+      && response.run_status
+      && response.guardrails
+      && response.workforce
+    ) {
+      applyRunLiveSnapshot({
+        status: 'ok',
+        run: response.run,
+        run_status: response.run_status,
+        guardrails: response.guardrails,
+        workforce: response.workforce,
+        incident: response.incident ?? null,
+      });
+    } else {
+      void refreshRunLive(runId);
+    }
+  }, [activeRunId, applyRunLiveSnapshot, refreshRunLive, runControlBusyAction]);
+
   useEffect(() => () => {
     projectDetailAbortRef.current?.abort();
     workforceAbortRef.current?.abort();
+    runLivePollAbortRef.current?.abort();
   }, []);
 
   const handleCreateProjectFromHeader = useCallback(() => {
@@ -648,6 +734,43 @@ export default function App() {
     workforceNextAllowedAtRef.current = 0;
     loadWorkforce(true);
   }, [activeProjectId, loadWorkforce, showWizard]);
+
+  useEffect(() => {
+    if (!activeRunId) return;
+    const terminal = runStatusEvent
+      ? ['done', 'failed', 'cancelled'].includes(String(runStatusEvent.state || '').toLowerCase())
+      : false;
+    void refreshRunLive(activeRunId);
+    if (terminal) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void refreshRunLive(activeRunId);
+    }, runHeartbeatIntervalMs);
+    return () => clearInterval(interval);
+  }, [activeRunId, refreshRunLive, runHeartbeatIntervalMs, runStatusEvent]);
+
+  useEffect(() => {
+    if (showWizard) return;
+    if (activeRunId) return;
+    let cancelled = false;
+    void listRuns({
+      project_id: activeProjectId || '',
+      limit: 40,
+    }).then((result) => {
+      if (cancelled) return;
+      if (result.status !== 'ok' || !Array.isArray(result.runs)) return;
+      const candidate = result.runs.find((run) => {
+        if (!run || typeof run !== 'object') return false;
+        const status = String((run as { status?: unknown }).status || '').toLowerCase();
+        return status === 'queued' || status === 'planning' || status === 'executing' || status === 'verifying';
+      }) as { id?: unknown } | undefined;
+      const runId = String(candidate?.id || '').trim();
+      if (!runId) return;
+      setActiveRunId(runId);
+      setRunDrawerOpen(true);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeProjectId, activeRunId, showWizard]);
 
   // Refresh detailed task boards only on project-focused views.
   useEffect(() => {
@@ -1072,6 +1195,70 @@ export default function App() {
     && config?.integrations?.github_verified
   );
   const currentTourStep = ONBOARDING_STEPS[Math.max(0, Math.min(tourStep, ONBOARDING_STEPS.length - 1))];
+  const runDrawerEnabled = config?.feature_flags?.run_progress_drawer !== false;
+  const effectiveRunStatus = runStatusEvent ?? runLiveSnapshot?.run_status ?? null;
+  const effectiveRunIncident = runIncidentEvent ?? runLiveSnapshot?.incident ?? null;
+
+  const handleRunStart = useCallback((runId: string, projectId: string) => {
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) return;
+    setActiveRunId(normalizedRunId);
+    setRunDrawerOpen(true);
+    setRunControlMessage('');
+    if (projectId && projectId !== activeProjectId) {
+      setActiveProjectId(projectId);
+    }
+    void refreshRunLive(normalizedRunId);
+  }, [activeProjectId, refreshRunLive]);
+
+  const handleRunStatusEvent = useCallback((event: RunStatusEvent) => {
+    setRunStatusEvent(event);
+    setRunLiveSnapshot((prev) => {
+      const sameRun = prev?.run?.id === event.run_id;
+      return {
+        status: 'ok',
+        run: sameRun
+          ? prev!.run
+          : {
+              id: event.run_id,
+              project_id: event.project_id,
+              status: event.state,
+              timeline: [],
+            },
+        run_status: event,
+        guardrails: sameRun && prev?.guardrails
+          ? prev.guardrails
+          : {
+              command_budget_remaining: event.guardrails.command_budget_remaining,
+              file_budget_remaining: event.guardrails.file_budget_remaining,
+              runtime_budget_remaining: event.guardrails.runtime_budget_remaining,
+              over_budget: event.guardrails.over_budget,
+            },
+        workforce: sameRun && prev?.workforce
+          ? prev.workforce
+          : emptyWorkforceLiveSnapshot(event.project_id),
+        incident: sameRun ? (prev?.incident ?? null) : null,
+      };
+    });
+    if (!activeRunId || activeRunId !== event.run_id) {
+      setActiveRunId(event.run_id);
+    }
+    const state = String(event.state || '').toLowerCase();
+    if (state === 'done' || state === 'failed' || state === 'cancelled') {
+      setRunIncidentEvent(null);
+    }
+  }, [activeRunId]);
+
+  const handleRunIncidentEvent = useCallback((event: RunIncidentEvent | null) => {
+    setRunIncidentEvent(event);
+    setRunLiveSnapshot((prev) => (prev ? { ...prev, incident: event } : prev));
+    if (event?.run_id && event.run_id !== activeRunId) {
+      setActiveRunId(event.run_id);
+    }
+    if (event) {
+      setRunDrawerOpen(true);
+    }
+  }, [activeRunId]);
 
   const finishTour = () => {
     setTourOpen(false);
@@ -1121,6 +1308,25 @@ export default function App() {
         onRequestMicroToggle={requestMicroToggle}
         agents={agents}
         workforceLive={workforceLive}
+        runStatusChip={runDrawerEnabled ? (
+          <RunStatusChip
+            status={effectiveRunStatus}
+            incident={effectiveRunIncident}
+            open={runDrawerOpen}
+            onToggle={() => setRunDrawerOpen((prev) => !prev)}
+          />
+        ) : null}
+        runDrawer={runDrawerEnabled ? (
+          <RunDrawer
+            open={runDrawerOpen}
+            snapshot={runLiveSnapshot}
+            incident={effectiveRunIncident}
+            controlBusyAction={runControlBusyAction}
+            controlMessage={runControlMessage}
+            onClose={() => setRunDrawerOpen(false)}
+            onControl={(action) => { void handleRunControl(action); }}
+          />
+        ) : null}
         chatPanel={
           <Suspense fallback={null}>
             <ChatPanel
@@ -1148,6 +1354,9 @@ export default function App() {
               onProjectDataRefresh={() => {
                 void loadProjects(true);
               }}
+              onRunStart={handleRunStart}
+              onRunStatus={handleRunStatusEvent}
+              onRunIncident={handleRunIncidentEvent}
             />
           </Suspense>
         }

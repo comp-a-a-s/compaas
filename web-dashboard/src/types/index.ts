@@ -235,6 +235,96 @@ export interface FeatureFlags {
   org_chart_advanced_layouts?: boolean;
   ui_global_search?: boolean;
   onboarding_tours?: boolean;
+  run_progress_drawer?: boolean;
+  run_watchdog?: boolean;
+}
+
+export type RunState = 'queued' | 'planning' | 'executing' | 'verifying' | 'done' | 'failed' | 'cancelled';
+
+export interface RunActiveAgent {
+  agent_id: string;
+  agent_name: string;
+  state: string;
+  task?: string;
+}
+
+export interface RunStatusEvent {
+  run_id: string;
+  project_id: string;
+  state: RunState | string;
+  phase_label: string;
+  elapsed_seconds: number;
+  last_activity_at: string;
+  active_agents: RunActiveAgent[];
+  guardrails: {
+    command_budget_remaining: number;
+    file_budget_remaining: number;
+    runtime_budget_remaining: number;
+    over_budget: boolean;
+  };
+  heartbeat_seq: number;
+}
+
+export interface RunIncidentEvent {
+  run_id: string;
+  severity: 'warning' | 'critical' | string;
+  reason: 'silent_run' | 'guardrail_risk' | 'provider_stall' | string;
+  inactive_seconds: number;
+  suggested_actions: Array<'status' | 'retry_step' | 'cancel' | 'continue' | string>;
+  default_action: 'status' | string;
+}
+
+export interface RunLiveSnapshot {
+  status: 'ok' | string;
+  run: {
+    id: string;
+    project_id: string;
+    status: RunState | string;
+    mode?: string;
+    provider?: string;
+    created_at?: string;
+    updated_at?: string;
+    timeline?: Array<{
+      timestamp?: string;
+      state?: string;
+      label?: string;
+      metadata?: Record<string, unknown>;
+    }>;
+    [k: string]: unknown;
+  };
+  run_status: RunStatusEvent;
+  guardrails: {
+    command_count?: number;
+    files_touched?: number;
+    max_commands?: number;
+    max_files_touched?: number;
+    max_runtime_seconds?: number;
+    elapsed_seconds?: number;
+    command_budget_remaining: number;
+    file_budget_remaining: number;
+    runtime_budget_remaining: number;
+    command_exceeded?: boolean;
+    file_exceeded?: boolean;
+    runtime_exceeded?: boolean;
+    over_budget: boolean;
+  };
+  workforce: WorkforceLiveSnapshot;
+  incident?: RunIncidentEvent | null;
+}
+
+export interface RunControlResponse {
+  status: 'ok' | 'error';
+  run?: RunLiveSnapshot['run'];
+  run_status?: RunStatusEvent;
+  guardrails?: RunLiveSnapshot['guardrails'];
+  workforce?: WorkforceLiveSnapshot;
+  incident?: RunIncidentEvent | null;
+  run_control_ack?: {
+    run_id: string;
+    action: 'status' | 'retry_step' | 'cancel' | 'continue' | string;
+    acknowledged: boolean;
+    message: string;
+  };
 }
 
 export interface LlmConfig {
@@ -265,6 +355,10 @@ export interface AppConfig {
   ui: {
     theme: string;
     poll_interval_ms: number;
+    always_on_mode?: 'guarded_autopilot' | 'manual';
+    run_heartbeat_seconds?: number;
+    run_stall_warning_seconds?: number;
+    run_stall_critical_seconds?: number;
   };
   server: {
     host: string;

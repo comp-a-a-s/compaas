@@ -28,6 +28,8 @@ interface LayoutProps {
   onRequestMicroToggle?: () => void;
   agents?: Agent[];
   workforceLive?: WorkforceLiveSnapshot;
+  runStatusChip?: React.ReactNode;
+  runDrawer?: React.ReactNode;
 }
 
 const NAV_ITEMS = [
@@ -308,6 +310,8 @@ export default function Layout({
   onRequestMicroToggle,
   agents = [],
   workforceLive,
+  runStatusChip,
+  runDrawer,
 }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getStoredBoolean(SIDEBAR_COLLAPSED_KEY));
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -715,6 +719,7 @@ export default function Layout({
           </div>
 
           <div className="flex items-center gap-3">
+            {runStatusChip}
             <TeamPulse agents={agents} workforceLive={workforceLive} isMobile={isMobileViewport} />
             <HeaderControls
             searchExpanded={searchExpanded}
@@ -931,6 +936,7 @@ export default function Layout({
           }}
         />
       )}
+      {runDrawer}
     </div>
   );
 }
