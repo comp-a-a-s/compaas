@@ -6753,7 +6753,6 @@ async def chat_websocket(websocket: WebSocket) -> None:
         await _close_inflight_run(
             "Client disconnected before run completion",
             metadata={"reason": "websocket_disconnected"},
-            mark_failed=False,
         )
     except Exception as exc:
         await _close_inflight_run(
