@@ -41,12 +41,6 @@ With COMPaaS, you get:
 bash <(curl -fsSL https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bootstrap.sh)
 ```
 
-Private repo access:
-
-```bash
-bash <(curl -fsSL -H "Authorization: Bearer $(gh auth token)" "https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bootstrap.sh")
-```
-
 ## First Run Flow
 
 1. Start COMPaaS with `compaas-web`
