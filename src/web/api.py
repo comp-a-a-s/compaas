@@ -46,6 +46,7 @@ from src.web.services.run_service import RunService
 from src.web.services.project_service import ProjectService
 from src.web.services.integration_service import IntegrationService
 from src.web.services.workforce_presence import WorkforcePresenceService
+from src.web.services.run_supervisor import ACTIVE_RUN_STATES, build_run_status_payload, detect_run_incident
 from src.web.routers.v1 import V1Context, create_v1_router
 from src.web.template_rendering import render_agent_templates
 
@@ -1170,6 +1171,10 @@ DEFAULT_CONFIG: dict = {
     "ui": {
         "theme": "midnight",
         "poll_interval_ms": 5000,
+        "always_on_mode": "guarded_autopilot",
+        "run_heartbeat_seconds": 5,
+        "run_stall_warning_seconds": 90,
+        "run_stall_critical_seconds": 180,
     },
     "server": {
         "host": "127.0.0.1",
@@ -6096,14 +6101,135 @@ async def chat_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
     inflight_run_id = ""
     inflight_project_id = ""
+    heartbeat_task: asyncio.Task[None] | None = None
+    heartbeat_seq = 0
+    last_phase_state = ""
+    last_incident_signature = ""
 
-    def _close_inflight_run(reason: str, *, metadata: dict[str, Any] | None = None) -> None:
+    config = _load_config()
+    ui_cfg = config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}
+    feature_flags_cfg = config.get("feature_flags", {}) if isinstance(config.get("feature_flags"), dict) else {}
+    run_heartbeat_seconds = max(1, int(ui_cfg.get("run_heartbeat_seconds", 5) or 5))
+    run_stall_warning_seconds = max(30, int(ui_cfg.get("run_stall_warning_seconds", 90) or 90))
+    run_stall_critical_seconds = max(run_stall_warning_seconds, int(ui_cfg.get("run_stall_critical_seconds", 180) or 180))
+    run_watchdog_enabled = bool(feature_flags_cfg.get("run_watchdog", True))
+
+    async def _emit_run_progress(
+        run_id: str,
+        project_id: str,
+        *,
+        force_phase: bool = False,
+    ) -> None:
+        nonlocal heartbeat_seq, last_phase_state, last_incident_signature
+        run = run_service.get_run(run_id)
+        if not isinstance(run, dict):
+            return
+        guardrails = run_service.guardrail_status(run_id) or {}
+        workforce = workforce_presence_service.snapshot(
+            project_id=project_id or None,
+            include_assigned=True,
+            include_reporting=True,
+        )
+        heartbeat_seq += 1
+        run_status = build_run_status_payload(
+            run,
+            guardrails=guardrails,
+            workforce_snapshot=workforce,
+            heartbeat_seq=heartbeat_seq,
+        )
+        await websocket.send_json({"type": "run_status", "content": run_status})
+        state = str(run_status.get("state", "") or "")
+        if force_phase or state != last_phase_state:
+            last_phase_state = state
+            await websocket.send_json(
+                {
+                    "type": "run_phase",
+                    "content": {
+                        "run_id": str(run_status.get("run_id", "") or ""),
+                        "project_id": str(run_status.get("project_id", "") or ""),
+                        "state": state,
+                        "phase_label": str(run_status.get("phase_label", "") or ""),
+                        "elapsed_seconds": int(run_status.get("elapsed_seconds", 0) or 0),
+                        "last_activity_at": str(run_status.get("last_activity_at", "") or ""),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                }
+            )
+        if run_watchdog_enabled:
+            incident = detect_run_incident(
+                run_status,
+                warning_seconds=run_stall_warning_seconds,
+                critical_seconds=run_stall_critical_seconds,
+            )
+            if incident:
+                signature = "|".join(
+                    [
+                        str(incident.get("run_id", "") or ""),
+                        str(incident.get("severity", "") or ""),
+                        str(incident.get("reason", "") or ""),
+                    ]
+                )
+                if signature != last_incident_signature:
+                    last_incident_signature = signature
+                    await websocket.send_json({"type": "run_incident", "content": incident})
+            elif state not in ACTIVE_RUN_STATES:
+                last_incident_signature = ""
+
+    async def _stop_heartbeat() -> None:
+        nonlocal heartbeat_task
+        if heartbeat_task and not heartbeat_task.done():
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        heartbeat_task = None
+
+    async def _start_heartbeat(run_id: str, project_id: str) -> None:
+        nonlocal heartbeat_task
+        await _stop_heartbeat()
+
+        async def _heartbeat_loop() -> None:
+            while True:
+                await asyncio.sleep(run_heartbeat_seconds)
+                if not inflight_run_id or inflight_run_id != run_id:
+                    break
+                run = run_service.get_run(run_id)
+                if not isinstance(run, dict):
+                    break
+                try:
+                    await _emit_run_progress(run_id, project_id)
+                except Exception:
+                    break
+                status = str(run.get("status", "") or "").strip().lower()
+                if status not in ACTIVE_RUN_STATES:
+                    break
+
+        heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
+    async def _clear_inflight_tracking() -> None:
+        nonlocal inflight_run_id, inflight_project_id, heartbeat_seq, last_phase_state, last_incident_signature
+        await _stop_heartbeat()
+        inflight_run_id = ""
+        inflight_project_id = ""
+        heartbeat_seq = 0
+        last_phase_state = ""
+        last_incident_signature = ""
+
+    async def _close_inflight_run(
+        reason: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+        mark_failed: bool = True,
+    ) -> None:
         nonlocal inflight_run_id, inflight_project_id
         if not inflight_run_id:
             return
         run_state = run_service.get_run(inflight_run_id)
         status = str((run_state or {}).get("status", "") or "")
-        if status in {"queued", "planning", "executing", "verifying"}:
+        if mark_failed and status in {"queued", "planning", "executing", "verifying"}:
             _transition_run_state(
                 inflight_run_id,
                 state="failed",
@@ -6117,10 +6243,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 project_id=inflight_project_id,
                 metadata=metadata or {},
             )
-        inflight_run_id = ""
-        inflight_project_id = ""
+        await _clear_inflight_tracking()
 
-    config = _load_config()
     llm_cfg = config.get("llm", {})
     provider = llm_cfg.get("provider", "anthropic")
     openai_mode = str(llm_cfg.get("openai_mode", "apikey") or "apikey").lower()
@@ -6183,6 +6307,15 @@ async def chat_websocket(websocket: WebSocket) -> None:
             # Reload config each turn so Settings changes take effect live.
             config = _load_config()
             llm_cfg = config.get("llm", {})
+            ui_cfg = config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}
+            feature_flags_cfg = config.get("feature_flags", {}) if isinstance(config.get("feature_flags"), dict) else {}
+            run_heartbeat_seconds = max(1, int(ui_cfg.get("run_heartbeat_seconds", 5) or 5))
+            run_stall_warning_seconds = max(30, int(ui_cfg.get("run_stall_warning_seconds", 90) or 90))
+            run_stall_critical_seconds = max(
+                run_stall_warning_seconds,
+                int(ui_cfg.get("run_stall_critical_seconds", 180) or 180),
+            )
+            run_watchdog_enabled = bool(feature_flags_cfg.get("run_watchdog", True))
             provider = llm_cfg.get("provider", "anthropic")
             openai_mode = str(llm_cfg.get("openai_mode", "apikey") or "apikey").lower()
             user_name = config.get("user", {}).get("name", "User") or "User"
@@ -6292,6 +6425,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     "delegation_reasons": delegation_reasoning.get("reasons", []),
                 },
             })
+            await _emit_run_progress(run_id, active_project_id, force_phase=True)
+            await _start_heartbeat(run_id, active_project_id)
 
             # Store user message with project scope.
             async with _chat_lock:
@@ -6402,8 +6537,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     "intent_class": intent_class,
                     "planning_packet_status": plan_packet_status,
                 })
-                inflight_run_id = ""
-                inflight_project_id = ""
+                await _emit_run_progress(run_id, active_project_id, force_phase=True)
+                await _clear_inflight_tracking()
                 continue
             if micro_project_mode:
                 complexity_reason = _micro_project_complexity_reason(user_message)
@@ -6416,8 +6551,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     )
                     await websocket.send_json({"type": "micro_project_warning", "content": complexity_reason})
                     await websocket.send_json({"type": "done", "content": "", "project_id": active_project_id, "run_id": run_id})
-                    inflight_run_id = ""
-                    inflight_project_id = ""
+                    await _emit_run_progress(run_id, active_project_id, force_phase=True)
+                    await _clear_inflight_tracking()
                     continue
                 if complexity_reason and micro_project_override:
                     await websocket.send_json({
@@ -6497,8 +6632,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         "project_id": active_project_id,
                         "run_id": run_id,
                     })
-                    inflight_run_id = ""
-                    inflight_project_id = ""
+                    await _emit_run_progress(run_id, active_project_id, force_phase=True)
+                    await _clear_inflight_tracking()
                     continue
                 full_response = await _handle_ceo_claude(
                     websocket,
@@ -6611,16 +6746,17 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if deploy_offer:
                 done_payload["deploy_offer"] = deploy_offer
             await websocket.send_json(done_payload)
-            inflight_run_id = ""
-            inflight_project_id = ""
+            await _emit_run_progress(run_id, active_project_id, force_phase=True)
+            await _clear_inflight_tracking()
 
     except WebSocketDisconnect:
-        _close_inflight_run(
+        await _close_inflight_run(
             "Client disconnected before run completion",
             metadata={"reason": "websocket_disconnected"},
+            mark_failed=False,
         )
     except Exception as exc:
-        _close_inflight_run(
+        await _close_inflight_run(
             f"Chat websocket error: {str(exc)[:180]}",
             metadata={"reason": "websocket_exception"},
         )
@@ -6628,6 +6764,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
             await websocket.close()
         except Exception:
             pass
+    finally:
+        await _stop_heartbeat()
 
 
 # ---------------------------------------------------------------------------

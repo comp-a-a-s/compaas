@@ -15,6 +15,8 @@ from src.web.services.integration_service import IntegrationService
 from src.web.services.project_service import ProjectService
 from src.web.services.run_service import RunService
 from src.web.services.workforce_presence import WorkforcePresenceService
+from src.web.services.run_supervisor import build_run_status_payload, detect_run_incident
+from src.web.services.autopilot_policy import evaluate_guarded_autopilot
 from src.web.settings import FeatureFlags, merge_feature_flags, resolve_sandbox_profile
 
 
@@ -118,6 +120,12 @@ class ProjectVercelDeployRequest(BaseModel):
 
 class UpdateApplyRequest(BaseModel):
     version: str = Field(default="")
+
+
+class RunControlRequest(BaseModel):
+    action: str = Field(default="status")
+    step: str = Field(default="")
+    force: bool = Field(default=False)
 
 
 def _classify_intent(message: str) -> dict[str, Any]:
@@ -549,8 +557,27 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return {"status": "ok", "created": created, "run": run}
 
     @router.get("/runs")
-    def v1_list_runs(project_id: str = Query(default=""), limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
-        return {"status": "ok", "runs": ctx.run_service.list_runs(project_id=project_id, limit=limit)}
+    def v1_list_runs(
+        project_id: str = Query(default=""),
+        status: str = Query(default=""),
+        limit: int = Query(default=100, ge=1, le=500),
+        cursor: str = Query(default=""),
+    ) -> dict[str, Any]:
+        all_runs = ctx.run_service.list_runs(project_id=project_id, limit=5000)
+        status_filter = str(status or "").strip().lower()
+        if status_filter:
+            all_runs = [run for run in all_runs if str(run.get("status", "") or "").strip().lower() == status_filter]
+        offset = 0
+        if cursor.strip():
+            try:
+                offset = max(0, int(cursor.strip()))
+            except ValueError:
+                offset = 0
+        page = all_runs[offset: offset + limit]
+        next_cursor = ""
+        if (offset + limit) < len(all_runs):
+            next_cursor = str(offset + limit)
+        return {"status": "ok", "runs": page, "next_cursor": next_cursor}
 
     @router.get("/workforce/live")
     def v1_workforce_live(
@@ -576,6 +603,163 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
                 type_="https://compaas.dev/problems/run-not-found",
             )
         return {"status": "ok", "run": run}
+
+    @router.get("/runs/{run_id}/live")
+    def v1_run_live(run_id: str) -> dict[str, Any]:
+        run = ctx.run_service.get_run(run_id)
+        if not run:
+            raise problem_http_exception(
+                status=404,
+                title="Run Not Found",
+                detail=f"Run '{run_id}' does not exist.",
+                type_="https://compaas.dev/problems/run-not-found",
+            )
+        cfg = ctx.load_config()
+        ui_cfg = cfg.get("ui", {}) if isinstance(cfg.get("ui"), dict) else {}
+        warning_seconds = max(30, int(ui_cfg.get("run_stall_warning_seconds", 90) or 90))
+        critical_seconds = max(warning_seconds, int(ui_cfg.get("run_stall_critical_seconds", 180) or 180))
+        guardrails = ctx.run_service.guardrail_status(run_id) or {}
+        project_id = str(run.get("project_id", "") or "").strip()
+        workforce = ctx.workforce_presence_service.snapshot(
+            project_id=project_id or None,
+            include_assigned=True,
+            include_reporting=True,
+        )
+        run_status = build_run_status_payload(
+            run,
+            guardrails=guardrails,
+            workforce_snapshot=workforce,
+            heartbeat_seq=0,
+        )
+        incident = detect_run_incident(
+            run_status,
+            warning_seconds=warning_seconds,
+            critical_seconds=critical_seconds,
+        )
+        return {
+            "status": "ok",
+            "run": run,
+            "run_status": run_status,
+            "guardrails": guardrails,
+            "workforce": workforce,
+            "incident": incident,
+        }
+
+    @router.post("/runs/{run_id}/control")
+    def v1_control_run(request: Request, run_id: str, body: RunControlRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        action = str(body.action or "status").strip().lower()
+        if action not in {"status", "retry_step", "cancel", "continue"}:
+            raise problem_http_exception(
+                status=400,
+                title="Invalid Run Control Action",
+                detail="action must be one of: status, retry_step, cancel, continue.",
+                type_="https://compaas.dev/problems/invalid-run-control-action",
+            )
+        run = ctx.run_service.get_run(run_id)
+        if not run:
+            raise problem_http_exception(
+                status=404,
+                title="Run Not Found",
+                detail=f"Run '{run_id}' does not exist.",
+                type_="https://compaas.dev/problems/run-not-found",
+            )
+
+        acknowledged = True
+        message = ""
+        step = str(body.step or "manual retry").strip() or "manual retry"
+        if action == "cancel":
+            cancelled = ctx.run_service.cancel_run(run_id, reason="Cancelled by user control")
+            if cancelled:
+                run = cancelled
+                ctx.workforce_presence_service.mark_run_terminal(
+                    run_id=str(run.get("id", "") or run_id),
+                    project_id=str(run.get("project_id", "") or ""),
+                    terminal_state="cancelled",
+                )
+                message = "Run cancelled."
+            else:
+                acknowledged = False
+                message = "Unable to cancel run."
+        elif action == "retry_step":
+            transitioned = ctx.run_service.transition_run(
+                run_id,
+                state="executing",
+                label=f"Retry requested: {step}",
+                metadata={"retry_step": step},
+            )
+            if transitioned:
+                run = transitioned
+                message = f"Retry started for step: {step}"
+            else:
+                acknowledged = False
+                message = "Unable to retry step."
+        elif action == "continue":
+            guardrails = ctx.run_service.guardrail_status(run_id) or {}
+            autopilot = evaluate_guarded_autopilot(
+                guardrails=guardrails,
+                transition_label="continue",
+                transition_metadata={"step": step},
+                runtime_risk_threshold_pct=80,
+            )
+            if autopilot.get("requires_confirmation") and not bool(body.force):
+                acknowledged = False
+                reasons = autopilot.get("reasons", [])
+                message = "Continue blocked by guarded autopilot."
+                if isinstance(reasons, list) and reasons:
+                    message = f"{message} {reasons[0]}"
+            else:
+                transitioned = ctx.run_service.transition_run(
+                    run_id,
+                    state="executing",
+                    label=f"Continue requested: {step}",
+                    metadata={"continue_step": step, "forced": bool(body.force)},
+                )
+                if transitioned:
+                    run = transitioned
+                    message = "Run continued."
+                else:
+                    acknowledged = False
+                    message = "Unable to continue run."
+        else:
+            message = "Run status fetched."
+
+        cfg = ctx.load_config()
+        ui_cfg = cfg.get("ui", {}) if isinstance(cfg.get("ui"), dict) else {}
+        warning_seconds = max(30, int(ui_cfg.get("run_stall_warning_seconds", 90) or 90))
+        critical_seconds = max(warning_seconds, int(ui_cfg.get("run_stall_critical_seconds", 180) or 180))
+        guardrails = ctx.run_service.guardrail_status(run_id) or {}
+        project_id = str(run.get("project_id", "") or "").strip()
+        workforce = ctx.workforce_presence_service.snapshot(
+            project_id=project_id or None,
+            include_assigned=True,
+            include_reporting=True,
+        )
+        run_status = build_run_status_payload(
+            run,
+            guardrails=guardrails,
+            workforce_snapshot=workforce,
+            heartbeat_seq=0,
+        )
+        incident = detect_run_incident(
+            run_status,
+            warning_seconds=warning_seconds,
+            critical_seconds=critical_seconds,
+        )
+        return {
+            "status": "ok",
+            "run": run,
+            "run_status": run_status,
+            "guardrails": guardrails,
+            "workforce": workforce,
+            "incident": incident,
+            "run_control_ack": {
+                "run_id": run_id,
+                "action": action,
+                "acknowledged": acknowledged,
+                "message": message,
+            },
+        }
 
     @router.post("/runs/{run_id}/cancel")
     def v1_cancel_run(request: Request, run_id: str, body: dict[str, Any]) -> dict[str, Any]:

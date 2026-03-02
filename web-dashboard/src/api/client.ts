@@ -8,6 +8,8 @@ import type {
   AppConfig,
   FeatureFlags,
   PlanningPacketStatus,
+  RunControlResponse,
+  RunLiveSnapshot,
   WorkforceLiveSnapshot,
   UpdateApplyResponse,
   UpdateStatusResponse,
@@ -214,6 +216,64 @@ export async function fetchWorkforceLive(
     emptyWorkforceLiveSnapshot(projectId),
     options?.signal ? { signal: options.signal } : undefined,
   );
+}
+
+export async function listRuns(params?: {
+  project_id?: string;
+  status?: string;
+  limit?: number;
+  cursor?: string;
+  signal?: AbortSignal;
+}): Promise<{
+  status: 'ok' | 'error';
+  runs: Array<Record<string, unknown>>;
+  next_cursor?: string;
+}> {
+  const query = new URLSearchParams();
+  if (params?.project_id) query.set('project_id', params.project_id);
+  if (params?.status) query.set('status', params.status);
+  query.set('limit', String(Math.max(1, Math.min(500, params?.limit ?? 50))));
+  if (params?.cursor) query.set('cursor', params.cursor);
+  return safeFetch(
+    `${BASE}/v1/runs?${query.toString()}`,
+    { status: 'error', runs: [] },
+    params?.signal ? { signal: params.signal } : undefined,
+  );
+}
+
+export async function fetchRunLive(runId: string, options?: { signal?: AbortSignal }): Promise<RunLiveSnapshot | null> {
+  if (!runId.trim()) return null;
+  return safeFetch<RunLiveSnapshot | null>(
+    `${BASE}/v1/runs/${encodeURIComponent(runId)}/live`,
+    null,
+    options?.signal ? { signal: options.signal } : undefined,
+  );
+}
+
+export async function controlRun(
+  runId: string,
+  action: 'status' | 'retry_step' | 'cancel' | 'continue',
+  step?: string,
+  force = false,
+): Promise<RunControlResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE}/v1/runs/${encodeURIComponent(runId)}/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...(step ? { step } : {}), ...(force ? { force: true } : {}) }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      return { status: 'error' };
+    }
+    return await res.json() as RunControlResponse;
+  } catch {
+    return { status: 'error' };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export function createActivityStream(onMessage: (line: string) => void): EventSource {

@@ -1186,6 +1186,10 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   // Local form state (mirrors config)
   const [userName, setUserName] = useState('');
   const [autoOpen, setAutoOpen] = useState(true);
+  const [alwaysOnMode, setAlwaysOnMode] = useState<'guarded_autopilot' | 'manual'>('guarded_autopilot');
+  const [runHeartbeatSeconds, setRunHeartbeatSeconds] = useState(5);
+  const [runStallWarningSeconds, setRunStallWarningSeconds] = useState(90);
+  const [runStallCriticalSeconds, setRunStallCriticalSeconds] = useState(180);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusResponse | null>(null);
   const [updateStatusBusy, setUpdateStatusBusy] = useState(false);
   const [updateApplyBusy, setUpdateApplyBusy] = useState(false);
@@ -1535,6 +1539,10 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         setConfig(cfg);
         setUserName(cfg.user?.name ?? '');
         setAutoOpen(cfg.server?.auto_open_browser ?? true);
+        setAlwaysOnMode(cfg.ui?.always_on_mode === 'manual' ? 'manual' : 'guarded_autopilot');
+        setRunHeartbeatSeconds(Math.max(1, Number(cfg.ui?.run_heartbeat_seconds ?? 5) || 5));
+        setRunStallWarningSeconds(Math.max(30, Number(cfg.ui?.run_stall_warning_seconds ?? 90) || 90));
+        setRunStallCriticalSeconds(Math.max(30, Number(cfg.ui?.run_stall_critical_seconds ?? 180) || 180));
         const integrationCfg = integrationsFromConfig(cfg);
         setWorkspaceMode(integrationCfg.workspace_mode);
         if (integrationCfg.github_token === REDACTED_SECRET) {
@@ -1591,9 +1599,27 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     setSaveError(null);
     setSaveSuccess(false);
 
+    const normalizedHeartbeat = Math.max(1, Math.min(60, Math.round(runHeartbeatSeconds || 5)));
+    const normalizedWarning = Math.max(30, Math.min(1200, Math.round(runStallWarningSeconds || 90)));
+    const normalizedCritical = Math.max(
+      normalizedWarning,
+      Math.min(1800, Math.round(runStallCriticalSeconds || 180)),
+    );
+    setRunHeartbeatSeconds(normalizedHeartbeat);
+    setRunStallWarningSeconds(normalizedWarning);
+    setRunStallCriticalSeconds(normalizedCritical);
+
     const patch: Partial<AppConfig> = {
       user: { name: userName.trim() },
-      ui: { theme: 'midnight', ...(config?.ui ?? {}), poll_interval_ms: config?.ui?.poll_interval_ms ?? 5000 },
+      ui: {
+        theme: 'midnight',
+        ...(config?.ui ?? {}),
+        poll_interval_ms: config?.ui?.poll_interval_ms ?? 5000,
+        always_on_mode: alwaysOnMode,
+        run_heartbeat_seconds: normalizedHeartbeat,
+        run_stall_warning_seconds: normalizedWarning,
+        run_stall_critical_seconds: normalizedCritical,
+      },
       server: { host: config?.server?.host ?? '', port: config?.server?.port ?? 3000, ...(config?.server ?? {}), auto_open_browser: autoOpen },
     };
 
@@ -1764,6 +1790,68 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
               label="Auto-open browser"
               description="Automatically open the dashboard when compaas-web starts"
             />
+
+            <div style={{ display: 'grid', gap: '10px' }}>
+              <label
+                htmlFor="settings-always-on-mode"
+                style={{ fontSize: '12px', fontWeight: 500, color: C.textSecondary }}
+              >
+                Always-on mode
+              </label>
+              <select
+                id="settings-always-on-mode"
+                value={alwaysOnMode}
+                onChange={(e) => setAlwaysOnMode(e.target.value === 'manual' ? 'manual' : 'guarded_autopilot')}
+                style={inputStyle({ maxWidth: '280px' })}
+              >
+                <option value="guarded_autopilot">Guarded Autopilot (Recommended)</option>
+                <option value="manual">Manual</option>
+              </select>
+              <p style={{ margin: 0, fontSize: '11px', color: C.textMuted }}>
+                Guarded Autopilot continues safe run transitions automatically and warns before risky actions.
+              </p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '10px' }}>
+              <p style={{ margin: 0, fontSize: '12px', fontWeight: 500, color: C.textSecondary }}>
+                Run watchdog timing
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px' }}>
+                <label style={{ display: 'grid', gap: '5px', fontSize: '11px', color: C.textMuted }}>
+                  Heartbeat (seconds)
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={runHeartbeatSeconds}
+                    onChange={(e) => setRunHeartbeatSeconds(Math.max(1, Number(e.target.value || 5) || 5))}
+                    style={inputStyle()}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: '5px', fontSize: '11px', color: C.textMuted }}>
+                  Stall warning (seconds)
+                  <input
+                    type="number"
+                    min={30}
+                    max={1200}
+                    value={runStallWarningSeconds}
+                    onChange={(e) => setRunStallWarningSeconds(Math.max(30, Number(e.target.value || 90) || 90))}
+                    style={inputStyle()}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: '5px', fontSize: '11px', color: C.textMuted }}>
+                  Stall critical (seconds)
+                  <input
+                    type="number"
+                    min={30}
+                    max={1800}
+                    value={runStallCriticalSeconds}
+                    onChange={(e) => setRunStallCriticalSeconds(Math.max(30, Number(e.target.value || 180) || 180))}
+                    style={inputStyle()}
+                  />
+                </label>
+              </div>
+            </div>
           </div>
         </Section>
       )}

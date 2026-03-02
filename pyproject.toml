@@ -1,6 +1,6 @@
 [project]
 name = "compaas"
-version = "0.3.0"
+version = "0.3.17"
 description = "COMPaaS — Company as a Service, AI virtual company orchestration"
 requires-python = ">=3.10"
 dependencies = [
