@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   fetchConfig,
   updateConfig,
+  updateConfigResult,
   testLlmConnection,
-  saveIntegrations,
+  saveIntegrationsResult,
   githubVerifyIntegration,
   vercelVerifyIntegration,
   fetchGithubRepos,
@@ -12,6 +13,8 @@ import {
   githubSync,
   githubDrift,
   githubRollback,
+  fetchPrQualityProfile,
+  updatePrQualityProfile,
   vercelLinkProject,
   vercelDeploy,
   vercelAssignDomain,
@@ -1190,6 +1193,9 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [runHeartbeatSeconds, setRunHeartbeatSeconds] = useState(5);
   const [runStallWarningSeconds, setRunStallWarningSeconds] = useState(90);
   const [runStallCriticalSeconds, setRunStallCriticalSeconds] = useState(180);
+  const [completionCelebrationEnabled, setCompletionCelebrationEnabled] = useState(true);
+  const [activityFallbackEnabled, setActivityFallbackEnabled] = useState(true);
+  const [activityFallbackMs, setActivityFallbackMs] = useState(15000);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusResponse | null>(null);
   const [updateStatusBusy, setUpdateStatusBusy] = useState(false);
   const [updateApplyBusy, setUpdateApplyBusy] = useState(false);
@@ -1237,6 +1243,8 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [vercelDomain, setVercelDomain] = useState('');
   const [vercelEnvKey, setVercelEnvKey] = useState('');
   const [vercelEnvValue, setVercelEnvValue] = useState('');
+  const [prQualityProfile, setPrQualityProfile] = useState<'strict' | 'balanced' | 'fast'>('balanced');
+  const [prProfileStatus, setPrProfileStatus] = useState('');
 
   const refreshUpdateStatus = useCallback(async (forceRefresh = false) => {
     setUpdateStatusBusy(true);
@@ -1433,7 +1441,7 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     setQuickVerifyBusy('github');
     setGithubInlineStatus('Saving connector settings...');
     setIntegrationOpsStatus('Saving GitHub connector settings...');
-    const saved = await saveIntegrations({
+    const saved = await saveIntegrationsResult({
       workspace_mode: workspaceMode,
       github_token: githubTokenMasked ? REDACTED_SECRET : githubToken.trim(),
       github_repo: repo,
@@ -1441,11 +1449,12 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       github_auto_push: githubAutoPush,
       github_auto_pr: githubAutoPr,
     });
-    if (!saved) {
+    if (!saved.ok) {
       setQuickVerifyBusy('');
       setGithubVerified(false);
-      setGithubInlineStatus('Failed to save settings before verification.');
-      setIntegrationOpsStatus('Failed to save GitHub settings before verification.');
+      const detail = saved.detail || 'Failed to save settings before verification.';
+      setGithubInlineStatus(detail);
+      setIntegrationOpsStatus(detail);
       return;
     }
 
@@ -1488,17 +1497,18 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     setQuickVerifyBusy('vercel');
     setVercelInlineStatus('Saving connector settings...');
     setIntegrationOpsStatus('Saving Vercel connector settings...');
-    const saved = await saveIntegrations({
+    const saved = await saveIntegrationsResult({
       vercel_token: vercelTokenMasked ? REDACTED_SECRET : vercelToken.trim(),
       vercel_team_id: vercelTeamId.trim(),
       vercel_project_name: projectName,
       vercel_default_target: vercelDefaultTarget,
     });
-    if (!saved) {
+    if (!saved.ok) {
       setQuickVerifyBusy('');
       setVercelVerified(false);
-      setVercelInlineStatus('Failed to save settings before verification.');
-      setIntegrationOpsStatus('Failed to save Vercel settings before verification.');
+      const detail = saved.detail || 'Failed to save settings before verification.';
+      setVercelInlineStatus(detail);
+      setIntegrationOpsStatus(detail);
       return;
     }
 
@@ -1543,6 +1553,9 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         setRunHeartbeatSeconds(Math.max(1, Number(cfg.ui?.run_heartbeat_seconds ?? 5) || 5));
         setRunStallWarningSeconds(Math.max(30, Number(cfg.ui?.run_stall_warning_seconds ?? 90) || 90));
         setRunStallCriticalSeconds(Math.max(30, Number(cfg.ui?.run_stall_critical_seconds ?? 180) || 180));
+        setCompletionCelebrationEnabled(cfg.ui?.completion_celebration_enabled !== false);
+        setActivityFallbackEnabled(cfg.ui?.activity_stream_fallback_enabled !== false);
+        setActivityFallbackMs(Math.max(5000, Number(cfg.ui?.activity_stream_fallback_ms ?? 15000) || 15000));
         const integrationCfg = integrationsFromConfig(cfg);
         setWorkspaceMode(integrationCfg.workspace_mode);
         if (integrationCfg.github_token === REDACTED_SECRET) {
@@ -1582,6 +1595,12 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         setWebhookUrl(integrationCfg.webhook_url);
       }
     });
+    fetchPrQualityProfile().then((payload) => {
+      if (!payload || payload.status !== 'ok') return;
+      setPrQualityProfile(payload.profile === 'strict' || payload.profile === 'fast' ? payload.profile : 'balanced');
+    }).catch(() => {
+      // no-op: quality profile endpoint can be unavailable on older backends
+    });
   }, []);
 
   useEffect(() => {
@@ -1605,9 +1624,11 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       normalizedWarning,
       Math.min(1800, Math.round(runStallCriticalSeconds || 180)),
     );
+    const normalizedFallbackMs = Math.max(5000, Math.min(120000, Math.round(activityFallbackMs || 15000)));
     setRunHeartbeatSeconds(normalizedHeartbeat);
     setRunStallWarningSeconds(normalizedWarning);
     setRunStallCriticalSeconds(normalizedCritical);
+    setActivityFallbackMs(normalizedFallbackMs);
 
     const patch: Partial<AppConfig> = {
       user: { name: userName.trim() },
@@ -1619,14 +1640,18 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         run_heartbeat_seconds: normalizedHeartbeat,
         run_stall_warning_seconds: normalizedWarning,
         run_stall_critical_seconds: normalizedCritical,
+        completion_celebration_enabled: completionCelebrationEnabled,
+        completion_celebration_mode: 'subtle_burst',
+        activity_stream_fallback_enabled: activityFallbackEnabled,
+        activity_stream_fallback_ms: normalizedFallbackMs,
       },
       server: { host: config?.server?.host ?? '', port: config?.server?.port ?? 3000, ...(config?.server ?? {}), auto_open_browser: autoOpen },
     };
 
     try {
-      const configOk = await updateConfig(patch);
-      if (!configOk) {
-        setSaveError('Failed to save settings');
+      const configResult = await updateConfigResult(patch as Record<string, unknown>);
+      if (!configResult.ok) {
+        setSaveError(configResult.detail || 'Failed to save settings');
         return;
       }
 
@@ -1670,11 +1695,18 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       const integrationsChanged = JSON.stringify(nextIntegrations) !== JSON.stringify(currentIntegrations);
 
       if (integrationsChanged) {
-        const integrationsOk = await saveIntegrations(nextIntegrations);
-        if (!integrationsOk) {
-          setSaveError('Saved core settings, but failed to save integrations');
+        const integrationsResult = await saveIntegrationsResult(nextIntegrations);
+        if (!integrationsResult.ok) {
+          setSaveError(integrationsResult.detail || 'Saved core settings, but failed to save integrations');
           return;
         }
+      }
+
+      const prProfileResult = await updatePrQualityProfile(prQualityProfile);
+      if (!prProfileResult.ok) {
+        setPrProfileStatus(prProfileResult.detail || 'Unable to save PR quality profile.');
+      } else {
+        setPrProfileStatus(`PR quality profile set to ${prQualityProfile}.`);
       }
 
       setConfig((prev) => prev ? ({
@@ -1851,6 +1883,33 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                   />
                 </label>
               </div>
+            </div>
+
+            <Toggle
+              value={completionCelebrationEnabled}
+              onChange={setCompletionCelebrationEnabled}
+              label="Completion celebration"
+              description="Show a subtle confetti burst when a project is truly delivered."
+            />
+
+            <div style={{ display: 'grid', gap: '10px' }}>
+              <Toggle
+                value={activityFallbackEnabled}
+                onChange={setActivityFallbackEnabled}
+                label="Activity fallback polling"
+                description="If live stream degrades, keep activity and counters updated via polling."
+              />
+              <label style={{ display: 'grid', gap: '5px', fontSize: '11px', color: C.textMuted, maxWidth: '220px' }}>
+                Fallback interval (ms)
+                <input
+                  type="number"
+                  min={5000}
+                  max={120000}
+                  value={activityFallbackMs}
+                  onChange={(e) => setActivityFallbackMs(Math.max(5000, Number(e.target.value || 15000) || 15000))}
+                  style={inputStyle()}
+                />
+              </label>
             </div>
           </div>
         </Section>
@@ -2352,6 +2411,46 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                 >
                   {showAdvancedIntegrationControls ? 'Hide Advanced Controls' : 'Show Advanced Controls'}
                 </button>
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Ship Loop Controls">
+            <div style={{ display: 'grid', gap: '12px' }}>
+              <div
+                style={{
+                  padding: '12px',
+                  borderRadius: '8px',
+                  border: `1px solid ${C.border}`,
+                  backgroundColor: C.surfaceRaised,
+                  display: 'grid',
+                  gap: '8px',
+                }}
+              >
+                <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>
+                  GitHub PR quality gate profile
+                </div>
+                <p style={{ margin: 0, fontSize: '11px', color: C.textSecondary }}>
+                  Choose the default rigor used for generated PR checklist quality.
+                </p>
+                <FloatingSelect
+                  value={prQualityProfile}
+                  options={[
+                    { value: 'balanced', label: 'Balanced (Recommended)', description: 'Balanced quality and speed for most teams.' },
+                    { value: 'strict', label: 'Strict', description: 'Higher validation depth before PR handoff.' },
+                    { value: 'fast', label: 'Fast', description: 'Short checklist for rapid iteration cycles.' },
+                  ]}
+                  onChange={(value) => setPrQualityProfile(value === 'strict' || value === 'fast' ? value : 'balanced')}
+                  ariaLabel="PR quality profile"
+                  variant="input"
+                  size="sm"
+                  style={{ maxWidth: '260px' }}
+                />
+                {prProfileStatus && (
+                  <p style={{ margin: 0, fontSize: '11px', color: C.textMuted }}>
+                    {prProfileStatus}
+                  </p>
+                )}
               </div>
             </div>
           </Section>

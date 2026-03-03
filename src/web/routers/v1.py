@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
+import os
+import uuid
 from typing import Any, Callable
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -126,6 +129,10 @@ class RunControlRequest(BaseModel):
     action: str = Field(default="status")
     step: str = Field(default="")
     force: bool = Field(default=False)
+
+
+class PrQualityProfileRequest(BaseModel):
+    profile: str = Field(default="balanced")
 
 
 def _classify_intent(message: str) -> dict[str, Any]:
@@ -537,6 +544,7 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         idempotency_key: str = Header(default="", alias="Idempotency-Key"),
     ) -> dict[str, Any]:
         _require_mutation_auth(request)
+        correlation_id = str(uuid.uuid4())[:12]
         try:
             run, created = ctx.run_service.create_run(
                 project_id=body.project_id,
@@ -554,7 +562,72 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
                 detail=str(exc),
                 type_="https://compaas.dev/problems/project-concurrency-limit",
             )
-        return {"status": "ok", "created": created, "run": run}
+        return {"status": "ok", "created": created, "run": run, "correlation_id": correlation_id}
+
+    @router.get("/activity/recent")
+    def v1_recent_activity(
+        limit: int = Query(default=100, ge=1, le=500),
+        cursor: str = Query(default=""),
+    ) -> dict[str, Any]:
+        """Cursor-based activity pagination using newest-window offsets."""
+        activity_log_path = os.path.join(ctx.data_dir, "activity.log")
+        if not os.path.exists(activity_log_path):
+            return {
+                "status": "ok",
+                "events": [],
+                "next_cursor": "",
+                "total_estimate": 0,
+            }
+
+        events: list[dict[str, Any]] = []
+        try:
+            with open(activity_log_path, encoding="utf-8") as f:
+                for line in f:
+                    row = line.strip()
+                    if not row:
+                        continue
+                    try:
+                        payload = json.loads(row)
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(payload, dict):
+                        events.append(payload)
+        except OSError:
+            return {
+                "status": "ok",
+                "events": [],
+                "next_cursor": "",
+                "total_estimate": 0,
+            }
+
+        total = len(events)
+        if total <= 0:
+            return {
+                "status": "ok",
+                "events": [],
+                "next_cursor": "",
+                "total_estimate": 0,
+            }
+
+        offset = 0
+        raw_cursor = str(cursor or "").strip()
+        if raw_cursor:
+            try:
+                offset = max(0, int(raw_cursor))
+            except ValueError:
+                offset = 0
+        window_end = max(0, total - offset)
+        window_start = max(0, window_end - limit)
+        page = events[window_start:window_end]
+        next_cursor = ""
+        if window_start > 0:
+            next_cursor = str(offset + len(page))
+        return {
+            "status": "ok",
+            "events": page,
+            "next_cursor": next_cursor,
+            "total_estimate": total,
+        }
 
     @router.get("/runs")
     def v1_list_runs(
@@ -563,21 +636,27 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         limit: int = Query(default=100, ge=1, le=500),
         cursor: str = Query(default=""),
     ) -> dict[str, Any]:
-        all_runs = ctx.run_service.list_runs(project_id=project_id, limit=5000)
-        status_filter = str(status or "").strip().lower()
-        if status_filter:
-            all_runs = [run for run in all_runs if str(run.get("status", "") or "").strip().lower() == status_filter]
         offset = 0
         if cursor.strip():
             try:
                 offset = max(0, int(cursor.strip()))
             except ValueError:
                 offset = 0
-        page = all_runs[offset: offset + limit]
+        page, total = ctx.run_service.list_runs_page(
+            project_id=project_id,
+            status=status,
+            offset=offset,
+            limit=limit,
+        )
         next_cursor = ""
-        if (offset + limit) < len(all_runs):
-            next_cursor = str(offset + limit)
-        return {"status": "ok", "runs": page, "next_cursor": next_cursor}
+        if (offset + len(page)) < total:
+            next_cursor = str(offset + len(page))
+        return {
+            "status": "ok",
+            "runs": page,
+            "next_cursor": next_cursor,
+            "total_estimate": total,
+        }
 
     @router.get("/workforce/live")
     def v1_workforce_live(
@@ -606,6 +685,7 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
 
     @router.get("/runs/{run_id}/live")
     def v1_run_live(run_id: str) -> dict[str, Any]:
+        correlation_id = str(uuid.uuid4())[:12]
         run = ctx.run_service.get_run(run_id)
         if not run:
             raise problem_http_exception(
@@ -638,6 +718,7 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         )
         return {
             "status": "ok",
+            "correlation_id": correlation_id,
             "run": run,
             "run_status": run_status,
             "guardrails": guardrails,
@@ -648,6 +729,7 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
     @router.post("/runs/{run_id}/control")
     def v1_control_run(request: Request, run_id: str, body: RunControlRequest) -> dict[str, Any]:
         _require_mutation_auth(request)
+        correlation_id = str(uuid.uuid4())[:12]
         action = str(body.action or "status").strip().lower()
         if action not in {"status", "retry_step", "cancel", "continue"}:
             raise problem_http_exception(
@@ -748,6 +830,7 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         )
         return {
             "status": "ok",
+            "correlation_id": correlation_id,
             "run": run,
             "run_status": run_status,
             "guardrails": guardrails,
@@ -907,6 +990,39 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             provider=provider,
         )
         return {"status": "ok", "label": label, "template": template}
+
+    @router.get("/github/pr-quality-profile")
+    def v1_github_pr_quality_profile() -> dict[str, Any]:
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        profile = str(integrations.get("pr_quality_profile", "balanced") or "balanced").strip().lower()
+        if profile not in {"strict", "balanced", "fast"}:
+            profile = "balanced"
+        return {
+            "status": "ok",
+            "profile": profile,
+            "options": ["strict", "balanced", "fast"],
+        }
+
+    @router.patch("/github/pr-quality-profile")
+    def v1_set_github_pr_quality_profile(request: Request, body: PrQualityProfileRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        profile = str(body.profile or "balanced").strip().lower()
+        if profile not in {"strict", "balanced", "fast"}:
+            raise HTTPException(status_code=400, detail="profile must be strict, balanced, or fast")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        integrations["pr_quality_profile"] = profile
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "UPDATED",
+            f"PR quality profile set to {profile}.",
+            metadata={"profile": profile},
+        )
+        return {"status": "ok", "profile": profile}
 
     @router.post("/github/prepush/scan")
     def v1_github_secret_scan(request: Request, body: dict[str, Any]) -> dict[str, Any]:
@@ -1129,6 +1245,96 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             "ok": True,
             "target": target,
             "deployment_url": deployment_url,
+        }
+
+    @router.post("/projects/{project_id}/deploy/promote")
+    def v1_project_promote_to_production(request: Request, project_id: str) -> dict[str, Any]:
+        """Promote a project by creating a production deployment."""
+        return v1_project_vercel_deploy(
+            request=request,
+            project_id=project_id,
+            body=ProjectVercelDeployRequest(target="production"),
+        )
+
+    @router.get("/projects/{project_id}/release-notes")
+    def v1_project_release_notes(project_id: str, run_id: str = Query(default="")) -> dict[str, Any]:
+        project = ctx.project_service.state_manager.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        candidate_run_id = run_id.strip()
+        run_obj: dict[str, Any] | None = None
+        if candidate_run_id:
+            run_obj = ctx.run_service.get_run(candidate_run_id)
+        if run_obj is None:
+            runs = ctx.run_service.list_runs(project_id=project_id, limit=100)
+            for row in runs:
+                status = str(row.get("status", "") or "").strip().lower()
+                if status == "done":
+                    run_obj = row
+                    break
+
+        timeline_labels: list[str] = []
+        if isinstance(run_obj, dict):
+            timeline = run_obj.get("timeline", [])
+            if isinstance(timeline, list):
+                for entry in timeline[-12:]:
+                    if not isinstance(entry, dict):
+                        continue
+                    label = str(entry.get("label", "") or entry.get("state", "") or "").strip()
+                    if label:
+                        timeline_labels.append(label)
+
+        metadata = ctx.project_service.get_metadata(project_id)
+        artifact_lines: list[str] = []
+        artifacts = metadata.get("artifacts", [])
+        if isinstance(artifacts, list):
+            for artifact in artifacts[-8:]:
+                if not isinstance(artifact, dict):
+                    continue
+                path = str(artifact.get("file_path", "") or "").strip()
+                if not path:
+                    continue
+                artifact_lines.append(f"- {path}")
+
+        deliverables: list[str] = []
+        if artifact_lines:
+            deliverables.extend(artifact_lines[:5])
+        run_instructions = str(project.get("run_instructions", "") or "").strip()
+        run_cmd_lines = [line.strip() for line in run_instructions.splitlines() if line.strip()]
+        summary = str(project.get("description", "") or "").strip()
+        project_name = str(project.get("name", project_id) or project_id)
+        release_note_lines = [
+            f"# Release Notes — {project_name}",
+            "",
+            "## Summary",
+            summary or "- Build completed and ready for handoff.",
+            "",
+            "## Key Progress",
+        ]
+        if timeline_labels:
+            release_note_lines.extend([f"- {line}" for line in timeline_labels[-6:]])
+        else:
+            release_note_lines.append("- Run timeline unavailable.")
+        release_note_lines.extend(["", "## Deliverables"])
+        if deliverables:
+            release_note_lines.extend(deliverables)
+        else:
+            release_note_lines.append("- No explicit artifacts recorded.")
+        release_note_lines.extend(["", "## Run Commands"])
+        if run_cmd_lines:
+            release_note_lines.extend([f"- `{line}`" for line in run_cmd_lines[:6]])
+        else:
+            release_note_lines.append("- No run commands captured.")
+        notes = "\n".join(release_note_lines).strip()
+        return {
+            "status": "ok",
+            "project_id": project_id,
+            "run_id": str((run_obj or {}).get("id", "") or ""),
+            "notes": notes,
+            "summary": summary,
+            "timeline": timeline_labels[-12:],
+            "artifacts": artifacts[-8:] if isinstance(artifacts, list) else [],
+            "run_commands": run_cmd_lines[:6],
         }
 
     @router.get("/deployment/live-feed")

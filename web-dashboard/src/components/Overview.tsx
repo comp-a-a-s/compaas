@@ -7,6 +7,8 @@ interface OverviewProps {
   projects: Project[];
   tasks: Task[];
   events: ActivityEvent[];
+  liveEventCount?: number;
+  streamSource?: 'SSE' | 'Poll';
   activeProjectId?: string;
   microProjectMode?: boolean;
   loadingAgents: boolean;
@@ -1730,6 +1732,8 @@ export default function Overview({
   projects,
   tasks,
   events,
+  liveEventCount = 0,
+  streamSource = 'SSE',
   activeProjectId = '',
   microProjectMode = false,
   loadingAgents,
@@ -1810,7 +1814,12 @@ export default function Overview({
           <StatCard label="Agents"      value={agents.length.toString()}  color="var(--tf-accent)"       loading={loadingAgents} />
           <StatCard label="Projects"    value={projects.length.toString()} color="var(--tf-accent-blue)"  loading={loadingProjects} />
           <StatCard label="Tasks"       value={tasks.length.toString()}    color="var(--tf-success)"      loading={loadingTasks} />
-          <StatCard label="Live Events" value={events.length.toString()}   color="var(--tf-warning)"      loading={false} />
+          <StatCard
+            label={`Live Events ${streamSource === 'Poll' ? '(Poll)' : '(SSE)'}`}
+            value={Math.max(events.length, liveEventCount).toString()}
+            color="var(--tf-warning)"
+            loading={false}
+          />
         </div>
       )}
 

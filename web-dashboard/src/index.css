@@ -530,6 +530,13 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
+.chat-completion-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 4px 0 8px;
+}
+
 .chat-auto-launch-card {
   margin-top: 8px;
   border: 1px solid color-mix(in srgb, var(--tf-accent-blue) 25%, var(--tf-border));
@@ -579,6 +586,96 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
+@keyframes completion-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--tf-success) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--tf-success) 22%, transparent);
+  }
+}
+
+.chat-summary-card-glow {
+  animation: completion-glow 1.8s ease-in-out 2;
+}
+
+.chat-terminal-card {
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--tf-error) 58%, var(--tf-border));
+  background-color: color-mix(in srgb, var(--tf-bg) 78%, var(--tf-surface-raised));
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.chat-terminal-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--tf-error);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.chat-terminal-reason {
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--tf-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.chat-run-replay-card {
+  margin-top: 8px;
+  border: 1px solid var(--tf-border);
+  background-color: color-mix(in srgb, var(--tf-bg) 70%, var(--tf-surface));
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+@keyframes celebration-fall {
+  0% {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.5) rotate(0deg);
+  }
+  12% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(120px) scale(0.95) rotate(260deg);
+  }
+}
+
+.chat-celebration-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 8px;
+  height: 130px;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 45;
+}
+
+.chat-celebration-piece {
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 14px;
+  border-radius: 2px;
+  opacity: 0;
+  animation-name: celebration-fall;
+  animation-timing-function: cubic-bezier(0.2, 0.85, 0.25, 1);
+  animation-fill-mode: both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-summary-card-glow,
+  .chat-celebration-piece {
+    animation: none !important;
+  }
+}
+
 /* ---- Split chat panel motion ---- */
 @keyframes split-panel-open {
   from {
@@ -625,6 +722,10 @@ textarea:focus-visible {
 
 .header-global-search {
   flex: 0 1 clamp(210px, 24vw, 340px);
+}
+
+.project-card-completed-glow {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tf-success) 42%, transparent);
 }
 
 /* ---- Run progress chip + drawer ---- */

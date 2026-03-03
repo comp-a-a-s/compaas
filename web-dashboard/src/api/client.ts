@@ -1,4 +1,5 @@
 import type {
+  ApiResult,
   Agent,
   Project,
   Task,
@@ -13,10 +14,34 @@ import type {
   WorkforceLiveSnapshot,
   UpdateApplyResponse,
   UpdateStatusResponse,
+  PagedActivityResponse,
+  PrQualityProfileResponse,
 } from '../types';
 
 const BASE = '/api';
 const FETCH_TIMEOUT_MS = 15_000;
+
+function normalizeErrorDetail(payload: unknown, fallback = 'Request failed'): {
+  detail: string;
+  code?: string;
+} {
+  if (!payload || typeof payload !== 'object') {
+    return { detail: fallback };
+  }
+  const raw = (payload as { detail?: unknown }).detail ?? payload;
+  if (typeof raw === 'string' && raw.trim()) {
+    return { detail: raw.trim() };
+  }
+  if (!raw || typeof raw !== 'object') {
+    return { detail: fallback };
+  }
+  const message = String((raw as { message?: unknown }).message || '').trim();
+  const code = String((raw as { code?: unknown }).code || '').trim();
+  return {
+    detail: message || fallback,
+    ...(code ? { code } : {}),
+  };
+}
 
 async function safeFetch<T>(url: string, fallback: T, options?: RequestInit): Promise<T> {
   const externalSignal = options?.signal;
@@ -52,6 +77,52 @@ async function safeMutate(url: string, method: string, body?: unknown): Promise<
     return res.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function safeMutateResult<T = Record<string, unknown>>(
+  url: string,
+  method: string,
+  body?: unknown,
+): Promise<ApiResult<T>> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method,
+      signal: controller.signal,
+      ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    });
+    if (!res.ok) {
+      let payload: unknown = null;
+      try {
+        payload = await res.json();
+      } catch {
+        payload = null;
+      }
+      const normalized = normalizeErrorDetail(payload, `HTTP ${res.status}`);
+      return {
+        ok: false,
+        status: res.status,
+        detail: normalized.detail,
+        ...(normalized.code ? { code: normalized.code } : {}),
+      };
+    }
+    let data: T | undefined;
+    try {
+      data = await res.json() as T;
+    } catch {
+      data = undefined;
+    }
+    return {
+      ok: true,
+      status: res.status,
+      data,
+    };
+  } catch {
+    return { ok: false, status: 0, detail: 'Network error' };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -188,6 +259,23 @@ export async function fetchRecentActivity(limit = 50, offset = 0): Promise<Activ
   return safeFetch<ActivityEvent[]>(`${BASE}/activity/recent?${params.toString()}`, []);
 }
 
+export async function fetchRecentActivityPagedV1(
+  limit = 50,
+  cursor = '',
+): Promise<PagedActivityResponse> {
+  const params = new URLSearchParams({
+    limit: String(Math.max(1, Math.min(500, Number(limit) || 50))),
+  });
+  const normalizedCursor = String(cursor || '').trim();
+  if (normalizedCursor) {
+    params.set('cursor', normalizedCursor);
+  }
+  return safeFetch<PagedActivityResponse>(
+    `${BASE}/v1/activity/recent?${params.toString()}`,
+    { status: 'error', events: [], next_cursor: '', total_estimate: 0 },
+  );
+}
+
 export function emptyWorkforceLiveSnapshot(projectId = ''): WorkforceLiveSnapshot {
   return {
     status: 'ok',
@@ -228,6 +316,7 @@ export async function listRuns(params?: {
   status: 'ok' | 'error';
   runs: Array<Record<string, unknown>>;
   next_cursor?: string;
+  total_estimate?: number;
 }> {
   const query = new URLSearchParams();
   if (params?.project_id) query.set('project_id', params.project_id);
@@ -276,13 +365,19 @@ export async function controlRun(
   }
 }
 
-export function createActivityStream(onMessage: (line: string) => void): EventSource {
+export function createActivityStream(
+  onMessage: (line: string) => void,
+  handlers?: { onError?: () => void; onOpen?: () => void },
+): EventSource {
   const es = new EventSource(`${BASE}/activity/stream`);
   es.onmessage = (evt) => {
     onMessage(evt.data);
   };
+  es.onopen = () => {
+    handlers?.onOpen?.();
+  };
   es.onerror = () => {
-    // silently ignore — SSE may not be available
+    handlers?.onError?.();
   };
   return es;
 }
@@ -330,6 +425,11 @@ export async function saveSetupConfig(config: Partial<AppConfig>): Promise<boole
 }
 
 export async function updateConfig(updates: Record<string, unknown>): Promise<boolean> {
+  const result = await updateConfigResult(updates);
+  return result.ok;
+}
+
+export async function updateConfigResult(updates: Record<string, unknown>): Promise<ApiResult<Record<string, unknown>>> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -339,9 +439,30 @@ export async function updateConfig(updates: Record<string, unknown>): Promise<bo
       body: JSON.stringify(updates),
       signal: controller.signal,
     });
-    return res.ok;
+    if (!res.ok) {
+      let payload: unknown = null;
+      try {
+        payload = await res.json();
+      } catch {
+        payload = null;
+      }
+      const normalized = normalizeErrorDetail(payload, `HTTP ${res.status}`);
+      return {
+        ok: false,
+        status: res.status,
+        detail: normalized.detail,
+        ...(normalized.code ? { code: normalized.code } : {}),
+      };
+    }
+    let data: Record<string, unknown> | undefined;
+    try {
+      data = await res.json() as Record<string, unknown>;
+    } catch {
+      data = undefined;
+    }
+    return { ok: true, status: res.status, data };
   } catch {
-    return false;
+    return { ok: false, status: 0, detail: 'Network error' };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -554,7 +675,31 @@ export async function saveIntegrations(data: {
   slack_token?: string;
   webhook_url?: string;
 }): Promise<boolean> {
-  return safeMutate(`${BASE}/integrations`, 'PATCH', data);
+  const result = await saveIntegrationsResult(data);
+  return result.ok;
+}
+
+export async function saveIntegrationsResult(data: {
+  github_token?: string;
+  github_repo?: string;
+  github_default_branch?: string;
+  github_auto_push?: boolean;
+  github_auto_pr?: boolean;
+  github_verified?: boolean;
+  github_verified_at?: string;
+  github_last_error?: string;
+  workspace_mode?: 'local' | 'github';
+  vercel_token?: string;
+  vercel_team_id?: string;
+  vercel_project_name?: string;
+  vercel_default_target?: 'preview' | 'production';
+  vercel_verified?: boolean;
+  vercel_verified_at?: string;
+  vercel_last_error?: string;
+  slack_token?: string;
+  webhook_url?: string;
+}): Promise<ApiResult<Record<string, unknown>>> {
+  return safeMutateResult<Record<string, unknown>>(`${BASE}/integrations`, 'PATCH', data);
 }
 
 export async function sendTelegramMessage(data: {
@@ -702,6 +847,21 @@ export async function githubRollback(repoPath: string, commitSha: string): Promi
   );
 }
 
+export async function fetchPrQualityProfile(): Promise<PrQualityProfileResponse> {
+  return safeFetch<PrQualityProfileResponse>(
+    `${V1}/github/pr-quality-profile`,
+    { status: 'error', profile: 'balanced' },
+  );
+}
+
+export async function updatePrQualityProfile(profile: 'strict' | 'balanced' | 'fast'): Promise<ApiResult<Record<string, unknown>>> {
+  return safeMutateResult<Record<string, unknown>>(
+    `${V1}/github/pr-quality-profile`,
+    'PATCH',
+    { profile },
+  );
+}
+
 export async function vercelLinkProject(data: { token: string; project_name: string; team_id?: string }): Promise<Record<string, unknown> | null> {
   return safeFetch<Record<string, unknown> | null>(
     `${V1}/vercel/link`,
@@ -828,4 +988,25 @@ export async function deployProjectToVercel(projectId: string, target: 'preview'
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export async function fetchProjectReleaseNotes(
+  projectId: string,
+  runId = '',
+): Promise<{
+  status: 'ok' | 'error';
+  notes?: string;
+  run_id?: string;
+  summary?: string;
+  timeline?: string[];
+  run_commands?: string[];
+}> {
+  if (!projectId.trim()) return { status: 'error' };
+  const params = new URLSearchParams();
+  if (runId.trim()) params.set('run_id', runId.trim());
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return safeFetch(
+    `${V1}/projects/${encodeURIComponent(projectId)}/release-notes${suffix}`,
+    { status: 'error' },
+  );
 }

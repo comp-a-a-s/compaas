@@ -202,6 +202,7 @@ void statusIcon; // kept for potential future use
 
 function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) {
   const accent = statusAccent(project.status);
+  const isCompleted = String(project.status || '').toLowerCase() === 'completed';
 
   const teamNames = project.team ?? [];
   const tagLabels = normalizeTagList(project.tags ?? []);
@@ -209,7 +210,7 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
   return (
     <button
       onClick={onSelect}
-      className="w-full text-left rounded-xl transition-all duration-200 cursor-pointer group"
+      className={`w-full text-left rounded-xl transition-all duration-200 cursor-pointer group${isCompleted ? ' project-card-completed-glow' : ''}`}
       style={{
         backgroundColor: selected ? 'var(--tf-surface-raised)' : 'var(--tf-surface)',
         border: `1px solid ${selected ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,

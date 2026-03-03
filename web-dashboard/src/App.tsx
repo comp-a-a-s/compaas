@@ -22,6 +22,7 @@ import {
   fetchProjects,
   fetchProjectDetail,
   fetchRecentActivity,
+  fetchRecentActivityPagedV1,
   createActivityStream,
   fetchConfig,
   createProject,
@@ -37,6 +38,8 @@ import type {
   Project,
   Task,
   ActivityEvent,
+  ActivityStreamHealth,
+  ActivityStreamSource,
   AppConfig,
   RunIncidentEvent,
   RunLiveSnapshot,
@@ -45,6 +48,8 @@ import type {
 } from './types';
 
 const MAX_EVENTS = 5000;
+const STREAM_HEALTH_DEGRADED_THRESHOLD = 1;
+const STREAM_HEALTH_FALLBACK_THRESHOLD = 2;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const MIN_POLL_INTERVAL_MS = 3000;
 const MAX_POLL_INTERVAL_MS = 30000;
@@ -330,6 +335,10 @@ export default function App() {
   // Project-selection required modal for CEO chat
   const [showProjectRequired, setShowProjectRequired] = useState(false);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
+  const [liveEventsCount, setLiveEventsCount] = useState(0);
+  const [activityStreamHealth, setActivityStreamHealth] = useState<ActivityStreamHealth>('live');
+  const [activityStreamSource, setActivityStreamSource] = useState<ActivityStreamSource>('SSE');
+  const [activityTotalEstimate, setActivityTotalEstimate] = useState(0);
   const [workforceLive, setWorkforceLive] = useState<WorkforceLiveSnapshot>(() => emptyWorkforceLiveSnapshot(''));
 
   // Loading states
@@ -350,6 +359,9 @@ export default function App() {
   const workforceNextAllowedAtRef = useRef(0);
   const workforceLastSuccessAtRef = useRef(0);
   const runLivePollAbortRef = useRef<AbortController | null>(null);
+  const activityErrorCountRef = useRef(0);
+  const fallbackPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const activitySeenKeysRef = useRef<Set<string>>(new Set());
 
   // ---- Config check ----
   useEffect(() => {
@@ -396,6 +408,16 @@ export default function App() {
     const seconds = Number.isFinite(configured) ? configured : 5;
     return Math.max(2000, Math.min(30000, Math.round(seconds * 1000)));
   }, [config?.ui?.run_heartbeat_seconds]);
+
+  const activityFallbackEnabled = useMemo(() => (
+    config?.ui?.activity_stream_fallback_enabled !== false
+  ), [config?.ui?.activity_stream_fallback_enabled]);
+
+  const activityFallbackMs = useMemo(() => {
+    const configured = Number(config?.ui?.activity_stream_fallback_ms ?? 15000);
+    const safe = Number.isFinite(configured) ? configured : 15000;
+    return Math.max(5000, Math.min(120000, Math.round(safe)));
+  }, [config?.ui?.activity_stream_fallback_ms]);
 
   const taskPollIntervalMs = useMemo(() => (
     Math.max(MIN_TASK_POLL_INTERVAL_MS, pollIntervalMs * TASK_POLL_MULTIPLIER)
@@ -616,6 +638,10 @@ export default function App() {
     projectDetailAbortRef.current?.abort();
     workforceAbortRef.current?.abort();
     runLivePollAbortRef.current?.abort();
+    if (fallbackPollTimerRef.current) {
+      clearInterval(fallbackPollTimerRef.current);
+      fallbackPollTimerRef.current = null;
+    }
   }, []);
 
   const handleCreateProjectFromHeader = useCallback(() => {
@@ -665,6 +691,87 @@ export default function App() {
   // Metrics loading removed — replaced by Event Log panel that uses activityEvents directly
   const loadMetrics = useCallback(async () => { /* no-op */ }, []);
 
+  const appendActivityEvents = useCallback((
+    incoming: ActivityEvent[],
+    source: ActivityStreamSource,
+    totalEstimate?: number,
+  ) => {
+    if (!Array.isArray(incoming) || incoming.length === 0) {
+      if (Number.isFinite(totalEstimate) && (totalEstimate ?? 0) > 0) {
+        setActivityTotalEstimate((prev) => Math.max(prev, Number(totalEstimate)));
+      }
+      return;
+    }
+    setActivityEvents((prev) => {
+      const seen = activitySeenKeysRef.current;
+      if (prev.length === 0 && seen.size === 0) {
+        // Keep the initial load stable and avoid repeated set churn.
+        for (const event of incoming) {
+          seen.add(eventKey(event));
+        }
+        const seeded = incoming.slice(-MAX_EVENTS);
+        setLiveEventsCount((count) => Math.max(count, seeded.length));
+        setActivityStreamSource(source);
+        if (Number.isFinite(totalEstimate) && (totalEstimate ?? 0) > 0) {
+          setActivityTotalEstimate((count) => Math.max(count, Number(totalEstimate)));
+        }
+        return seeded;
+      }
+      let added = 0;
+      const next = [...prev];
+      for (const event of incoming) {
+        const key = eventKey(event);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        next.push(event);
+        added += 1;
+      }
+      if (added <= 0) {
+        if (Number.isFinite(totalEstimate) && (totalEstimate ?? 0) > 0) {
+          setActivityTotalEstimate((count) => Math.max(count, Number(totalEstimate)));
+        }
+        return prev;
+      }
+      const sliced = next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
+      setLiveEventsCount((count) => count + added);
+      setActivityStreamSource(source);
+      if (Number.isFinite(totalEstimate) && (totalEstimate ?? 0) > 0) {
+        setActivityTotalEstimate((count) => Math.max(count, Number(totalEstimate)));
+      }
+      return sliced;
+    });
+  }, []);
+
+  const stopFallbackPolling = useCallback(() => {
+    if (fallbackPollTimerRef.current) {
+      clearInterval(fallbackPollTimerRef.current);
+      fallbackPollTimerRef.current = null;
+    }
+  }, []);
+
+  const refreshActivityFallback = useCallback(async () => {
+    const paged = await fetchRecentActivityPagedV1(200);
+    if (paged.status === 'ok') {
+      appendActivityEvents(
+        Array.isArray(paged.events) ? paged.events : [],
+        'Poll',
+        Number.isFinite(paged.total_estimate) ? paged.total_estimate : undefined,
+      );
+      setActivityStreamHealth('fallback_polling');
+    }
+  }, [appendActivityEvents]);
+
+  const startFallbackPolling = useCallback(() => {
+    if (!activityFallbackEnabled) return;
+    if (fallbackPollTimerRef.current) return;
+    setActivityStreamHealth('fallback_polling');
+    void refreshActivityFallback();
+    fallbackPollTimerRef.current = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void refreshActivityFallback();
+    }, activityFallbackMs);
+  }, [activityFallbackEnabled, activityFallbackMs, refreshActivityFallback]);
+
   // ---- Initial load ----
   useEffect(() => {
     if (showWizard) return; // Don't load data while wizard is shown
@@ -674,21 +781,28 @@ export default function App() {
     loadWorkforce(true);
     loadMetrics();
 
-    // Seed recent activity (deduplicated to avoid duplicates with SSE stream)
-    fetchRecentActivity(50).then((fetched) => {
-      if (Array.isArray(fetched) && fetched.length > 0) {
-        setActivityEvents((prev) => {
-          const seen = new Set(prev.map(eventKey));
-          const newEvents = fetched.filter((e) => !seen.has(eventKey(e)));
-          const merged = [...newEvents, ...prev];
-          return merged.length > MAX_EVENTS ? merged.slice(-MAX_EVENTS) : merged;
-        });
+    // Seed activity from paged v1 endpoint first, fallback to legacy endpoint.
+    fetchRecentActivityPagedV1(200).then((paged) => {
+      if (paged.status === 'ok' && Array.isArray(paged.events)) {
+        appendActivityEvents(
+          paged.events,
+          'Poll',
+          Number.isFinite(paged.total_estimate) ? paged.total_estimate : undefined,
+        );
+        return;
       }
+      throw new Error('v1 activity endpoint unavailable');
     }).catch(() => {
-      // no recent activity endpoint
+      fetchRecentActivity(200).then((fetched) => {
+        if (Array.isArray(fetched) && fetched.length > 0) {
+          appendActivityEvents(fetched, 'Poll');
+        }
+      }).catch(() => {
+        // activity endpoint unavailable
+      });
     });
 
-  }, [loadAgents, loadMetrics, loadProjects, loadWorkforce, showWizard]);
+  }, [appendActivityEvents, loadAgents, loadMetrics, loadProjects, loadWorkforce, showWizard]);
 
   // ---- Tab-aware polling ----
   useEffect(() => {
@@ -825,85 +939,96 @@ export default function App() {
 
     let es: EventSource | null = null;
 
+    const handleParsedEvent = (event: ActivityEvent) => {
+      appendActivityEvents([event], 'SSE');
+
+      // Extract agent activity for TeamPulse + org chart from SSE events
+      const meta = (event.metadata || {}) as Record<string, unknown>;
+      const flow = String(meta.flow || '').toLowerCase();
+      const source = String(meta.source_agent || '').trim().toLowerCase();
+      const target = String(meta.target_agent || '').trim().toLowerCase();
+      const eventAgent = String(event.agent || '').trim().toLowerCase();
+      const task = String(meta.task || event.detail || '').trim();
+      const action = (event.action || '').toUpperCase();
+      const state = String(meta.state || '').toLowerCase();
+
+      // Normalize agent key to canonical slug format (spaces → dashes)
+      const toSlug = (v: string) => v.trim().toLowerCase().replace(/\s+/g, '-');
+
+      // Resolve the affected non-CEO agent from metadata (prefer target for
+      // downward flow, source for upward) with eventAgent as last resort.
+      const agentDown = (target && target !== 'ceo') ? toSlug(target) : '';
+      const agentUp = (source && source !== 'ceo') ? toSlug(source) : '';
+      const agentAny = agentDown || agentUp || (eventAgent && eventAgent !== 'ceo' ? toSlug(eventAgent) : '');
+
+      // Each event should produce exactly ONE handleAgentActivity call to
+      // avoid conflicting flow values when multiple conditions overlap.
+      let handled = false;
+
+      if (action === 'DELEGATED' && agentDown) {
+        handleAgentActivity(agentDown, task, 'down');
+        handled = true;
+      } else if (action === 'STARTED' && agentAny) {
+        handleAgentActivity(agentAny, task, 'working');
+        handled = true;
+      } else if ((action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') && agentAny) {
+        handleAgentActivity(agentAny, task || 'Completed', 'up');
+        handled = true;
+      }
+
+      // If no action-based match, fall back to metadata flow direction.
+      if (!handled) {
+        if (flow === 'down' && agentDown) {
+          handleAgentActivity(agentDown, task, 'down');
+        } else if (flow === 'up' && agentUp) {
+          handleAgentActivity(agentUp, task, 'up');
+        }
+      }
+
+      // Only hard-remove on explicit failure flow (timed-out delegations).
+      if (flow === 'failed' && agentAny) {
+        removeLiveAgent(agentAny);
+      }
+
+      // Trigger reactive project refresh on data-changing events.
+      if (['COMPLETED', 'ASSIGNED', 'UPDATED', 'CREATED', 'STARTED', 'BLOCKED'].includes(action)) {
+        debouncedRefreshProjects();
+        requestWorkforceRefresh(180);
+      }
+    };
+
     try {
       es = createActivityStream((line: string) => {
         const event = parseActivityLine(line);
         if (!event) return;
-        setActivityEvents((prev) => {
-          // Deduplicate: skip if identical event already present in last 50 entries.
-          // Wider window handles SSE reconnections that may replay recent events.
-          const key = eventKey(event);
-          const tail = prev.slice(-50);
-          if (tail.some((e) => eventKey(e) === key)) return prev;
-          const next = [...prev, event];
-          return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
-        });
-
-        // Extract agent activity for TeamPulse + org chart from SSE events
-        const meta = (event.metadata || {}) as Record<string, unknown>;
-        const flow = String(meta.flow || '').toLowerCase();
-        const source = String(meta.source_agent || '').trim().toLowerCase();
-        const target = String(meta.target_agent || '').trim().toLowerCase();
-        const eventAgent = String(event.agent || '').trim().toLowerCase();
-        const task = String(meta.task || event.detail || '').trim();
-        const action = (event.action || '').toUpperCase();
-        const state = String(meta.state || '').toLowerCase();
-
-        // Normalize agent key to canonical slug format (spaces → dashes)
-        const toSlug = (v: string) => v.trim().toLowerCase().replace(/\s+/g, '-');
-
-        // Resolve the affected non-CEO agent from metadata (prefer target for
-        // downward flow, source for upward) with eventAgent as last resort.
-        const agentDown = (target && target !== 'ceo') ? toSlug(target) : '';
-        const agentUp = (source && source !== 'ceo') ? toSlug(source) : '';
-        const agentAny = agentDown || agentUp || (eventAgent && eventAgent !== 'ceo' ? toSlug(eventAgent) : '');
-
-        // Each event should produce exactly ONE handleAgentActivity call to
-        // avoid conflicting flow values when multiple conditions overlap
-        // (e.g., a STARTED event with flow=down would fire both blocks).
-        let handled = false;
-
-        if (action === 'DELEGATED' && agentDown) {
-          handleAgentActivity(agentDown, task, 'down');
-          handled = true;
-        } else if (action === 'STARTED' && agentAny) {
-          // STARTED with flow=down means delegation start → use 'working'
-          // (the agent is actively working, not just delegated to).
-          handleAgentActivity(agentAny, task, 'working');
-          handled = true;
-        } else if ((action === 'COMPLETED' || action === 'FAILED' || state === 'completed' || state === 'failed') && agentAny) {
-          // Transition to 'up' instead of removing — keeps the org chart
-          // node lit for the full 120s expiry window.
-          handleAgentActivity(agentAny, task || 'Completed', 'up');
-          handled = true;
-        }
-
-        // If no action-based match, fall back to metadata flow direction
-        if (!handled) {
-          if (flow === 'down' && agentDown) {
-            handleAgentActivity(agentDown, task, 'down');
-          } else if (flow === 'up' && agentUp) {
-            handleAgentActivity(agentUp, task, 'up');
+        handleParsedEvent(event);
+      }, {
+        onOpen: () => {
+          activityErrorCountRef.current = 0;
+          setActivityStreamHealth('live');
+          setActivityStreamSource('SSE');
+          stopFallbackPolling();
+        },
+        onError: () => {
+          activityErrorCountRef.current += 1;
+          const failures = activityErrorCountRef.current;
+          if (failures >= STREAM_HEALTH_FALLBACK_THRESHOLD) {
+            startFallbackPolling();
+            return;
           }
-        }
-
-        // Only hard-remove on explicit failure flow (timed-out delegations)
-        if (flow === 'failed' && agentAny) {
-          removeLiveAgent(agentAny);
-        }
-
-        // Trigger reactive project refresh on data-changing events
-        if (['COMPLETED', 'ASSIGNED', 'UPDATED', 'CREATED', 'STARTED', 'BLOCKED'].includes(action)) {
-          debouncedRefreshProjects();
-          requestWorkforceRefresh(180);
-        }
+          if (failures >= STREAM_HEALTH_DEGRADED_THRESHOLD) {
+            setActivityStreamHealth('degraded');
+          }
+        },
       });
     } catch {
-      // SSE not available
+      startFallbackPolling();
     }
 
     return () => {
       es?.close();
+      stopFallbackPolling();
+      activityErrorCountRef.current = 0;
       if (pendingRefreshRef.current) {
         clearTimeout(pendingRefreshRef.current);
         pendingRefreshRef.current = null;
@@ -913,7 +1038,16 @@ export default function App() {
         pendingWorkforceRefreshRef.current = null;
       }
     };
-  }, [showWizard, handleAgentActivity, removeLiveAgent, debouncedRefreshProjects, requestWorkforceRefresh]);
+  }, [
+    appendActivityEvents,
+    debouncedRefreshProjects,
+    handleAgentActivity,
+    removeLiveAgent,
+    requestWorkforceRefresh,
+    showWizard,
+    startFallbackPolling,
+    stopFallbackPolling,
+  ]);
 
   // ---- Keyboard shortcuts ----
   const shortcuts = useMemo(() => ({
@@ -1203,6 +1337,9 @@ export default function App() {
           return (
             <ActivityPanel
               events={filteredActivityEvents}
+              streamHealth={activityStreamHealth}
+              streamSource={activityStreamSource}
+              totalEstimate={Math.max(activityTotalEstimate, liveEventsCount)}
             />
           );
 
@@ -1210,6 +1347,9 @@ export default function App() {
           return (
             <EventLogPanel
               events={filteredActivityEvents}
+              streamHealth={activityStreamHealth}
+              streamSource={activityStreamSource}
+              totalEstimate={Math.max(activityTotalEstimate, liveEventsCount)}
             />
           );
 
@@ -1229,6 +1369,8 @@ export default function App() {
               projects={filteredProjects}
               tasks={filteredAllTasks}
               events={filteredActivityEvents}
+              liveEventCount={Math.max(activityTotalEstimate, liveEventsCount, filteredActivityEvents.length)}
+              streamSource={activityStreamSource}
               activeProjectId={activeProjectId}
               microProjectMode={microProjectMode}
               loadingAgents={loadingAgents}
@@ -1358,6 +1500,7 @@ export default function App() {
               onRunControl={(action) => { void handleRunControl(action); }}
               runControlBusyAction={runControlBusyAction}
               runControlMessage={runControlMessage}
+              completionCelebrationEnabled={config?.ui?.completion_celebration_enabled !== false}
             />
           </Suspense>
         }

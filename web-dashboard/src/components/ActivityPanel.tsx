@@ -1,10 +1,15 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import type { ActivityEvent } from '../types';
+import type { ActivityEvent, ActivityStreamHealth, ActivityStreamSource } from '../types';
 import FloatingSelect from './ui/FloatingSelect';
 
 interface ActivityPanelProps {
   events: ActivityEvent[];
+  streamHealth?: ActivityStreamHealth;
+  streamSource?: ActivityStreamSource;
+  totalEstimate?: number;
 }
+
+const PRESET_STORAGE_KEY = 'compaas_activity_filter_presets';
 
 // ---- Helpers ----
 function actionBadgeStyle(action: string): { bg: string; text: string } {
@@ -278,7 +283,12 @@ function AuditEntry({ event, index }: { event: ActivityEvent; index: number }) {
 }
 
 // ---- Main ActivityPanel ----
-export default function ActivityPanel({ events }: ActivityPanelProps) {
+export default function ActivityPanel({
+  events,
+  streamHealth = 'live',
+  streamSource = 'SSE',
+  totalEstimate = 0,
+}: ActivityPanelProps) {
   const [agentFilter, setAgentFilter] = useState<string>('');
   const [actionFilter, setActionFilter] = useState<string>('ALL');
   const [activeTab, setActiveTab] = useState<'live' | 'audit'>('live');
@@ -287,6 +297,24 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
   const [auditPageSize, setAuditPageSize] = useState<number>(50);
   const [livePage, setLivePage] = useState<number>(1);
   const [auditPage, setAuditPage] = useState<number>(1);
+  const [savedPresets, setSavedPresets] = useState<Array<{ label: string; agent: string; action: string }>>(() => {
+    try {
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((item) => ({
+          label: String(item?.label || '').trim(),
+          agent: String(item?.agent || '').trim(),
+          action: String(item?.action || 'ALL').trim() || 'ALL',
+        }))
+        .filter((item) => item.label)
+        .slice(0, 8);
+    } catch {
+      return [];
+    }
+  });
+  const [presetLabel, setPresetLabel] = useState('');
   const feedRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -372,6 +400,48 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
     setAuditPage(1);
   }, [auditSearch, auditPageSize]);
 
+  const anomalyBadges = useMemo(() => {
+    const recent = events.slice(-120);
+    const errorCount = recent.filter((event) => {
+      const action = String(event.action || '').toUpperCase();
+      return action.includes('ERROR') || action.includes('FAILED') || action.includes('BLOCKED');
+    }).length;
+    const retryCount = recent.filter((event) => {
+      const detail = String(event.detail || '').toLowerCase();
+      return detail.includes('retry');
+    }).length;
+    const stallCount = recent.filter((event) => {
+      const detail = String(event.detail || '').toLowerCase();
+      const reason = String((event.metadata || {}).reason || '').toLowerCase();
+      return detail.includes('stall') || reason.includes('stall');
+    }).length;
+    return {
+      errorSpike: errorCount >= 5,
+      repeatedRetry: retryCount >= 4,
+      providerStall: stallCount >= 1,
+    };
+  }, [events]);
+
+  const streamHealthLabel = streamHealth === 'fallback_polling'
+    ? 'Fallback polling'
+    : streamHealth === 'degraded'
+      ? 'Degraded'
+      : 'Live';
+  const streamHealthColor = streamHealth === 'fallback_polling'
+    ? 'var(--tf-warning)'
+    : streamHealth === 'degraded'
+      ? 'var(--tf-warning)'
+      : 'var(--tf-success)';
+
+  const persistPresets = (next: Array<{ label: string; agent: string; action: string }>) => {
+    setSavedPresets(next);
+    try {
+      localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore storage failures
+    }
+  };
+
   return (
     <div className="flex flex-col animate-fade-in" style={{ height: '100%', minHeight: 0 }}>
       {/* Tab bar */}
@@ -388,7 +458,19 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
             {tab === 'live' ? 'Live Feed' : 'Audit Log'}
           </button>
         ))}
-        <span className="ml-auto text-xs" style={{ color: 'var(--tf-text-muted)' }}>{events.length} total events</span>
+        <span
+          className="ml-auto text-xs px-2 py-1 rounded-full"
+          style={{
+            color: streamHealthColor,
+            border: `1px solid ${streamHealthColor}`,
+            backgroundColor: 'color-mix(in srgb, var(--tf-surface) 88%, transparent)',
+          }}
+        >
+          {streamHealthLabel} · {streamSource}
+        </span>
+        <span className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+          {Math.max(events.length, totalEstimate)} total events
+        </span>
       </div>
 
       {/* Audit log view */}
@@ -464,6 +546,26 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
 
       {/* Live feed view */}
       {activeTab === 'live' && <>
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        {anomalyBadges.errorSpike && (
+          <span className="text-[11px] px-2 py-1 rounded-full" style={{ border: '1px solid var(--tf-error)', color: 'var(--tf-error)' }}>
+            Error spike
+          </span>
+        )}
+        {anomalyBadges.repeatedRetry && (
+          <span className="text-[11px] px-2 py-1 rounded-full" style={{ border: '1px solid var(--tf-warning)', color: 'var(--tf-warning)' }}>
+            Repeated retries
+          </span>
+        )}
+        {anomalyBadges.providerStall && (
+          <span className="text-[11px] px-2 py-1 rounded-full" style={{ border: '1px solid var(--tf-warning)', color: 'var(--tf-warning)' }}>
+            Provider stall
+          </span>
+        )}
+        <span className="ml-auto text-[11px]" style={{ color: 'var(--tf-text-muted)' }}>
+          Source: {streamSource}
+        </span>
+      </div>
       {/* Filter bar */}
       <div
         className="flex items-center gap-3 px-0 pb-4 flex-shrink-0 flex-wrap"
@@ -531,6 +633,65 @@ export default function ActivityPanel({ events }: ActivityPanelProps) {
             {(agentFilter || actionFilter !== 'ALL') ? ` (filtered from ${events.length})` : ''}
           </span>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <input
+          value={presetLabel}
+          onChange={(event) => setPresetLabel(event.target.value)}
+          placeholder="Save current view"
+          className="text-xs px-2 py-1.5 rounded-md"
+          style={{
+            border: '1px solid var(--tf-border)',
+            backgroundColor: 'var(--tf-surface)',
+            color: 'var(--tf-text)',
+            minWidth: '160px',
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            const label = presetLabel.trim();
+            if (!label) return;
+            const next = [
+              { label, agent: agentFilter, action: actionFilter },
+              ...savedPresets.filter((item) => item.label.toLowerCase() !== label.toLowerCase()),
+            ].slice(0, 8);
+            persistPresets(next);
+            setPresetLabel('');
+          }}
+          className="text-xs px-2 py-1 rounded-md"
+          style={{
+            border: '1px solid var(--tf-border)',
+            backgroundColor: 'var(--tf-surface-raised)',
+            color: 'var(--tf-text-secondary)',
+          }}
+        >
+          Save view
+        </button>
+        {savedPresets.length > 0 && (
+          <FloatingSelect
+            value=""
+            options={[
+              { value: '', label: 'Load saved view', description: 'Apply a saved filter preset.' },
+              ...savedPresets.map((preset) => ({
+                value: preset.label,
+                label: preset.label,
+                description: `${preset.agent || 'All agents'} · ${preset.action}`,
+              })),
+            ]}
+            onChange={(value) => {
+              const selected = savedPresets.find((preset) => preset.label === value);
+              if (!selected) return;
+              setAgentFilter(selected.agent);
+              setActionFilter(selected.action || 'ALL');
+            }}
+            ariaLabel="Load saved activity view"
+            size="sm"
+            variant="input"
+            style={{ width: '190px' }}
+          />
+        )}
       </div>
 
       <div className="flex items-center gap-2 mb-2 flex-wrap">
