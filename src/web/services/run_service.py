@@ -176,6 +176,31 @@ class RunService:
             runs = sorted(runs, key=lambda r: str(r.get("updated_at", "")), reverse=True)
             return runs[: max(1, limit)]
 
+    def list_runs_page(
+        self,
+        *,
+        project_id: str = "",
+        status: str = "",
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], int]:
+        with FileLock(self.registry_path):
+            registry = self._load_registry()
+            runs = registry["runs"]
+            if project_id:
+                runs = [r for r in runs if str(r.get("project_id", "")) == project_id]
+            normalized_status = str(status or "").strip().lower()
+            if normalized_status:
+                runs = [
+                    r for r in runs
+                    if str(r.get("status", "") or "").strip().lower() == normalized_status
+                ]
+            runs = sorted(runs, key=lambda r: str(r.get("updated_at", "")), reverse=True)
+            total = len(runs)
+            safe_offset = max(0, int(offset or 0))
+            safe_limit = max(1, int(limit or 100))
+            return runs[safe_offset:safe_offset + safe_limit], total
+
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         with FileLock(self.registry_path):
             registry = self._load_registry()

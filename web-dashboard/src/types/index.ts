@@ -136,6 +136,10 @@ export interface ChatMessage {
   project_id?: string;
   structured?: StructuredChatResponse;
   auto_launch?: AutoLaunchStatus;
+  terminal_state?: RunDoneTerminalState;
+  error_reason?: string;
+  completion_celebration?: CompletionCelebrationPayload;
+  run_replay?: string;
 }
 
 export interface StructuredDeliverable {
@@ -162,6 +166,39 @@ export interface AutoLaunchStatus {
   command: string;
   open_url?: string;
   message?: string;
+}
+
+export type RunDoneTerminalState = 'done' | 'failed' | 'cancelled';
+
+export interface CompletionCelebrationPayload {
+  eligible: boolean;
+  kind: 'subtle_burst';
+  run_id: string;
+  project_id: string;
+}
+
+export interface ApiResult<T> {
+  ok: boolean;
+  status: number;
+  detail?: string;
+  data?: T;
+  code?: string;
+}
+
+export interface PagedActivityResponse {
+  status: 'ok' | 'error';
+  events: ActivityEvent[];
+  next_cursor: string;
+  total_estimate: number;
+}
+
+export type ActivityStreamHealth = 'live' | 'degraded' | 'fallback_polling';
+export type ActivityStreamSource = 'SSE' | 'Poll';
+
+export interface PrQualityProfileResponse {
+  status: 'ok' | 'error';
+  profile: 'strict' | 'balanced' | 'fast';
+  options?: Array<'strict' | 'balanced' | 'fast'>;
 }
 
 export interface UpdateStatusResponse {
@@ -362,6 +399,10 @@ export interface AppConfig {
     run_heartbeat_seconds?: number;
     run_stall_warning_seconds?: number;
     run_stall_critical_seconds?: number;
+    completion_celebration_enabled?: boolean;
+    completion_celebration_mode?: 'subtle_burst';
+    activity_stream_fallback_enabled?: boolean;
+    activity_stream_fallback_ms?: number;
   };
   server: {
     host: string;

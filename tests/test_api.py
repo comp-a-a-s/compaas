@@ -1217,12 +1217,13 @@ class TestV1RunProgressEndpoints:
 
         monkeypatch.setattr(
             api_module.run_service,
-            "list_runs",
-            lambda project_id="", limit=5000: [
-                {"id": "run-a", "project_id": "p1", "status": "executing", "updated_at": "2026-03-01T10:00:00+00:00"},
-                {"id": "run-b", "project_id": "p1", "status": "planning", "updated_at": "2026-03-01T09:59:00+00:00"},
-                {"id": "run-c", "project_id": "p1", "status": "executing", "updated_at": "2026-03-01T09:58:00+00:00"},
-            ],
+            "list_runs_page",
+            lambda project_id="", status="", offset=0, limit=100: (
+                [
+                    {"id": "run-a", "project_id": "p1", "status": "executing", "updated_at": "2026-03-01T10:00:00+00:00"},
+                ],
+                2,
+            ),
         )
 
         response = client.get("/api/v1/runs?project_id=p1&status=executing&limit=1&cursor=0")
@@ -1232,6 +1233,32 @@ class TestV1RunProgressEndpoints:
         assert len(payload["runs"]) == 1
         assert payload["runs"][0]["id"] == "run-a"
         assert payload.get("next_cursor") == "1"
+        assert payload.get("total_estimate") == 2
+
+    def test_v1_recent_activity_cursor(self, client, tmp_path, monkeypatch):
+        import src.web.routers.v1 as v1_module
+
+        activity_path = tmp_path / "activity.log"
+        rows = [
+            {"timestamp": "2026-03-01T10:00:00Z", "agent": "ceo", "action": "STARTED", "detail": "Run started"},
+            {"timestamp": "2026-03-01T10:01:00Z", "agent": "ceo", "action": "UPDATED", "detail": "Working"},
+            {"timestamp": "2026-03-01T10:02:00Z", "agent": "ceo", "action": "COMPLETED", "detail": "Done"},
+        ]
+        activity_path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+        real_join = v1_module.os.path.join
+        monkeypatch.setattr(
+            v1_module.os.path,
+            "join",
+            lambda *parts: str(activity_path) if parts and parts[-1] == "activity.log" else real_join(*parts),
+        )
+
+        response = client.get("/api/v1/activity/recent?limit=2")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["total_estimate"] == 3
+        assert len(payload["events"]) == 2
+        assert payload["next_cursor"] == "2"
 
     def test_v1_run_live_returns_status_guardrails_workforce_and_incident(self, client, monkeypatch):
         import src.web.api as api_module
@@ -1353,3 +1380,64 @@ class TestV1RunProgressEndpoints:
         assert cancel_payload["status"] == "ok"
         assert cancel_payload["run"]["status"] == "cancelled"
         assert cancel_payload["run_control_ack"]["action"] == "cancel"
+
+
+class TestV1IntegrationAndReleaseNotes:
+    def test_v1_pr_quality_profile_roundtrip(self, client):
+        get_default = client.get("/api/v1/github/pr-quality-profile")
+        assert get_default.status_code == 200
+        assert get_default.json()["status"] == "ok"
+
+        update_response = client.patch("/api/v1/github/pr-quality-profile", json={"profile": "strict"})
+        assert update_response.status_code == 200
+        assert update_response.json()["profile"] == "strict"
+
+        get_updated = client.get("/api/v1/github/pr-quality-profile")
+        assert get_updated.status_code == 200
+        assert get_updated.json()["profile"] == "strict"
+
+    def test_v1_project_release_notes(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(
+            api_module.project_service.state_manager,
+            "get_project",
+            lambda project_id: {
+                "id": project_id,
+                "name": "CashTracker",
+                "description": "Build complete and validated.",
+                "run_instructions": "npm install\nnpm run dev",
+            },
+        )
+        monkeypatch.setattr(
+            api_module.run_service,
+            "list_runs",
+            lambda project_id="", limit=100: [{
+                "id": "run-1",
+                "project_id": project_id,
+                "status": "done",
+                "timeline": [
+                    {"label": "Planning approved"},
+                    {"label": "Implementation completed"},
+                    {"label": "Validation passed"},
+                ],
+            }],
+        )
+        monkeypatch.setattr(
+            api_module.project_service,
+            "get_metadata",
+            lambda _project_id: {
+                "artifacts": [
+                    {"file_path": "artifacts/01_plan.md"},
+                    {"file_path": "artifacts/02_activation_guide.md"},
+                ]
+            },
+        )
+
+        response = client.get("/api/v1/projects/p-cash/release-notes")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["project_id"] == "p-cash"
+        assert "Release Notes" in payload["notes"]
+        assert "npm run dev" in payload["notes"]

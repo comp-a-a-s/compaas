@@ -4,7 +4,9 @@ import remarkGfm from 'remark-gfm';
 import type {
   AutoLaunchStatus,
   ChatMessage,
+  CompletionCelebrationPayload,
   Project,
+  RunDoneTerminalState,
   RunIncidentEvent,
   RunStatusEvent,
   StructuredChatResponse,
@@ -23,6 +25,7 @@ import {
   fetchMemoryPolicy,
   updateMemoryPolicy,
   deployProjectToVercel,
+  fetchProjectReleaseNotes,
 } from '../api/client';
 import FloatingSelect from './ui/FloatingSelect';
 import { useToast } from './Toast';
@@ -44,6 +47,12 @@ function formatElapsedCompact(seconds: number): string {
   const rem = safe % 60;
   if (minutes <= 0) return `${rem}s`;
   return `${minutes}m ${String(rem).padStart(2, '0')}s`;
+}
+
+function terminalStateLabel(state?: RunDoneTerminalState): string {
+  if (state === 'failed') return 'Run failed';
+  if (state === 'cancelled') return 'Run cancelled';
+  return 'Run completed';
 }
 
 function msgKey(msg: ChatMessage): string {
@@ -537,7 +546,7 @@ function StructuredCompletionCard({
   const openLinks = structured.open_links || [];
   const completionKind = structured.completion_kind || 'general';
   return (
-    <div className="chat-summary-card">
+    <div className={`chat-summary-card${completionKind === 'build_complete' ? ' chat-summary-card-glow' : ''}`}>
       <div className="chat-summary-card-header">
         <span className="chat-summary-card-title">
           {completionKind === 'build_complete' ? 'Completion Summary' : 'Response Summary'}
@@ -638,6 +647,37 @@ function StructuredCompletionCard({
   );
 }
 
+function CompletionCelebrationBurst({ burstId }: { burstId: string }) {
+  const pieces = useMemo(() => {
+    const palette = ['var(--tf-accent)', 'var(--tf-accent-blue)', 'var(--tf-success)', 'var(--tf-warning)'];
+    return Array.from({ length: 22 }, (_, idx) => ({
+      id: `${burstId}-${idx}`,
+      left: `${4 + Math.random() * 92}%`,
+      delay: `${Math.random() * 280}ms`,
+      duration: `${1200 + Math.random() * 700}ms`,
+      color: palette[idx % palette.length],
+      rotate: `${Math.round((Math.random() * 2 - 1) * 24)}deg`,
+    }));
+  }, [burstId]);
+  return (
+    <div className="chat-celebration-layer" aria-hidden="true">
+      {pieces.map((piece) => (
+        <span
+          key={piece.id}
+          className="chat-celebration-piece"
+          style={{
+            left: piece.left,
+            animationDelay: piece.delay,
+            animationDuration: piece.duration,
+            backgroundColor: piece.color,
+            transform: `rotate(${piece.rotate})`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ---- Search highlight helper ----
 
 function highlightSearch(text: string, query?: string): React.ReactNode {
@@ -667,6 +707,9 @@ interface MessageBubbleProps {
   searchQuery?: string;
   onCopyPath: (path: string) => void;
   onCopyCommand: (command: string) => void;
+  onDeployPreview?: (projectId: string) => void;
+  onPromoteProduction?: (projectId: string) => void;
+  onGenerateReleaseNotes?: (projectId: string) => void;
 }
 
 function MessageBubble({
@@ -679,6 +722,9 @@ function MessageBubble({
   searchQuery,
   onCopyPath,
   onCopyCommand,
+  onDeployPreview,
+  onPromoteProduction,
+  onGenerateReleaseNotes,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [hovered, setHovered] = useState(false);
@@ -697,6 +743,13 @@ function MessageBubble({
     && structuredHasDeliverySignals
     && hasStructuredContent(message.structured);
   const autoLaunch = !isUser && !isStreaming ? message.auto_launch : undefined;
+  const terminalState = !isUser && !isStreaming ? message.terminal_state : undefined;
+  const terminalReason = !isUser && !isStreaming ? String(message.error_reason || '').trim() : '';
+  const runReplay = !isUser && !isStreaming ? String(message.run_replay || '').trim() : '';
+  const normalizedAutoLaunchUrl = autoLaunch?.open_url
+    ? trimLinkTarget(String(autoLaunch.open_url).replace(/^open app:\s*/i, '').replace(/\*+$/g, ''))
+    : '';
+  const canOpenAutoLaunchUrl = normalizedAutoLaunchUrl ? isHttpUrl(normalizedAutoLaunchUrl) : false;
 
   return (
     <div
@@ -752,6 +805,19 @@ function MessageBubble({
                       onCopyCommand={onCopyCommand}
                     />
                   )}
+                  {showStructuredCard && message.project_id && (
+                    <div className="chat-completion-actions">
+                      <button type="button" className="chat-summary-copy-btn" onClick={() => onDeployPreview?.(message.project_id || '')}>
+                        Deploy preview
+                      </button>
+                      <button type="button" className="chat-summary-copy-btn" onClick={() => onPromoteProduction?.(message.project_id || '')}>
+                        Promote prod
+                      </button>
+                      <button type="button" className="chat-summary-copy-btn" onClick={() => onGenerateReleaseNotes?.(message.project_id || '')}>
+                        Release notes
+                      </button>
+                    </div>
+                  )}
                   {searchQuery
                     ? <p style={{ color: 'var(--tf-text)', fontSize: '13px', lineHeight: '1.6', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{highlightSearch(message.content, searchQuery)}</p>
                     : (!showStructuredCard || showFullResponse) && <MarkdownBody content={message.content} onCopyPath={onCopyPath} />
@@ -775,14 +841,28 @@ function MessageBubble({
                           </button>
                         </div>
                       )}
-                      {autoLaunch.open_url && (
-                        <a href={autoLaunch.open_url} target="_blank" rel="noreferrer" className="chat-http-link">
-                          Open app: {autoLaunch.open_url}
+                      {canOpenAutoLaunchUrl && (
+                        <a href={normalizedAutoLaunchUrl} target="_blank" rel="noreferrer" className="chat-http-link">
+                          Open app: {normalizedAutoLaunchUrl}
                         </a>
                       )}
                       {autoLaunch.message && (
                         <p className="chat-auto-launch-message">{autoLaunch.message}</p>
                       )}
+                    </div>
+                  )}
+                  {terminalState && terminalState !== 'done' && (
+                    <div className="chat-terminal-card">
+                      <p className="chat-terminal-title">{terminalStateLabel(terminalState)}</p>
+                      <p className="chat-terminal-reason">
+                        {terminalReason || 'The run ended before a complete delivery could be produced.'}
+                      </p>
+                    </div>
+                  )}
+                  {runReplay && (
+                    <div className="chat-run-replay-card">
+                      <p className="chat-summary-label">Run Replay</p>
+                      <p className="chat-summary-text">{runReplay}</p>
                     </div>
                   )}
                   {isStreaming && <span className="blink-cursor" />}
@@ -1149,6 +1229,10 @@ interface WsMessage {
   auto_launch?: AutoLaunchStatus;
   run_status?: RunStatusEvent;
   run_incident?: RunIncidentEvent;
+  terminal_state?: RunDoneTerminalState;
+  error_reason?: string;
+  completion_celebration?: CompletionCelebrationPayload;
+  run_replay?: string;
 }
 function isWsMessage(data: unknown): data is WsMessage {
   return typeof data === 'object' && data !== null && typeof (data as Record<string, unknown>).type === 'string';
@@ -1247,6 +1331,7 @@ interface ChatPanelProps {
   onRunControl?: (action: 'status' | 'retry_step' | 'cancel' | 'continue') => void;
   runControlBusyAction?: 'status' | 'retry_step' | 'cancel' | 'continue' | '';
   runControlMessage?: string;
+  completionCelebrationEnabled?: boolean;
 }
 
 export default function ChatPanel({
@@ -1278,6 +1363,7 @@ export default function ChatPanel({
   onRunControl,
   runControlBusyAction = '',
   runControlMessage = '',
+  completionCelebrationEnabled = true,
 }: ChatPanelProps) {
   const { toast } = useToast();
   // Core state
@@ -1300,6 +1386,8 @@ export default function ChatPanel({
   const [dismissedProjectIds, setDismissedProjectIds] = useState<Set<string>>(new Set());
   const [deployOffer, setDeployOffer] = useState<{ projectId: string; projectName: string; target: 'preview' | 'production' } | null>(null);
   const [deployingVercel, setDeployingVercel] = useState(false);
+  const [celebrationBurstId, setCelebrationBurstId] = useState('');
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
 
   // Feature: Conversation search
   const [searchQuery, setSearchQuery] = useState('');
@@ -1356,6 +1444,8 @@ export default function ChatPanel({
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const telegramMirrorEnabledRef = useRef(telegramMirrorEnabled);
   const waitStartedAtRef = useRef<number | null>(null);
+  const celebrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seenCelebrationRunsRef = useRef<Set<string>>(new Set());
 
   const focusInput = useCallback(() => {
     requestAnimationFrame(() => {
@@ -1388,6 +1478,13 @@ export default function ChatPanel({
   useEffect(() => { setLiveRunIncident(runIncident); }, [runIncident]);
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setPrefersReducedMotion(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
 
   useEffect(() => {
     if (!isWaiting) {
@@ -1408,6 +1505,22 @@ export default function ChatPanel({
   const handleInlineRunControl = useCallback((action: 'status' | 'retry_step' | 'cancel' | 'continue') => {
     onRunControl?.(action);
   }, [onRunControl]);
+
+  const triggerCompletionCelebration = useCallback((payload?: CompletionCelebrationPayload) => {
+    if (!payload || !payload.eligible) return;
+    if (!completionCelebrationEnabled) return;
+    if (prefersReducedMotion) return;
+    const runId = String(payload.run_id || '').trim();
+    if (!runId || seenCelebrationRunsRef.current.has(runId)) return;
+    seenCelebrationRunsRef.current.add(runId);
+    const burstKey = `${runId}-${Date.now()}`;
+    setCelebrationBurstId(burstKey);
+    if (celebrationTimerRef.current) clearTimeout(celebrationTimerRef.current);
+    celebrationTimerRef.current = setTimeout(() => {
+      setCelebrationBurstId('');
+      celebrationTimerRef.current = null;
+    }, 2100);
+  }, [completionCelebrationEnabled, prefersReducedMotion]);
 
   // Telegram incoming message polling
   useEffect(() => {
@@ -1600,6 +1713,10 @@ export default function ChatPanel({
     projectId: string,
     structured?: StructuredChatResponse,
     autoLaunch?: AutoLaunchStatus,
+    terminalState?: RunDoneTerminalState,
+    errorReason?: string,
+    completionCelebration?: CompletionCelebrationPayload,
+    runReplay?: string,
   ) => {
     setMessages((prev) => [...prev, {
       role: 'ceo',
@@ -1608,9 +1725,68 @@ export default function ChatPanel({
       project_id: projectId,
       structured,
       auto_launch: autoLaunch,
+      terminal_state: terminalState,
+      error_reason: errorReason,
+      completion_celebration: completionCelebration,
+      run_replay: runReplay,
     }]);
     void safeMirrorTelegram(ceoNameRef.current, content, projectId);
   }, [safeMirrorTelegram]);
+
+  const handleDeployFromCompletion = useCallback((projectId: string, target: 'preview' | 'production') => {
+    const pid = String(projectId || '').trim();
+    if (!pid || deployingVercel) return;
+    setDeployingVercel(true);
+    void deployProjectToVercel(pid, target).then((result) => {
+      setDeployingVercel(false);
+      if (result.ok && result.deployment_url) {
+        pushCeoMessage(
+          `${target === 'production' ? 'Production' : 'Preview'} deployment ready: ${result.deployment_url}`,
+          pid,
+        );
+        return;
+      }
+      const message = result.error?.message || 'Vercel deployment failed.';
+      setMessages((prev) => [...prev, {
+        role: 'ceo',
+        content: `[Error] ${message}`,
+        timestamp: new Date().toISOString(),
+        project_id: pid,
+      }]);
+    }).catch(() => {
+      setDeployingVercel(false);
+      setMessages((prev) => [...prev, {
+        role: 'ceo',
+        content: '[Error] Deployment failed due to a network error.',
+        timestamp: new Date().toISOString(),
+        project_id: pid,
+      }]);
+    });
+  }, [deployingVercel, pushCeoMessage]);
+
+  const handleGenerateReleaseNotes = useCallback((projectId: string) => {
+    const pid = String(projectId || '').trim();
+    if (!pid) return;
+    void fetchProjectReleaseNotes(pid).then((payload) => {
+      if (!payload || payload.status !== 'ok' || !payload.notes) {
+        setMessages((prev) => [...prev, {
+          role: 'ceo',
+          content: '[Warning] Release notes are not available yet for this project.',
+          timestamp: new Date().toISOString(),
+          project_id: pid,
+        }]);
+        return;
+      }
+      pushCeoMessage(payload.notes, pid);
+    }).catch(() => {
+      setMessages((prev) => [...prev, {
+        role: 'ceo',
+        content: '[Error] Unable to generate release notes right now.',
+        timestamp: new Date().toISOString(),
+        project_id: pid,
+      }]);
+    });
+  }, [pushCeoMessage]);
 
   const completeAssistantTurn = useCallback(() => {
     turnErroredRef.current = false;
@@ -1628,6 +1804,10 @@ export default function ChatPanel({
     projectId: string,
     structured?: StructuredChatResponse,
     autoLaunch?: AutoLaunchStatus,
+    terminalState?: RunDoneTerminalState,
+    errorReason?: string,
+    completionCelebration?: CompletionCelebrationPayload,
+    runReplay?: string,
   ) => {
     stopTypingAnimation();
     const tokens = content.split(/(\s+)/).filter((token) => token.length > 0);
@@ -1646,7 +1826,16 @@ export default function ChatPanel({
         return;
       }
       typingTimerRef.current = null;
-      pushCeoMessage(content, projectId, structured, autoLaunch);
+      pushCeoMessage(
+        content,
+        projectId,
+        structured,
+        autoLaunch,
+        terminalState,
+        errorReason,
+        completionCelebration,
+        runReplay,
+      );
       completeAssistantTurn();
     };
 
@@ -1874,6 +2063,13 @@ export default function ChatPanel({
               const finalContent = wsContentText(data.content, '') || streamedContent;
               const structured = normalizeStructuredResponse(data.structured);
               const autoLaunch = data.auto_launch;
+              const terminalState: RunDoneTerminalState = data.terminal_state === 'failed'
+                || data.terminal_state === 'cancelled'
+                ? data.terminal_state
+                : 'done';
+              const errorReason = String(data.error_reason || '').trim();
+              const completionCelebration = data.completion_celebration;
+              const runReplay = String(data.run_replay || '').trim();
               streamingAccumRef.current = '';
               if (data.run_id) setLatestRunId(data.run_id);
               onRunIncidentRef.current?.(null);
@@ -1893,10 +2089,33 @@ export default function ChatPanel({
               } else {
                 setDeployOffer(null);
               }
+              triggerCompletionCelebration(completionCelebration);
               if (!turnErroredRef.current && finalContent.trim()) {
-                typewriteAndCommit(finalContent, projectId, structured, autoLaunch);
+                typewriteAndCommit(
+                  finalContent,
+                  projectId,
+                  structured,
+                  autoLaunch,
+                  terminalState,
+                  errorReason,
+                  completionCelebration,
+                  runReplay,
+                );
                 onWorkforceRefreshRequestRef.current?.();
                 break;
+              }
+              if (!turnErroredRef.current && terminalState !== 'done') {
+                const fallbackContent = `[${terminalState === 'cancelled' ? 'Cancelled' : 'Error'}] ${errorReason || 'Run ended before completion.'}`;
+                pushCeoMessage(
+                  fallbackContent,
+                  projectId,
+                  structured,
+                  autoLaunch,
+                  terminalState,
+                  errorReason,
+                  completionCelebration,
+                  runReplay,
+                );
               }
               completeAssistantTurn();
               onWorkforceRefreshRequestRef.current?.();
@@ -1999,7 +2218,7 @@ export default function ChatPanel({
         }
       };
     } catch { setConnectionStatus('error'); }
-  }, [completeAssistantTurn, focusInput, stopTypingAnimation, typewriteAndCommit]);
+  }, [completeAssistantTurn, focusInput, pushCeoMessage, stopTypingAnimation, triggerCompletionCelebration, typewriteAndCommit]);
 
   useEffect(() => {
     shouldReconnectRef.current = true;
@@ -2008,6 +2227,7 @@ export default function ChatPanel({
       shouldReconnectRef.current = false;
       stopTypingAnimation();
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (celebrationTimerRef.current) clearTimeout(celebrationTimerRef.current);
       pendingOutboundRef.current = null;
       if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
         wsRef.current.close();
@@ -2354,6 +2574,7 @@ export default function ChatPanel({
         <PinnedPanel messages={pinnedMessages} ceoName={ceoName} userName={userName}
           onClose={() => setShowPinned(false)} onUnpin={handlePin} />
       )}
+      {celebrationBurstId && <CompletionCelebrationBurst burstId={celebrationBurstId} />}
 
       {/* Non-floating header */}
       {!floating && (
@@ -2724,6 +2945,9 @@ export default function ChatPanel({
                   searchQuery={searchQuery}
                   onCopyPath={handleCopyPath}
                   onCopyCommand={handleCopyCommand}
+                  onDeployPreview={(projectId) => handleDeployFromCompletion(projectId, 'preview')}
+                  onPromoteProduction={(projectId) => handleDeployFromCompletion(projectId, 'production')}
+                  onGenerateReleaseNotes={handleGenerateReleaseNotes}
                 />
               );
             })}
@@ -2849,6 +3073,9 @@ export default function ChatPanel({
                 userName={userName}
                 onCopyPath={handleCopyPath}
                 onCopyCommand={handleCopyCommand}
+                onDeployPreview={(projectId) => handleDeployFromCompletion(projectId, 'preview')}
+                onPromoteProduction={(projectId) => handleDeployFromCompletion(projectId, 'production')}
+                onGenerateReleaseNotes={handleGenerateReleaseNotes}
               />
             )}
             {isWaiting && !streamingContent && actionLog.length === 0 && showThinking && (

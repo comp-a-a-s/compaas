@@ -1,9 +1,12 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import type { ActivityEvent } from '../types';
+import type { ActivityEvent, ActivityStreamHealth, ActivityStreamSource } from '../types';
 import FloatingSelect from './ui/FloatingSelect';
 
 interface EventLogPanelProps {
   events: ActivityEvent[];
+  streamHealth?: ActivityStreamHealth;
+  streamSource?: ActivityStreamSource;
+  totalEstimate?: number;
 }
 
 // ---- Helpers ----
@@ -317,12 +320,24 @@ function EmptyState() {
 }
 
 // ---- Main EventLogPanel ----
-export default function EventLogPanel({ events }: EventLogPanelProps) {
+export default function EventLogPanel({
+  events,
+  streamHealth = 'live',
+  streamSource = 'SSE',
+  totalEstimate = 0,
+}: EventLogPanelProps) {
   const [search, setSearch] = useState('');
   const [agentFilter, setAgentFilter] = useState('');
   const [actionFilter, setActionFilter] = useState('ALL');
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(1);
+
+  const streamHealthLabel = streamHealth === 'fallback_polling'
+    ? 'Fallback polling'
+    : streamHealth === 'degraded'
+      ? 'Degraded'
+      : 'Live';
+  const streamHealthColor = streamHealth === 'live' ? 'var(--tf-success)' : 'var(--tf-warning)';
 
   // Build unique agent list — include delegation metadata agents
   const agentNames = useMemo(() => {
@@ -444,52 +459,66 @@ export default function EventLogPanel({ events }: EventLogPanelProps) {
             }}
           >
             {filteredEvents.length}
-            {filteredEvents.length !== events.length && (
-              <> of {events.length}</>
+            {filteredEvents.length !== Math.max(events.length, totalEstimate) && (
+              <> of {Math.max(events.length, totalEstimate)}</>
             )}
             {' '}
             {filteredEvents.length === 1 ? 'event' : 'events'}
           </span>
         </div>
 
-        <button
-          type="button"
-          onClick={handleExport}
-          disabled={filteredEvents.length === 0}
-          style={{
-            fontSize: '11px',
-            padding: '4px 12px',
-            borderRadius: '99px',
-            border: '1px solid var(--tf-border)',
-            backgroundColor: 'var(--tf-surface)',
-            color: filteredEvents.length === 0 ? 'var(--tf-text-muted)' : 'var(--tf-text)',
-            cursor: filteredEvents.length === 0 ? 'not-allowed' : 'pointer',
-            fontWeight: 500,
-            transition: 'background-color 150ms, color 150ms',
-            opacity: filteredEvents.length === 0 ? 0.5 : 1,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '5px',
-          }}
-          aria-label={`Export ${filteredEvents.length} filtered events as CSV`}
-        >
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span
+            className="text-xs"
+            style={{
+              border: `1px solid ${streamHealthColor}`,
+              color: streamHealthColor,
+              backgroundColor: 'var(--tf-surface)',
+              borderRadius: '99px',
+              padding: '3px 9px',
+            }}
           >
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="7 10 12 15 17 10" />
-            <line x1="12" y1="15" x2="12" y2="3" />
-          </svg>
-          Export CSV
-        </button>
+            {streamHealthLabel} · {streamSource}
+          </span>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={filteredEvents.length === 0}
+            style={{
+              fontSize: '11px',
+              padding: '4px 12px',
+              borderRadius: '99px',
+              border: '1px solid var(--tf-border)',
+              backgroundColor: 'var(--tf-surface)',
+              color: filteredEvents.length === 0 ? 'var(--tf-text-muted)' : 'var(--tf-text)',
+              cursor: filteredEvents.length === 0 ? 'not-allowed' : 'pointer',
+              fontWeight: 500,
+              transition: 'background-color 150ms, color 150ms',
+              opacity: filteredEvents.length === 0 ? 0.5 : 1,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+            }}
+            aria-label={`Export ${filteredEvents.length} filtered events as CSV`}
+          >
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Export CSV
+          </button>
+        </div>
       </div>
 
       {/* ---- Filter bar ---- */}

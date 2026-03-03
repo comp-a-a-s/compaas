@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import ipaddress
 import time
+import uuid
 import subprocess
 import urllib.error
 import urllib.parse
@@ -1176,6 +1177,10 @@ DEFAULT_CONFIG: dict = {
         "run_heartbeat_seconds": 5,
         "run_stall_warning_seconds": 90,
         "run_stall_critical_seconds": 180,
+        "completion_celebration_enabled": True,
+        "completion_celebration_mode": "subtle_burst",
+        "activity_stream_fallback_enabled": True,
+        "activity_stream_fallback_ms": 15000,
     },
     "server": {
         "host": "127.0.0.1",
@@ -3285,6 +3290,73 @@ def _attempt_local_project_autostart(
     except Exception as exc:
         result["message"] = f"Auto-start failed: {str(exc)[:180]}"
     return result
+
+
+def _build_run_replay_summary(run_id: str, project_id: str) -> str:
+    """Build a concise replay summary from run timeline + workforce context."""
+    run = run_service.get_run(run_id) if run_id else None
+    if not isinstance(run, dict):
+        return ""
+    timeline = run.get("timeline", [])
+    labels: list[str] = []
+    if isinstance(timeline, list):
+        for row in timeline[-5:]:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("label", "") or row.get("state", "") or "").strip()
+            if label:
+                labels.append(label)
+    workforce = workforce_presence_service.snapshot(
+        project_id=project_id or None,
+        include_assigned=True,
+        include_reporting=True,
+    )
+    workers = workforce.get("workers", []) if isinstance(workforce, dict) else []
+    active: list[str] = []
+    if isinstance(workers, list):
+        for row in workers[:3]:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("agent_name", "") or row.get("agent_id", "") or "").strip()
+            state = str(row.get("state", "") or "").strip().lower()
+            if name:
+                active.append(f"{name} ({state or 'working'})")
+    sections: list[str] = []
+    if labels:
+        sections.append(f"Recent milestones: {'; '.join(labels)}.")
+    if active:
+        sections.append(f"Latest active agents: {', '.join(active)}.")
+    return " ".join(sections).strip()
+
+
+def _completion_celebration_payload(
+    *,
+    run_id: str,
+    project_id: str,
+    structured: dict[str, Any] | None,
+    config: dict[str, Any],
+    terminal_state: str,
+) -> dict[str, Any] | None:
+    ui_cfg = config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}
+    enabled = bool(ui_cfg.get("completion_celebration_enabled", True))
+    mode = str(ui_cfg.get("completion_celebration_mode", "subtle_burst") or "subtle_burst").strip().lower()
+    completion_kind = str((structured or {}).get("completion_kind", "") or "").strip().lower()
+    eligible = (
+        enabled
+        and terminal_state == "done"
+        and completion_kind == "build_complete"
+        and bool(run_id and project_id)
+    )
+    if not eligible:
+        return None
+    if mode != "subtle_burst":
+        mode = "subtle_burst"
+    return {
+        "eligible": True,
+        "kind": mode,
+        "run_id": run_id,
+        "project_id": project_id,
+    }
 
 
 def _lightweight_ceo_response(
@@ -6344,6 +6416,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
     last_phase_state = ""
     last_incident_signature = ""
     last_progress_checkpoint_signature = ""
+    stall_recovery_attempts: dict[str, int] = {}
 
     config = _load_config()
     ui_cfg = config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}
@@ -6407,7 +6480,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
         *,
         force_phase: bool = False,
     ) -> None:
-        nonlocal heartbeat_seq, last_phase_state, last_incident_signature, last_progress_checkpoint_signature
+        nonlocal heartbeat_seq, last_phase_state, last_incident_signature, last_progress_checkpoint_signature, stall_recovery_attempts
         run = run_service.get_run(run_id)
         if not isinstance(run, dict):
             return
@@ -6467,8 +6540,51 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     last_incident_signature = signature
                     await websocket.send_json({"type": "run_incident", "content": incident})
                     await websocket.send_json({"type": "warning", "content": _run_incident_notice(run_status, incident)})
+                    severity = str(incident.get("severity", "") or "").strip().lower()
+                    reason = str(incident.get("reason", "") or "").strip().lower()
+                    if severity == "critical" and reason in {"silent_run", "provider_stall"}:
+                        attempts = int(stall_recovery_attempts.get(run_id, 0) or 0)
+                        max_attempts = 2
+                        if attempts < max_attempts:
+                            attempt_no = attempts + 1
+                            stall_recovery_attempts[run_id] = attempt_no
+                            _transition_run_state(
+                                run_id,
+                                state="executing",
+                                label=f"Auto-recovery heartbeat {attempt_no}/{max_attempts}",
+                                metadata={
+                                    "auto_recovery": True,
+                                    "reason": reason,
+                                    "attempt": attempt_no,
+                                    "max_attempts": max_attempts,
+                                },
+                            )
+                            _emit_chat_activity(
+                                "ceo",
+                                "WARNING",
+                                "Automatic stall recovery checkpoint executed.",
+                                project_id=project_id,
+                                metadata={
+                                    "run_id": run_id,
+                                    "reason": reason,
+                                    "attempt": attempt_no,
+                                    "max_attempts": max_attempts,
+                                },
+                            )
+                            await websocket.send_json(
+                                {
+                                    "type": "run_control_ack",
+                                    "content": {
+                                        "run_id": run_id,
+                                        "action": "status",
+                                        "acknowledged": True,
+                                        "message": f"Automatic recovery check {attempt_no}/{max_attempts} executed.",
+                                    },
+                                }
+                            )
             elif state not in ACTIVE_RUN_STATES:
                 last_incident_signature = ""
+                stall_recovery_attempts.pop(run_id, None)
 
     async def _stop_heartbeat() -> None:
         nonlocal heartbeat_task
@@ -6505,7 +6621,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
         heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
     async def _clear_inflight_tracking() -> None:
-        nonlocal inflight_run_id, inflight_project_id, heartbeat_seq, last_phase_state, last_incident_signature, last_progress_checkpoint_signature
+        nonlocal inflight_run_id, inflight_project_id, heartbeat_seq, last_phase_state, last_incident_signature, last_progress_checkpoint_signature, stall_recovery_attempts
+        if inflight_run_id:
+            stall_recovery_attempts.pop(inflight_run_id, None)
         await _stop_heartbeat()
         inflight_run_id = ""
         inflight_project_id = ""
@@ -6576,6 +6694,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if not user_message:
                 await websocket.send_json({"type": "error", "content": "Empty message."})
                 continue
+            turn_correlation_id = str(uuid.uuid4())[:12]
             lower_message = user_message.lower()
             injection_markers = (
                 "ignore previous instructions",
@@ -6694,8 +6813,21 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     },
                 )
             except RuntimeError as exc:
-                await websocket.send_json({"type": "error", "content": str(exc)})
-                await websocket.send_json({"type": "done", "content": "", "project_id": active_project_id})
+                await websocket.send_json({
+                    "type": "error",
+                    "content": str(exc),
+                    "correlation_id": turn_correlation_id,
+                })
+                await websocket.send_json(
+                    {
+                        "type": "done",
+                        "content": "",
+                        "project_id": active_project_id,
+                        "terminal_state": "failed",
+                        "error_reason": str(exc),
+                        "correlation_id": turn_correlation_id,
+                    }
+                )
                 continue
             run_id = str(run_record.get("id", "") or "")
             inflight_run_id = run_id
@@ -6710,6 +6842,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 "type": "run",
                 "content": {
                     "id": run_id,
+                    "correlation_id": turn_correlation_id,
                     "status": run_record.get("status", "queued"),
                     "mode": run_mode,
                     "intent": intent,
@@ -6830,8 +6963,10 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     "content": "",
                     "project_id": active_project_id,
                     "run_id": run_id,
+                    "terminal_state": "done",
                     "intent_class": intent_class,
                     "planning_packet_status": plan_packet_status,
+                    "correlation_id": turn_correlation_id,
                 })
                 await _emit_run_progress(run_id, active_project_id, force_phase=True)
                 await _clear_inflight_tracking()
@@ -6846,7 +6981,17 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         metadata={"reason": complexity_reason},
                     )
                     await websocket.send_json({"type": "micro_project_warning", "content": complexity_reason})
-                    await websocket.send_json({"type": "done", "content": "", "project_id": active_project_id, "run_id": run_id})
+                    await websocket.send_json(
+                        {
+                            "type": "done",
+                            "content": "",
+                            "project_id": active_project_id,
+                            "run_id": run_id,
+                            "terminal_state": "cancelled",
+                            "error_reason": complexity_reason,
+                            "correlation_id": turn_correlation_id,
+                        }
+                    )
                     await _emit_run_progress(run_id, active_project_id, force_phase=True)
                     await _clear_inflight_tracking()
                     continue
@@ -6921,12 +7066,16 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     await websocket.send_json({
                         "type": "error",
                         "content": "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
+                        "correlation_id": turn_correlation_id,
                     })
                     await websocket.send_json({
                         "type": "done",
                         "content": "",
                         "project_id": active_project_id,
                         "run_id": run_id,
+                        "terminal_state": "failed",
+                        "error_reason": "Claude CLI not found.",
+                        "correlation_id": turn_correlation_id,
                     })
                     await _emit_run_progress(run_id, active_project_id, force_phase=True)
                     await _clear_inflight_tracking()
@@ -6959,6 +7108,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 user_name=user_name,
             ) or None
 
+            terminal_state = "done"
+            error_reason = ""
+
             if full_response:
                 async with _chat_lock:
                     _append_chat_message("ceo", full_response, project_id=active_project_id)
@@ -6974,9 +7126,33 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 if run_state and str(run_state.get("status", "")) in {"queued", "planning", "executing", "verifying"}:
                     _transition_run_state(run_id, state="done", label="Chat response completed")
             else:
+                terminal_state = "failed"
+                error_reason = "Provider returned no response."
                 run_state = run_service.get_run(run_id)
                 if run_state and str(run_state.get("status", "")) in {"queued", "planning", "executing", "verifying"}:
                     _transition_run_state(run_id, state="failed", label="Provider returned no response")
+                await websocket.send_json(
+                    {
+                        "type": "warning",
+                        "content": "Run completed without assistant output. Marking turn as failed with actionable context.",
+                        "correlation_id": turn_correlation_id,
+                    }
+                )
+
+            final_run_state = run_service.get_run(run_id)
+            final_status = str((final_run_state or {}).get("status", "") or "").strip().lower()
+            if final_status in {"done", "failed", "cancelled"}:
+                terminal_state = final_status
+            if terminal_state == "cancelled" and not error_reason:
+                error_reason = str((final_run_state or {}).get("cancel_reason", "") or "Run cancelled.").strip()
+            if terminal_state == "failed" and not error_reason:
+                timeline = (final_run_state or {}).get("timeline", [])
+                if isinstance(timeline, list) and timeline:
+                    latest = timeline[-1] if isinstance(timeline[-1], dict) else {}
+                    if isinstance(latest, dict):
+                        error_reason = str(latest.get("label", "") or latest.get("state", "") or "").strip()
+                if not error_reason:
+                    error_reason = "Run failed before producing assistant output."
             structured_enabled = bool(feature_flags.get("structured_ceo_response", True) or data.get("structured_response"))
             if active_project_id:
                 try:
@@ -7013,9 +7189,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 "content": full_response or "",
                 "project_id": active_project_id,
                 "run_id": run_id,
+                "terminal_state": terminal_state,
+                "correlation_id": turn_correlation_id,
                 "intent_class": intent_class,
                 "planning_packet_status": plan_packet_status,
             }
+            if terminal_state != "done" and error_reason:
+                done_payload["error_reason"] = error_reason
             structured_payload: dict[str, Any] | None = None
             if structured_enabled:
                 base_structured = _structured_response_payload(full_response or "")
@@ -7032,6 +7212,22 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         active_project = synced_project
                         structured_payload = _merge_structured_completion_with_project(structured_payload, active_project)
                 done_payload["structured"] = structured_payload
+                celebration = _completion_celebration_payload(
+                    run_id=run_id,
+                    project_id=active_project_id,
+                    structured=structured_payload,
+                    config=config,
+                    terminal_state=terminal_state,
+                )
+                if celebration:
+                    done_payload["completion_celebration"] = celebration
+                    _emit_chat_activity(
+                        "ceo",
+                        "COMPLETED",
+                        "Completion celebration triggered.",
+                        project_id=active_project_id,
+                        metadata={"run_id": run_id, "celebration_kind": celebration.get("kind", "")},
+                    )
                 if active_project_id and structured_payload:
                     auto_launch = _attempt_local_project_autostart(
                         project=active_project,
@@ -7042,6 +7238,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         done_payload["auto_launch"] = auto_launch
             if deploy_offer:
                 done_payload["deploy_offer"] = deploy_offer
+            replay_summary = _build_run_replay_summary(run_id, active_project_id)
+            if replay_summary:
+                done_payload["run_replay"] = replay_summary
             await websocket.send_json(done_payload)
             await _emit_run_progress(run_id, active_project_id, force_phase=True)
             await _clear_inflight_tracking()
