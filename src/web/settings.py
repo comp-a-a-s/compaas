@@ -43,6 +43,9 @@ class FeatureFlags(BaseModel):
     preview_review_layer: bool = True
     context_packs: bool = True
     stripe_billing_pack: bool = True
+    guided_errors_v1: bool = True
+    error_contract_v1: bool = True
+    readiness_center_v1: bool = True
 
 
 class RuntimeSettings(BaseSettings):

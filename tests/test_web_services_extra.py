@@ -11,7 +11,13 @@ import yaml
 
 from src.state.project_state import ProjectStateManager
 from src.state.task_board import TaskBoard
-from src.web.problem import PROBLEM_JSON, problem_http_exception, problem_response
+from src.web.problem import (
+    PROBLEM_JSON,
+    problem_action,
+    problem_http_exception,
+    problem_response,
+    problem_with_actions,
+)
 from src.web.services.integration_service import IntegrationService
 from src.web.services.project_service import ProjectService
 from src.web.services.run_service import RunService
@@ -54,6 +60,24 @@ def test_problem_helpers_build_expected_payloads():
     assert exc.status_code == 409
     assert exc.detail["title"] == "Conflict"
     assert exc.detail["detail"] == "Duplicate run"
+
+    action = problem_action(action_id="open-settings", label="Open Settings", kind="open_settings")
+    invalid_action = problem_action(action_id="bad", label="Unknown", kind="unsupported")
+    exc_with_actions = problem_with_actions(
+        status=503,
+        title="Provider unavailable",
+        detail="Claude CLI is not installed.",
+        code="provider_missing",
+        correlation_id="corr-123",
+        actions=[action, invalid_action],
+    )
+    assert exc_with_actions.status_code == 503
+    assert exc_with_actions.detail["code"] == "provider_missing"
+    assert exc_with_actions.detail["correlation_id"] == "corr-123"
+    assert exc_with_actions.detail["action_required"] is True
+    assert exc_with_actions.detail["actions"][0]["kind"] == "open_settings"
+    # Unknown kinds are normalized to a safe retry action.
+    assert exc_with_actions.detail["actions"][1]["kind"] == "retry"
 
 
 def test_settings_helpers_merge_flags_and_resolve_profiles(monkeypatch, tmp_path):

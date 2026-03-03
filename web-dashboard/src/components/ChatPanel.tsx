@@ -5,6 +5,8 @@ import type {
   AutoLaunchStatus,
   ChatMessage,
   CompletionCelebrationPayload,
+  GuidanceAction,
+  GuidancePayload,
   PromptExample,
   Project,
   RunDoneTerminalState,
@@ -34,6 +36,7 @@ import { useToast } from './Toast';
 import { PROMPT_EXAMPLES, PROMPT_EXAMPLE_CATEGORIES } from '../constants/promptExamples';
 import ContextPackPanel from './ContextPackPanel';
 import PreviewReviewPanel from './PreviewReviewPanel';
+import InlineActionCard from './InlineActionCard';
 
 // ---- Helpers ----
 
@@ -722,6 +725,7 @@ interface MessageBubbleProps {
   onGenerateReleaseNotes?: (projectId: string) => void;
   onStartReview?: (projectId: string, deploymentUrl?: string) => void;
   onAddBillingPack?: (projectId: string) => void;
+  onGuidanceAction?: (action: GuidanceAction, message: ChatMessage) => void;
   reviewActionsEnabled?: boolean;
   billingActionsEnabled?: boolean;
 }
@@ -741,6 +745,7 @@ function MessageBubble({
   onGenerateReleaseNotes,
   onStartReview,
   onAddBillingPack,
+  onGuidanceAction,
   reviewActionsEnabled = true,
   billingActionsEnabled = true,
 }: MessageBubbleProps) {
@@ -763,6 +768,10 @@ function MessageBubble({
   const autoLaunch = !isUser && !isStreaming ? message.auto_launch : undefined;
   const terminalState = !isUser && !isStreaming ? message.terminal_state : undefined;
   const terminalReason = !isUser && !isStreaming ? String(message.error_reason || '').trim() : '';
+  const terminalGuidance = !isUser && !isStreaming ? message.guidance : undefined;
+  const supplementalGuidance = !isUser && !isStreaming && terminalState === 'done'
+    ? message.guidance
+    : undefined;
   const runReplay = !isUser && !isStreaming ? String(message.run_replay || '').trim() : '';
   const normalizedAutoLaunchUrl = autoLaunch?.open_url
     ? trimLinkTarget(String(autoLaunch.open_url).replace(/^open app:\s*/i, '').replace(/\*+$/g, ''))
@@ -892,13 +901,25 @@ function MessageBubble({
                       )}
                     </div>
                   )}
+                  {supplementalGuidance?.action_required !== false && supplementalGuidance?.message && (
+                    <InlineActionCard
+                      title="Action Required"
+                      message={supplementalGuidance.message}
+                      severity={message.content.startsWith('[Warning]') ? 'warning' : 'error'}
+                      correlationId={supplementalGuidance.correlation_id}
+                      actions={supplementalGuidance.actions || []}
+                      onAction={(action) => onGuidanceAction?.(action, message)}
+                    />
+                  )}
                   {terminalState && terminalState !== 'done' && (
-                    <div className="chat-terminal-card">
-                      <p className="chat-terminal-title">{terminalStateLabel(terminalState)}</p>
-                      <p className="chat-terminal-reason">
-                        {terminalReason || 'The run ended before a complete delivery could be produced.'}
-                      </p>
-                    </div>
+                    <InlineActionCard
+                      title={terminalStateLabel(terminalState)}
+                      message={terminalGuidance?.message || terminalReason || 'The run ended before a complete delivery could be produced.'}
+                      severity={terminalState === 'cancelled' ? 'warning' : 'error'}
+                      correlationId={terminalGuidance?.correlation_id}
+                      actions={terminalGuidance?.actions || []}
+                      onAction={(action) => onGuidanceAction?.(action, message)}
+                    />
                   )}
                   {runReplay && (
                     <div className="chat-run-replay-card">
@@ -1361,6 +1382,7 @@ interface WsMessage {
   run_incident?: RunIncidentEvent;
   terminal_state?: RunDoneTerminalState;
   error_reason?: string;
+  guidance?: GuidancePayload;
   completion_celebration?: CompletionCelebrationPayload;
   run_replay?: string;
 }
@@ -1380,6 +1402,38 @@ function wsContentText(content: WsMessage['content'], fallback = ''): string {
   if (typeof payload.summary === 'string') return payload.summary;
   if (typeof payload.detail === 'string') return payload.detail;
   return fallback;
+}
+
+function normalizeGuidancePayload(raw: unknown): GuidancePayload | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const source = raw as Record<string, unknown>;
+  const message = String(source.message || source.detail || '').trim();
+  if (!message) return undefined;
+  const actions = Array.isArray(source.actions)
+    ? source.actions
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
+      .map((entry) => {
+        const id = String(entry.id || '').trim() || `action-${Math.random().toString(36).slice(2, 8)}`;
+        const label = String(entry.label || entry.id || 'Action').trim() || 'Action';
+        const kind = String(entry.kind || 'retry').trim();
+        const target = String(entry.target || '').trim();
+        const payload = entry.payload && typeof entry.payload === 'object'
+          ? entry.payload as Record<string, unknown>
+          : undefined;
+        const action: GuidanceAction = { id, label, kind };
+        if (target) action.target = target;
+        if (payload && Object.keys(payload).length > 0) action.payload = payload;
+        return action;
+      })
+    : [];
+  const guidance: GuidancePayload = {
+    message,
+    code: String(source.code || '').trim() || undefined,
+    correlation_id: String(source.correlation_id || '').trim() || undefined,
+    action_required: source.action_required === undefined ? actions.length > 0 : Boolean(source.action_required),
+    actions,
+  };
+  return guidance;
 }
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -1441,6 +1495,8 @@ interface ChatPanelProps {
   microProjectMode?: boolean;
   onMicroProjectModeChange?: (enabled: boolean) => void;
   onNavigateToProject?: (projectId: string) => void;
+  onOpenSettings?: (connector?: 'github' | 'vercel' | 'stripe') => void;
+  onOpenEventLog?: () => void;
   pendingApprovalProjects?: Project[];
   onProjectApproved?: (projectId: string) => void;
   projects?: Project[];
@@ -1488,6 +1544,8 @@ export default function ChatPanel({
   onAgentRemove,
   onWorkforceRefreshRequest,
   onProjectDataRefresh,
+  onOpenSettings,
+  onOpenEventLog,
   onRunStatus,
   onRunIncident,
   onRunStart,
@@ -1949,6 +2007,7 @@ export default function ChatPanel({
     autoLaunch?: AutoLaunchStatus,
     terminalState?: RunDoneTerminalState,
     errorReason?: string,
+    guidance?: GuidancePayload,
     completionCelebration?: CompletionCelebrationPayload,
     runReplay?: string,
   ) => {
@@ -1961,6 +2020,7 @@ export default function ChatPanel({
       auto_launch: autoLaunch,
       terminal_state: terminalState,
       error_reason: errorReason,
+      guidance,
       completion_celebration: completionCelebration,
       run_replay: runReplay,
     }]);
@@ -2086,6 +2146,7 @@ export default function ChatPanel({
     autoLaunch?: AutoLaunchStatus,
     terminalState?: RunDoneTerminalState,
     errorReason?: string,
+    guidance?: GuidancePayload,
     completionCelebration?: CompletionCelebrationPayload,
     runReplay?: string,
   ) => {
@@ -2113,6 +2174,7 @@ export default function ChatPanel({
         autoLaunch,
         terminalState,
         errorReason,
+        guidance,
         completionCelebration,
         runReplay,
       );
@@ -2348,6 +2410,7 @@ export default function ChatPanel({
                 ? data.terminal_state
                 : 'done';
               const errorReason = String(data.error_reason || '').trim();
+              const guidance = normalizeGuidancePayload(data.guidance);
               const completionCelebration = data.completion_celebration;
               const runReplay = String(data.run_replay || '').trim();
               streamingAccumRef.current = '';
@@ -2378,6 +2441,7 @@ export default function ChatPanel({
                   autoLaunch,
                   terminalState,
                   errorReason,
+                  guidance,
                   completionCelebration,
                   runReplay,
                 );
@@ -2393,6 +2457,7 @@ export default function ChatPanel({
                   autoLaunch,
                   terminalState,
                   errorReason,
+                  guidance,
                   completionCelebration,
                   runReplay,
                 );
@@ -2412,6 +2477,7 @@ export default function ChatPanel({
                 content: `[Error] ${wsContentText(data.content, 'Unknown error')}`,
                 timestamp: new Date().toISOString(),
                 project_id: activeProjectIdRef.current,
+                guidance: normalizeGuidancePayload(data.guidance),
               }]);
               setStreamingContent('');
               setThinkingContent('');
@@ -2428,6 +2494,7 @@ export default function ChatPanel({
                 content: `[Warning] ${typeof data.content === 'string' ? data.content : 'Warning received.'}`,
                 timestamp: new Date().toISOString(),
                 project_id: activeProjectIdRef.current,
+                guidance: normalizeGuidancePayload(data.guidance),
               }]);
               break;
             case 'micro_project_warning':
@@ -2615,6 +2682,77 @@ export default function ChatPanel({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
+
+  const handleGuidanceAction = useCallback((action: GuidanceAction, message: ChatMessage) => {
+    const kind = String(action.kind || '').trim().toLowerCase();
+    const payload = action.payload && typeof action.payload === 'object'
+      ? action.payload as Record<string, unknown>
+      : {};
+    if (kind === 'retry') {
+      const retryText = String(lastOutboundMessageRef.current || '').trim();
+      if (!retryText) {
+        toast('No previous user request available to retry.', 'warning');
+        return;
+      }
+      sendMessage({ textOverride: retryText });
+      return;
+    }
+    if (kind === 'run_control') {
+      const requested = String(payload.action || action.target || '').trim().toLowerCase();
+      const control = requested === 'retry_step'
+        || requested === 'cancel'
+        || requested === 'continue'
+        ? requested
+        : 'status';
+      onRunControl?.(control);
+      return;
+    }
+    if (kind === 'open_settings') {
+      const connector = String(payload.connector || '').trim().toLowerCase();
+      if (connector === 'github' || connector === 'vercel' || connector === 'stripe') {
+        onOpenSettings?.(connector);
+      } else {
+        onOpenSettings?.();
+      }
+      return;
+    }
+    if (kind === 'open_project') {
+      const projectId = String(payload.project_id || action.target || message.project_id || '').trim();
+      if (!projectId) {
+        toast('Project id is missing for this action.', 'warning');
+        return;
+      }
+      onNavigateToProject?.(projectId);
+      return;
+    }
+    if (kind === 'view_events') {
+      onOpenEventLog?.();
+      return;
+    }
+    if (kind === 'copy') {
+      const text = String(payload.text || action.target || '').trim();
+      if (!text) {
+        toast('Nothing to copy for this action.', 'warning');
+        return;
+      }
+      void navigator.clipboard.writeText(text).then(() => {
+        toast('Diagnostics copied to clipboard.', 'success');
+      }).catch(() => {
+        toast('Unable to copy diagnostics.', 'warning');
+      });
+      return;
+    }
+    if (kind === 'link') {
+      const target = String(action.target || payload.url || '').trim();
+      if (!target) {
+        toast('No link target available.', 'warning');
+        return;
+      }
+      window.open(target, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    toast(`Unsupported action: ${action.label}`, 'warning');
+  }, [onNavigateToProject, onOpenEventLog, onOpenSettings, onRunControl, sendMessage, toast]);
 
   const handleClear = useCallback(async () => {
     stopTypingAnimation();
@@ -3370,6 +3508,7 @@ export default function ChatPanel({
                   onGenerateReleaseNotes={handleGenerateReleaseNotes}
                   onStartReview={handleStartReviewFromCompletion}
                   onAddBillingPack={handleAddBillingPack}
+                  onGuidanceAction={handleGuidanceAction}
                   reviewActionsEnabled={previewReviewEnabled}
                   billingActionsEnabled={stripeBillingPackEnabled}
                 />
@@ -3502,6 +3641,7 @@ export default function ChatPanel({
                 onGenerateReleaseNotes={handleGenerateReleaseNotes}
                 onStartReview={handleStartReviewFromCompletion}
                 onAddBillingPack={handleAddBillingPack}
+                onGuidanceAction={handleGuidanceAction}
                 reviewActionsEnabled={previewReviewEnabled}
                 billingActionsEnabled={stripeBillingPackEnabled}
               />

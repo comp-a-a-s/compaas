@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 from src.web.api import app
+from src.web.problem import problem_http_exception
 from src.agents import AGENT_REGISTRY
 
 
@@ -1441,3 +1442,64 @@ class TestV1IntegrationAndReleaseNotes:
         assert payload["project_id"] == "p-cash"
         assert "Release Notes" in payload["notes"]
         assert "npm run dev" in payload["notes"]
+
+
+class TestReliabilityErrorContracts:
+    def test_http_error_includes_correlation_metadata(self, client):
+        response = client.post("/api/projects", json={"name": "", "description": "invalid"})
+        assert response.status_code == 400
+        payload = response.json()
+        assert isinstance(payload.get("detail"), str)
+        assert payload.get("correlation_id")
+        assert response.headers.get("x-correlation-id")
+
+    def test_validation_error_includes_actions(self, client):
+        # Missing required RunCreateRequest payload fields -> FastAPI validation handler.
+        response = client.post("/api/v1/runs", json={})
+        assert response.status_code == 422
+        payload = response.json()
+        assert payload["code"] == "request_validation_failed"
+        assert payload["action_required"] is True
+        assert isinstance(payload.get("actions"), list)
+        assert payload["actions"][0]["kind"] == "retry"
+        assert payload.get("correlation_id")
+
+    def test_problem_payload_preserves_actions_and_code(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        def _raise_problem(*_args, **_kwargs):
+            raise problem_http_exception(
+                status=409,
+                title="Conflict",
+                detail="GitHub integration not configured.",
+                extra={
+                    "code": "github_not_configured",
+                    "action_required": True,
+                    "actions": [
+                        {"id": "open-settings", "label": "Open Settings", "kind": "open_settings"},
+                    ],
+                },
+            )
+
+        monkeypatch.setattr(api_module.integration_service, "create_github_repo", _raise_problem)
+
+        response = client.post(
+            "/api/v1/github/repo/create",
+            json={"token": "ghp_test_token_123", "name": "demo-repo", "private": True},
+        )
+        assert response.status_code == 409
+        payload = response.json()
+        assert isinstance(payload.get("detail"), dict)
+        assert payload["detail"]["code"] == "github_not_configured"
+        assert payload["detail"]["actions"][0]["kind"] == "open_settings"
+        assert payload.get("correlation_id")
+
+    def test_v1_system_readiness_shape(self, client):
+        response = client.get("/api/v1/system/readiness")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] in {"ok", "degraded"}
+        assert "provider" in payload
+        assert "tools" in payload
+        assert "workspace" in payload
+        assert "integrations" in payload

@@ -214,6 +214,7 @@ export interface ChatMessage {
   auto_launch?: AutoLaunchStatus;
   terminal_state?: RunDoneTerminalState;
   error_reason?: string;
+  guidance?: GuidancePayload;
   completion_celebration?: CompletionCelebrationPayload;
   run_replay?: string;
 }
@@ -259,6 +260,35 @@ export interface ApiResult<T> {
   detail?: string;
   data?: T;
   code?: string;
+  correlation_id?: string;
+  actions?: GuidanceAction[];
+  action_required?: boolean;
+}
+
+export type GuidanceActionKind =
+  | 'retry'
+  | 'open_settings'
+  | 'open_project'
+  | 'copy'
+  | 'link'
+  | 'view_events'
+  | 'run_control'
+  | string;
+
+export interface GuidanceAction {
+  id: string;
+  label: string;
+  kind: GuidanceActionKind;
+  target?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface GuidancePayload {
+  message: string;
+  code?: string;
+  correlation_id?: string;
+  action_required?: boolean;
+  actions?: GuidanceAction[];
 }
 
 export interface PagedActivityResponse {
@@ -353,6 +383,9 @@ export interface FeatureFlags {
   preview_review_layer?: boolean;
   context_packs?: boolean;
   stripe_billing_pack?: boolean;
+  guided_errors_v1?: boolean;
+  error_contract_v1?: boolean;
+  readiness_center_v1?: boolean;
 }
 
 export type RunState = 'queued' | 'planning' | 'executing' | 'verifying' | 'done' | 'failed' | 'cancelled';
@@ -524,4 +557,26 @@ export interface AppConfig {
   feature_flags?: FeatureFlags;
   routing_models?: Record<string, string>;
   llm: LlmConfig;
+}
+
+export interface SystemReadiness {
+  status: 'ok' | 'degraded' | string;
+  app_version?: string;
+  timestamp?: string;
+  provider?: {
+    name?: string;
+    model?: string;
+    mode?: string;
+    ready?: boolean;
+    reason?: string;
+  };
+  tools?: Record<string, { available?: boolean; path?: string }>;
+  workspace?: {
+    root?: string;
+    exists?: boolean;
+    writable?: boolean;
+  };
+  integrations?: Record<string, unknown>;
+  active_run?: Record<string, unknown> | null;
+  latest_incident?: Record<string, unknown> | null;
 }

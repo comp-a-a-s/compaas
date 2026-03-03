@@ -1146,6 +1146,48 @@ def test_merge_structured_completion_with_project_downgrades_build_complete_with
     assert not any(item.get("label") == "Workspace Path" for item in merged["open_links"])
 
 
+def test_runtime_guidance_payload_normalizes_actions_and_metadata():
+    payload = api._runtime_guidance_payload(
+        message="Run stalled waiting for provider output.",
+        code="provider_stall",
+        correlation_id="corr-run-123",
+        actions=[
+            api._guidance_action(
+                action_id="status",
+                label="Show run status",
+                kind="run_control",
+                payload={"action": "status", "run_id": "run-123"},
+            )
+        ],
+    )
+
+    assert payload["message"] == "Run stalled waiting for provider output."
+    assert payload["code"] == "provider_stall"
+    assert payload["correlation_id"] == "corr-run-123"
+    assert payload["action_required"] is True
+    assert payload["actions"][0]["kind"] == "run_control"
+    assert payload["actions"][0]["payload"]["run_id"] == "run-123"
+
+
+def test_build_terminal_guidance_includes_recovery_actions_for_failed_run():
+    guidance = api._build_terminal_guidance(
+        terminal_state="failed",
+        error_reason="Claude CLI not found.",
+        project_id="project-123",
+        run_id="run-123",
+        correlation_id="corr-failed",
+    )
+
+    action_kinds = {str(item.get("kind", "") or "") for item in guidance.get("actions", [])}
+    action_ids = {str(item.get("id", "") or "") for item in guidance.get("actions", [])}
+    assert guidance["code"] == "run_failed"
+    assert guidance["correlation_id"] == "corr-failed"
+    assert "retry" in action_kinds
+    assert "open_settings" in action_kinds
+    assert "view_events" in action_kinds
+    assert "copy_diag" in action_ids
+
+
 def test_sync_project_completion_snapshot_updates_description_team_and_run_commands(monkeypatch):
     project = {
         "id": "abcd1234",

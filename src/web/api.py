@@ -33,7 +33,9 @@ except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
 logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from src.state.project_state import ProjectStateManager
@@ -52,6 +54,7 @@ from src.web.services.workforce_presence import WorkforcePresenceService
 from src.web.services.run_supervisor import ACTIVE_RUN_STATES, build_run_status_payload, detect_run_incident
 from src.web.routers.v1 import V1Context, create_v1_router
 from src.web.template_rendering import render_agent_templates
+from src.web.problem import PROBLEM_JSON
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +363,134 @@ app.add_middleware(
         "X-Slack-Request-Timestamp",
     ],
 )
+
+
+def _request_correlation_id(request: Request) -> str:
+    value = str(getattr(getattr(request, "state", object()), "correlation_id", "") or "").strip()
+    return value or str(uuid.uuid4())[:12]
+
+
+def _normalize_http_exception_payload(detail: Any) -> tuple[Any, str, str, list[dict[str, Any]], bool]:
+    """Normalize heterogeneous HTTPException details into a consistent envelope."""
+    code = ""
+    message = ""
+    actions: list[dict[str, Any]] = []
+    action_required = False
+
+    if isinstance(detail, dict):
+        payload = dict(detail)
+        code = str(payload.get("code", "") or "").strip()
+        message = str(payload.get("detail", "") or payload.get("message", "") or "").strip()
+        maybe_actions = payload.get("actions")
+        if isinstance(maybe_actions, list):
+            actions = [row for row in maybe_actions if isinstance(row, dict)]
+        if "action_required" in payload:
+            action_required = bool(payload.get("action_required"))
+        else:
+            action_required = bool(actions)
+        return payload, message, code, actions, action_required
+
+    if isinstance(detail, str):
+        message = detail.strip()
+    else:
+        message = str(detail or "").strip()
+    return message or "Request failed.", message or "Request failed.", code, actions, action_required
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    incoming = (
+        request.headers.get("X-Correlation-ID", "").strip()
+        or request.headers.get("X-Request-ID", "").strip()
+    )
+    request.state.correlation_id = incoming or str(uuid.uuid4())[:12]
+    response = await call_next(request)
+    response.headers["X-Correlation-ID"] = _request_correlation_id(request)
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_guidance_handler(request: Request, exc: HTTPException):
+    correlation_id = _request_correlation_id(request)
+    normalized_detail, message, code, actions, action_required = _normalize_http_exception_payload(exc.detail)
+    if isinstance(normalized_detail, dict):
+        payload = dict(normalized_detail)
+        payload.setdefault("correlation_id", correlation_id)
+        if code and not payload.get("code"):
+            payload["code"] = code
+        if actions and not payload.get("actions"):
+            payload["actions"] = actions
+        if "action_required" not in payload:
+            payload["action_required"] = action_required
+        response_payload: dict[str, Any] = {
+            "detail": payload,
+            "correlation_id": correlation_id,
+        }
+        if payload.get("code"):
+            response_payload["code"] = payload.get("code")
+        if payload.get("actions"):
+            response_payload["actions"] = payload.get("actions")
+            response_payload["action_required"] = bool(payload.get("action_required", True))
+        return JSONResponse(status_code=exc.status_code, content=response_payload, media_type=PROBLEM_JSON)
+    response_payload = {
+        "detail": message or "Request failed.",
+        "correlation_id": correlation_id,
+    }
+    if code:
+        response_payload["code"] = code
+    if actions:
+        response_payload["actions"] = actions
+        response_payload["action_required"] = action_required
+    return JSONResponse(status_code=exc.status_code, content=response_payload)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_guidance_handler(request: Request, exc: RequestValidationError):
+    correlation_id = _request_correlation_id(request)
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Request validation failed.",
+            "code": "request_validation_failed",
+            "correlation_id": correlation_id,
+            "action_required": True,
+            "actions": [
+                {
+                    "id": "retry",
+                    "label": "Retry with corrected input",
+                    "kind": "retry",
+                }
+            ],
+            "errors": exc.errors(),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unexpected_exception_guidance_handler(request: Request, exc: Exception):
+    correlation_id = _request_correlation_id(request)
+    logger.exception("Unhandled API error", extra={"correlation_id": correlation_id})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Unexpected server error. Open Event Log and retry.",
+            "code": "unexpected_server_error",
+            "correlation_id": correlation_id,
+            "action_required": True,
+            "actions": [
+                {
+                    "id": "retry",
+                    "label": "Retry",
+                    "kind": "retry",
+                },
+                {
+                    "id": "open_events",
+                    "label": "View Event Log",
+                    "kind": "view_events",
+                },
+            ],
+        },
+    )
 
 
 def _env_first(*names: str) -> str:
@@ -2288,6 +2419,126 @@ def _apply_agent_name_overrides(text: str, config: dict) -> str:
         )
         updated = re.sub(r"\bChairman\b", configured_user, updated, flags=re.IGNORECASE)
     return updated
+
+
+def _guidance_action(
+    *,
+    action_id: str,
+    label: str,
+    kind: str,
+    target: str = "",
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_kind = str(kind or "").strip().lower() or "retry"
+    row: dict[str, Any] = {
+        "id": str(action_id or "action").strip() or "action",
+        "label": str(label or "Retry").strip() or "Retry",
+        "kind": normalized_kind,
+    }
+    if target:
+        row["target"] = str(target).strip()
+    if isinstance(payload, dict) and payload:
+        row["payload"] = payload
+    return row
+
+
+def _runtime_guidance_payload(
+    *,
+    message: str,
+    code: str = "",
+    correlation_id: str = "",
+    actions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_actions = [row for row in (actions or []) if isinstance(row, dict)]
+    payload: dict[str, Any] = {
+        "message": str(message or "").strip() or "Action required.",
+        "action_required": bool(normalized_actions),
+        "actions": normalized_actions,
+    }
+    normalized_code = str(code or "").strip()
+    normalized_correlation = str(correlation_id or "").strip()
+    if normalized_code:
+        payload["code"] = normalized_code
+    if normalized_correlation:
+        payload["correlation_id"] = normalized_correlation
+    return payload
+
+
+def _build_terminal_guidance(
+    *,
+    terminal_state: str,
+    error_reason: str,
+    project_id: str,
+    run_id: str,
+    correlation_id: str,
+) -> dict[str, Any]:
+    normalized_state = str(terminal_state or "").strip().lower()
+    normalized_reason = str(error_reason or "").strip()
+    normalized_project = str(project_id or "").strip()
+    normalized_run = str(run_id or "").strip()
+    normalized_correlation = str(correlation_id or "").strip()
+    reason_lower = normalized_reason.lower()
+    actions: list[dict[str, Any]] = []
+
+    if normalized_state in {"failed", "cancelled"}:
+        actions.append(_guidance_action(action_id="retry", label="Retry now", kind="retry"))
+        if normalized_run:
+            actions.append(
+                _guidance_action(
+                    action_id="status",
+                    label="Show run status",
+                    kind="run_control",
+                    payload={"action": "status", "run_id": normalized_run},
+                )
+            )
+        if normalized_project:
+            actions.append(
+                _guidance_action(
+                    action_id="open_project",
+                    label="Open project",
+                    kind="open_project",
+                    target=normalized_project,
+                    payload={"project_id": normalized_project},
+                )
+            )
+        if (
+            "auth" in reason_lower
+            or "api key" in reason_lower
+            or "token" in reason_lower
+            or "claude cli not found" in reason_lower
+            or "codex" in reason_lower
+        ):
+            connector = "github"
+            if "vercel" in reason_lower:
+                connector = "vercel"
+            elif "stripe" in reason_lower:
+                connector = "stripe"
+            actions.append(
+                _guidance_action(
+                    action_id="open_settings",
+                    label="Open settings",
+                    kind="open_settings",
+                    payload={"connector": connector},
+                )
+            )
+        diagnostic = f"{normalized_state}:{normalized_reason or 'unknown'}:{normalized_correlation}"
+        actions.append(
+            _guidance_action(
+                action_id="copy_diag",
+                label="Copy diagnostics",
+                kind="copy",
+                payload={"text": diagnostic},
+            )
+        )
+        actions.append(_guidance_action(action_id="view_events", label="View Event Log", kind="view_events"))
+
+    code = "run_failed" if normalized_state == "failed" else "run_cancelled" if normalized_state == "cancelled" else "run_done"
+    return _runtime_guidance_payload(
+        message=normalized_reason or ("Run failed." if normalized_state == "failed" else "Run cancelled."),
+        code=code,
+        correlation_id=normalized_correlation,
+        actions=actions,
+    )
 
 
 def _humanize_llm_runtime_error(
@@ -6571,8 +6822,44 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 )
                 if signature != last_incident_signature:
                     last_incident_signature = signature
-                    await websocket.send_json({"type": "run_incident", "content": incident})
-                    await websocket.send_json({"type": "warning", "content": _run_incident_notice(run_status, incident)})
+                    incident_guidance = _runtime_guidance_payload(
+                        message=_run_incident_notice(run_status, incident),
+                        code=f"run_{str(incident.get('reason', 'incident') or 'incident')}",
+                        actions=[
+                            _guidance_action(
+                                action_id="status",
+                                label="Show run status",
+                                kind="run_control",
+                                payload={"action": "status", "run_id": str(incident.get("run_id", "") or run_id)},
+                            ),
+                            _guidance_action(
+                                action_id="retry_step",
+                                label="Retry step",
+                                kind="run_control",
+                                payload={"action": "retry_step", "run_id": str(incident.get("run_id", "") or run_id)},
+                            ),
+                            _guidance_action(
+                                action_id="continue",
+                                label="Continue",
+                                kind="run_control",
+                                payload={"action": "continue", "run_id": str(incident.get("run_id", "") or run_id)},
+                            ),
+                            _guidance_action(
+                                action_id="cancel",
+                                label="Cancel run",
+                                kind="run_control",
+                                payload={"action": "cancel", "run_id": str(incident.get("run_id", "") or run_id)},
+                            ),
+                        ],
+                    )
+                    await websocket.send_json({"type": "run_incident", "content": incident, "guidance": incident_guidance})
+                    await websocket.send_json(
+                        {
+                            "type": "warning",
+                            "content": _run_incident_notice(run_status, incident),
+                            "guidance": incident_guidance,
+                        }
+                    )
                     severity = str(incident.get("severity", "") or "").strip().lower()
                     reason = str(incident.get("reason", "") or "").strip().lower()
                     if severity == "critical" and reason in {"silent_run", "provider_stall"}:
@@ -6846,10 +7133,20 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     },
                 )
             except RuntimeError as exc:
+                run_start_guidance = _runtime_guidance_payload(
+                    message=str(exc),
+                    code="run_concurrency_limit",
+                    correlation_id=turn_correlation_id,
+                    actions=[
+                        _guidance_action(action_id="open_project", label="Open project", kind="open_project", target=active_project_id or ""),
+                        _guidance_action(action_id="view_events", label="View Event Log", kind="view_events"),
+                    ],
+                )
                 await websocket.send_json({
                     "type": "error",
                     "content": str(exc),
                     "correlation_id": turn_correlation_id,
+                    "guidance": run_start_guidance,
                 })
                 await websocket.send_json(
                     {
@@ -6859,6 +7156,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         "terminal_state": "failed",
                         "error_reason": str(exc),
                         "correlation_id": turn_correlation_id,
+                        "guidance": run_start_guidance,
                     }
                 )
                 continue
@@ -7007,6 +7305,15 @@ async def chat_websocket(websocket: WebSocket) -> None:
             if micro_project_mode:
                 complexity_reason = _micro_project_complexity_reason(user_message)
                 if complexity_reason and not micro_project_override:
+                    complexity_guidance = _runtime_guidance_payload(
+                        message=complexity_reason,
+                        code="micro_complexity_blocked",
+                        correlation_id=turn_correlation_id,
+                        actions=[
+                            _guidance_action(action_id="continue", label="Continue with full crew", kind="run_control", payload={"action": "continue"}),
+                            _guidance_action(action_id="retry", label="Retry in micro mode", kind="retry"),
+                        ],
+                    )
                     _transition_run_state(
                         run_id,
                         state="cancelled",
@@ -7023,6 +7330,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                             "terminal_state": "cancelled",
                             "error_reason": complexity_reason,
                             "correlation_id": turn_correlation_id,
+                            "guidance": complexity_guidance,
                         }
                     )
                     await _emit_run_progress(run_id, active_project_id, force_phase=True)
@@ -7091,6 +7399,15 @@ async def chat_websocket(websocket: WebSocket) -> None:
             else:
                 claude_path = shutil.which("claude")
                 if not claude_path:
+                    claude_missing_guidance = _runtime_guidance_payload(
+                        message="Claude CLI not found. Install and authenticate, then retry.",
+                        code="claude_cli_missing",
+                        correlation_id=turn_correlation_id,
+                        actions=[
+                            _guidance_action(action_id="open_settings", label="Open settings", kind="open_settings"),
+                            _guidance_action(action_id="retry", label="Retry now", kind="retry"),
+                        ],
+                    )
                     _transition_run_state(
                         run_id,
                         state="failed",
@@ -7100,6 +7417,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         "type": "error",
                         "content": "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
                         "correlation_id": turn_correlation_id,
+                        "guidance": claude_missing_guidance,
                     })
                     await websocket.send_json({
                         "type": "done",
@@ -7109,6 +7427,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         "terminal_state": "failed",
                         "error_reason": "Claude CLI not found.",
                         "correlation_id": turn_correlation_id,
+                        "guidance": claude_missing_guidance,
                     })
                     await _emit_run_progress(run_id, active_project_id, force_phase=True)
                     await _clear_inflight_tracking()
@@ -7229,6 +7548,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
             }
             if terminal_state != "done" and error_reason:
                 done_payload["error_reason"] = error_reason
+                done_payload["guidance"] = _build_terminal_guidance(
+                    terminal_state=terminal_state,
+                    error_reason=error_reason,
+                    project_id=active_project_id,
+                    run_id=run_id,
+                    correlation_id=turn_correlation_id,
+                )
             structured_payload: dict[str, Any] | None = None
             if structured_enabled:
                 base_structured = _structured_response_payload(full_response or "")

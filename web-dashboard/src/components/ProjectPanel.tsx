@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { Project, Task, Decision } from '../types';
+import type { GuidanceAction, Project, Task, Decision } from '../types';
 import {
   fetchProjectDecisions,
   fetchProjectSpecs,
@@ -13,6 +13,7 @@ import {
 import FloatingSelect from './ui/FloatingSelect';
 import PreviewReviewPanel from './PreviewReviewPanel';
 import ContextPackPanel from './ContextPackPanel';
+import InlineActionCard from './InlineActionCard';
 
 interface ProjectPanelProps {
   projects: Project[];
@@ -33,8 +34,6 @@ interface ProjectPanelProps {
   stripeBillingPackEnabled?: boolean;
   onGitHubSetupRequired?: () => void;
 }
-
-type ProjectTab = 'overview' | 'tasks' | 'plan' | 'discussions';
 
 // ---- Helpers ----
 function statusBadge(status: string): { bg: string; text: string } {
@@ -1604,8 +1603,6 @@ interface ProjectDetailProps {
   onSaveTags?: (tags: string[]) => void;
   savingTags?: boolean;
   tagsError?: string;
-  initialTab?: ProjectTab;
-  onApproved?: () => void;
   contextPacksEnabled?: boolean;
   previewReviewEnabled?: boolean;
   stripeBillingPackEnabled?: boolean;
@@ -1620,14 +1617,10 @@ function ProjectDetail({
   onSaveTags,
   savingTags = false,
   tagsError = '',
-  initialTab,
-  onApproved,
   contextPacksEnabled = true,
   previewReviewEnabled = true,
   stripeBillingPackEnabled = true,
 }: ProjectDetailProps) {
-  void initialTab;
-  void onApproved;
   const teamMembers = useMemo(() => {
     const ordered: string[] = [];
     const seen = new Set<string>();
@@ -1763,28 +1756,30 @@ function ProjectDetail({
 
       <div className="flex-1 overflow-y-auto p-4 space-y-5">
         {deleteError && (
-          <div
-            className="rounded-lg px-3 py-2 text-xs"
-            style={{
-              border: '1px solid var(--tf-error)',
-              backgroundColor: '#2d1519',
-              color: 'var(--tf-error)',
+          <InlineActionCard
+            title="Project deletion failed"
+            message={deleteError}
+            severity="error"
+            actions={onDelete ? [{ id: 'retry-delete', label: 'Retry delete', kind: 'retry' } as GuidanceAction] : []}
+            onAction={(action) => {
+              if (action.id === 'retry-delete') {
+                onDelete?.();
+              }
             }}
-          >
-            {deleteError}
-          </div>
+          />
         )}
         {tagsError && (
-          <div
-            className="rounded-lg px-3 py-2 text-xs"
-            style={{
-              border: '1px solid var(--tf-error)',
-              backgroundColor: '#2d1519',
-              color: 'var(--tf-error)',
+          <InlineActionCard
+            title="Tag update failed"
+            message={tagsError}
+            severity="warning"
+            actions={onSaveTags ? [{ id: 'retry-tags', label: 'Retry save tags', kind: 'retry' } as GuidanceAction] : []}
+            onAction={(action) => {
+              if (action.id === 'retry-tags') {
+                onSaveTags?.(parseTagInput(tagDraft));
+              }
             }}
-          >
-            {tagsError}
-          </div>
+          />
         )}
         <section>
           <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
@@ -2341,7 +2336,28 @@ export default function ProjectPanel({
               </button>
             </div>
           )}
-          {projectError && <div className="text-xs mb-2" style={{ color: 'var(--tf-error)' }}>{projectError}</div>}
+          {projectError && (
+            <div className="mb-2">
+              <InlineActionCard
+                title="Project creation blocked"
+                message={projectError}
+                severity="error"
+                actions={[
+                  { id: 'retry-create', label: 'Retry create', kind: 'retry' },
+                  ...(newProjectMode === 'github' ? [{ id: 'open-settings', label: 'Open GitHub settings', kind: 'open_settings' }] : []),
+                ]}
+                onAction={(action) => {
+                  if (action.id === 'retry-create') {
+                    void handleCreateProject();
+                    return;
+                  }
+                  if (action.id === 'open-settings') {
+                    onGitHubSetupRequired?.();
+                  }
+                }}
+              />
+            </div>
+          )}
           <button
             onClick={handleCreateProject}
             disabled={!newProjectName.trim() || creatingProject || (newProjectMode === 'github' && !githubConfigured)}
@@ -2476,7 +2492,28 @@ export default function ProjectPanel({
           >
             {creatingProject ? 'Creating…' : 'Start Project'}
           </button>
-          {projectError && <div className="text-xs mt-2" style={{ color: 'var(--tf-error)' }}>{projectError}</div>}
+          {projectError && (
+            <div className="mt-2">
+              <InlineActionCard
+                title="Project creation blocked"
+                message={projectError}
+                severity="error"
+                actions={[
+                  { id: 'retry-create', label: 'Retry create', kind: 'retry' },
+                  ...(newProjectMode === 'github' ? [{ id: 'open-settings', label: 'Open GitHub settings', kind: 'open_settings' }] : []),
+                ]}
+                onAction={(action) => {
+                  if (action.id === 'retry-create') {
+                    void handleCreateProject();
+                    return;
+                  }
+                  if (action.id === 'open-settings') {
+                    onGitHubSetupRequired?.();
+                  }
+                }}
+              />
+            </div>
+          )}
         </div>
         {projects.map((project) => (
           <ProjectListCard
@@ -2507,7 +2544,6 @@ export default function ProjectPanel({
             onSaveTags={handleSaveTags}
             savingTags={savingTags}
             tagsError={tagsError}
-            initialTab={initialProjectId ? 'overview' : undefined}
             contextPacksEnabled={contextPacksEnabled}
             previewReviewEnabled={previewReviewEnabled}
             stripeBillingPackEnabled={stripeBillingPackEnabled}

@@ -24,11 +24,12 @@ import {
   checkForUpdates,
   applyManualUpdate,
 } from '../api/client';
-import type { AppConfig, LlmConfig, UpdateStatusResponse } from '../types';
+import type { AppConfig, GuidanceAction, LlmConfig, UpdateStatusResponse } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
 import FloatingSelect from './ui/FloatingSelect';
 import ContextPackPanel from './ContextPackPanel';
+import InlineActionCard from './InlineActionCard';
 
 // ---- Types ----
 
@@ -1190,8 +1191,18 @@ function AiProviderSection({
         {saving ? 'Saving…' : saved ? 'Saved' : 'Save Provider Settings'}
       </button>
       {saveError && (
-        <div role="alert" style={{ marginTop: '8px', fontSize: '12px', color: C.error }}>
-          {saveError}
+        <div role="alert" style={{ marginTop: '8px' }}>
+          <InlineActionCard
+            title="Provider settings failed"
+            message={saveError}
+            severity="error"
+            actions={[{ id: 'retry-provider-save', label: 'Retry save', kind: 'retry' } as GuidanceAction]}
+            onAction={(action) => {
+              if (action.id === 'retry-provider-save') {
+                void handleSave();
+              }
+            }}
+          />
         </div>
       )}
     </div>
@@ -2999,10 +3010,21 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
               </div>
             </div>
             {integrationOpsStatus && (
-              <div style={{ marginTop: '12px', padding: '10px', borderRadius: '8px', border: `1px solid ${C.border}`, backgroundColor: C.surface }}>
-                <p style={{ margin: 0, fontSize: '11px', color: C.textSecondary, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {integrationOpsStatus}
-                </p>
+              <div style={{ marginTop: '12px' }}>
+                <InlineActionCard
+                  title="Integration operation status"
+                  message={integrationOpsStatus}
+                  severity={integrationOpsStatus.toLowerCase().includes('failed') || integrationOpsStatus.toLowerCase().includes('required') ? 'warning' : 'info'}
+                  actions={[
+                    { id: 'copy-integration-status', label: 'Copy diagnostics', kind: 'copy', payload: { text: integrationOpsStatus } },
+                  ]}
+                  onAction={(action) => {
+                    if (action.id === 'copy-integration-status') {
+                      const text = String(action.payload?.text || integrationOpsStatus || '').trim();
+                      if (text) void navigator.clipboard.writeText(text);
+                    }
+                  }}
+                />
               </div>
             )}
           </Section>
@@ -3083,9 +3105,27 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
           )}
 
           {saveError && (
-            <span role="alert" style={{ fontSize: '13px', color: C.error }}>
-              {saveError}
-            </span>
+            <div role="alert" style={{ minWidth: '280px', maxWidth: '520px' }}>
+              <InlineActionCard
+                title="Settings save failed"
+                message={saveError}
+                severity="error"
+                actions={[
+                  { id: 'retry-save', label: 'Retry save', kind: 'retry' },
+                  { id: 'copy-save-error', label: 'Copy diagnostics', kind: 'copy', payload: { text: saveError } },
+                ]}
+                onAction={(action) => {
+                  if (action.id === 'retry-save') {
+                    void handleSave();
+                    return;
+                  }
+                  if (action.id === 'copy-save-error') {
+                    const text = String(action.payload?.text || saveError || '').trim();
+                    if (text) void navigator.clipboard.writeText(text);
+                  }
+                }}
+              />
+            </div>
           )}
         </div>
       )}

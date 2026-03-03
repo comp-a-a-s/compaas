@@ -293,6 +293,16 @@ export default function App() {
     setChatOpen(false);
   }, []);
 
+  const openSettingsTab = useCallback(() => {
+    setActiveTab('settings');
+    setChatOpen(false);
+  }, []);
+
+  const openEventLogTab = useCallback(() => {
+    setActiveTab('events');
+    setChatOpen(false);
+  }, []);
+
   const requestMicroToggle = useCallback(() => {
     setMicroToggleRequestToken((prev) => prev + 1);
   }, []);
@@ -1484,6 +1494,8 @@ export default function App() {
               microProjectMode={microProjectMode}
               onMicroProjectModeChange={setMicroProjectMode}
               onNavigateToProject={navigateToProject}
+              onOpenSettings={openSettingsTab}
+              onOpenEventLog={openEventLogTab}
               pendingApprovalProjects={pendingApprovalProjects}
               onProjectApproved={() => loadProjects()}
               projects={projects}

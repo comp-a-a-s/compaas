@@ -19,6 +19,8 @@ import type {
   ContextPack,
   ReviewComment,
   ReviewSession,
+  GuidanceAction,
+  SystemReadiness,
 } from '../types';
 
 const BASE = '/api';
@@ -27,26 +29,67 @@ const FETCH_TIMEOUT_MS = 15_000;
 function normalizeErrorDetail(payload: unknown, fallback = 'Request failed'): {
   detail: string;
   code?: string;
+  correlation_id?: string;
+  actions?: GuidanceAction[];
+  action_required?: boolean;
 } {
   if (!payload || typeof payload !== 'object') {
     return { detail: fallback };
   }
-  const raw = (payload as { detail?: unknown }).detail ?? payload;
+  const root = payload as { detail?: unknown; code?: unknown; correlation_id?: unknown; actions?: unknown; action_required?: unknown };
+  const raw = root.detail ?? payload;
   if (typeof raw === 'string' && raw.trim()) {
-    return { detail: raw.trim() };
+    const base: {
+      detail: string;
+      code?: string;
+      correlation_id?: string;
+      actions?: GuidanceAction[];
+      action_required?: boolean;
+    } = { detail: raw.trim() };
+    const code = String(root.code || '').trim();
+    const correlationId = String(root.correlation_id || '').trim();
+    const actions = Array.isArray(root.actions)
+      ? root.actions.filter((row): row is GuidanceAction => Boolean(row && typeof row === 'object'))
+      : [];
+    if (code) base.code = code;
+    if (correlationId) base.correlation_id = correlationId;
+    if (actions.length > 0) {
+      base.actions = actions;
+      base.action_required = root.action_required === undefined ? true : Boolean(root.action_required);
+    }
+    return base;
   }
   if (!raw || typeof raw !== 'object') {
     return { detail: fallback };
   }
-  const message = String((raw as { message?: unknown }).message || '').trim();
-  const code = String((raw as { code?: unknown }).code || '').trim();
+  const nested = raw as {
+    message?: unknown;
+    detail?: unknown;
+    code?: unknown;
+    correlation_id?: unknown;
+    actions?: unknown;
+    action_required?: unknown;
+  };
+  const message = String(nested.message || nested.detail || '').trim();
+  const code = String(nested.code || root.code || '').trim();
+  const correlationId = String(nested.correlation_id || root.correlation_id || '').trim();
+  const actions = Array.isArray(nested.actions)
+    ? nested.actions.filter((row): row is GuidanceAction => Boolean(row && typeof row === 'object'))
+    : Array.isArray(root.actions)
+      ? root.actions.filter((row): row is GuidanceAction => Boolean(row && typeof row === 'object'))
+      : [];
   return {
     detail: message || fallback,
     ...(code ? { code } : {}),
+    ...(correlationId ? { correlation_id: correlationId } : {}),
+    ...(actions.length > 0 ? { actions, action_required: nested.action_required === undefined ? true : Boolean(nested.action_required) } : {}),
   };
 }
 
-async function safeFetch<T>(url: string, fallback: T, options?: RequestInit): Promise<T> {
+async function safeFetchResult<T>(
+  url: string,
+  options?: RequestInit,
+): Promise<ApiResult<T>> {
   const externalSignal = options?.signal;
   const restOptions: RequestInit = { ...(options ?? {}) };
   delete (restOptions as { signal?: AbortSignal }).signal;
@@ -56,15 +99,47 @@ async function safeFetch<T>(url: string, fallback: T, options?: RequestInit): Pr
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await fetch(url, { ...restOptions, signal: controller.signal });
-    if (!res.ok) return fallback;
-    const data: T = await res.json();
-    return data;
+    if (!res.ok) {
+      let payload: unknown = null;
+      try {
+        payload = await res.json();
+      } catch {
+        payload = null;
+      }
+      const normalized = normalizeErrorDetail(payload, `HTTP ${res.status}`);
+      return {
+        ok: false,
+        status: res.status,
+        detail: normalized.detail,
+        ...(normalized.code ? { code: normalized.code } : {}),
+        ...(normalized.correlation_id ? { correlation_id: normalized.correlation_id } : {}),
+        ...(normalized.actions ? { actions: normalized.actions } : {}),
+        ...(normalized.action_required !== undefined ? { action_required: normalized.action_required } : {}),
+      };
+    }
+    let data: T | undefined;
+    try {
+      data = await res.json() as T;
+    } catch {
+      data = undefined;
+    }
+    return {
+      ok: true,
+      status: res.status,
+      data,
+    };
   } catch {
-    return fallback;
+    return { ok: false, status: 0, detail: 'Network error' };
   } finally {
     clearTimeout(timeoutId);
     externalSignal?.removeEventListener('abort', abortForwarder);
   }
+}
+
+async function safeFetch<T>(url: string, fallback: T, options?: RequestInit): Promise<T> {
+  const result = await safeFetchResult<T>(url, options);
+  if (!result.ok) return fallback;
+  return (result.data as T) ?? fallback;
 }
 
 /** Shared helper for POST/PATCH/DELETE mutations with timeout. Returns true on success. */
@@ -90,45 +165,10 @@ async function safeMutateResult<T = Record<string, unknown>>(
   method: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      method,
-      signal: controller.signal,
-      ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
-    });
-    if (!res.ok) {
-      let payload: unknown = null;
-      try {
-        payload = await res.json();
-      } catch {
-        payload = null;
-      }
-      const normalized = normalizeErrorDetail(payload, `HTTP ${res.status}`);
-      return {
-        ok: false,
-        status: res.status,
-        detail: normalized.detail,
-        ...(normalized.code ? { code: normalized.code } : {}),
-      };
-    }
-    let data: T | undefined;
-    try {
-      data = await res.json() as T;
-    } catch {
-      data = undefined;
-    }
-    return {
-      ok: true,
-      status: res.status,
-      data,
-    };
-  } catch {
-    return { ok: false, status: 0, detail: 'Network error' };
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return safeFetchResult<T>(url, {
+    method,
+    ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+  });
 }
 
 export async function fetchAgents(): Promise<Agent[]> {
@@ -813,6 +853,10 @@ const V1 = '/api/v1';
 export async function fetchFeatureFlags(): Promise<FeatureFlags> {
   const res = await safeFetch<{ status: string; feature_flags: FeatureFlags }>(`${V1}/feature-flags`, { status: 'error', feature_flags: {} });
   return res.feature_flags ?? {};
+}
+
+export async function fetchSystemReadiness(): Promise<ApiResult<SystemReadiness>> {
+  return safeFetchResult<SystemReadiness>(`${V1}/system/readiness`);
 }
 
 export async function updateFeatureFlags(flags: Partial<FeatureFlags>): Promise<boolean> {

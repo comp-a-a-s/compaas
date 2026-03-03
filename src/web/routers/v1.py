@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
+import shutil
 import uuid
 from typing import Any, Callable
 
@@ -21,7 +22,7 @@ from src.web.services.context_pack_service import ContextPackService
 from src.web.services.review_service import ReviewService
 from src.web.services.run_service import RunService
 from src.web.services.workforce_presence import WorkforcePresenceService
-from src.web.services.run_supervisor import build_run_status_payload, detect_run_incident
+from src.web.services.run_supervisor import ACTIVE_RUN_STATES, build_run_status_payload, detect_run_incident
 from src.web.services.autopilot_policy import evaluate_guarded_autopilot
 from src.web.settings import FeatureFlags, merge_feature_flags, resolve_sandbox_profile
 
@@ -246,6 +247,147 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         if str(result.get("code", "")).startswith("invalid_repo_path"):
             raise HTTPException(status_code=400, detail=str(result.get("message", "Invalid repo_path.")))
 
+    def _system_readiness_payload() -> dict[str, Any]:
+        cfg = ctx.load_config()
+        llm_cfg = cfg.get("llm", {}) if isinstance(cfg.get("llm"), dict) else {}
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        ui_cfg = cfg.get("ui", {}) if isinstance(cfg.get("ui"), dict) else {}
+
+        provider = str(llm_cfg.get("provider", "anthropic") or "anthropic").strip().lower()
+        anthropic_mode = str(llm_cfg.get("anthropic_mode", "cli") or "cli").strip().lower()
+        openai_mode = str(llm_cfg.get("openai_mode", "apikey") or "apikey").strip().lower()
+        model = str(llm_cfg.get("model", "") or "").strip()
+
+        claude_cli = shutil.which("claude") or ""
+        codex_cli = shutil.which("codex") or ""
+        node_bin = shutil.which("node") or ""
+        npm_bin = shutil.which("npm") or ""
+        python_bin = shutil.which("python3") or shutil.which("python") or ""
+
+        provider_ready = True
+        provider_reason = ""
+        if provider == "anthropic" and anthropic_mode == "cli":
+            provider_ready = bool(claude_cli)
+            if not provider_ready:
+                provider_reason = "Claude CLI binary not found."
+        elif provider == "openai" and openai_mode == "codex":
+            provider_ready = bool(codex_cli)
+            if not provider_ready:
+                provider_reason = "Codex CLI binary not found."
+        else:
+            api_key = str(llm_cfg.get("api_key", "") or "").strip()
+            base_url = str(llm_cfg.get("base_url", "") or "").strip()
+            provider_ready = bool(api_key) and bool(base_url)
+            if not provider_ready:
+                provider_reason = "Provider API key or base URL is not configured."
+
+        workspace_mode = str(integrations.get("workspace_mode", "local") or "local").strip().lower()
+        workspace_root = str(ctx.project_service.state_manager.workspace_root or "").strip()
+        workspace_exists = bool(workspace_root) and os.path.isdir(workspace_root)
+        workspace_writable = bool(workspace_exists and os.access(workspace_root, os.W_OK | os.X_OK))
+
+        github_repo = str(integrations.get("github_repo", "") or "").strip()
+        github_token = str(integrations.get("github_token", "") or "").strip()
+        github_verified = bool(integrations.get("github_verified"))
+        vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
+        vercel_token = str(integrations.get("vercel_token", "") or "").strip()
+        vercel_verified = bool(integrations.get("vercel_verified"))
+        stripe_secret = str(integrations.get("stripe_secret_key", "") or "").strip()
+        stripe_verified = bool(integrations.get("stripe_verified"))
+
+        warning_seconds = max(30, int(ui_cfg.get("run_stall_warning_seconds", 90) or 90))
+        critical_seconds = max(warning_seconds, int(ui_cfg.get("run_stall_critical_seconds", 180) or 180))
+        active_run: dict[str, Any] | None = None
+        active_incident: dict[str, Any] | None = None
+        recent_runs = ctx.run_service.list_runs(limit=200)
+        for run in recent_runs:
+            if not isinstance(run, dict):
+                continue
+            status = str(run.get("status", "") or "").strip().lower()
+            if status not in ACTIVE_RUN_STATES:
+                continue
+            run_id = str(run.get("id", "") or "").strip()
+            guardrails = ctx.run_service.guardrail_status(run_id) or {}
+            project_id = str(run.get("project_id", "") or "").strip()
+            workforce = ctx.workforce_presence_service.snapshot(
+                project_id=project_id or None,
+                include_assigned=True,
+                include_reporting=True,
+            )
+            run_status = build_run_status_payload(
+                run,
+                guardrails=guardrails,
+                workforce_snapshot=workforce,
+                heartbeat_seq=0,
+            )
+            active_incident = detect_run_incident(
+                run_status,
+                warning_seconds=warning_seconds,
+                critical_seconds=critical_seconds,
+            )
+            active_run = {
+                "run_id": run_id,
+                "project_id": project_id,
+                "status": status,
+                "phase_label": str(run_status.get("phase_label", "") or ""),
+                "elapsed_seconds": int(run_status.get("elapsed_seconds", 0) or 0),
+                "last_activity_at": str(run_status.get("last_activity_at", "") or ""),
+            }
+            break
+
+        tools = {
+            "claude_cli": {"available": bool(claude_cli), "path": claude_cli},
+            "codex_cli": {"available": bool(codex_cli), "path": codex_cli},
+            "node": {"available": bool(node_bin), "path": node_bin},
+            "npm": {"available": bool(npm_bin), "path": npm_bin},
+            "python": {"available": bool(python_bin), "path": python_bin},
+        }
+        integrations_payload = {
+            "workspace_mode": workspace_mode,
+            "github": {
+                "configured": bool(github_token and github_repo),
+                "verified": github_verified,
+                "repo": github_repo,
+            },
+            "vercel": {
+                "configured": bool(vercel_token and vercel_project_name),
+                "verified": vercel_verified,
+                "project_name": vercel_project_name,
+            },
+            "stripe": {
+                "configured": bool(stripe_secret),
+                "verified": stripe_verified,
+            },
+        }
+
+        status = "ok"
+        if not provider_ready or not workspace_exists or not workspace_writable:
+            status = "degraded"
+        if active_incident and str(active_incident.get("severity", "")).lower() == "critical":
+            status = "degraded"
+
+        return {
+            "status": status,
+            "app_version": ctx.app_version,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "provider": {
+                "name": provider,
+                "model": model,
+                "mode": anthropic_mode if provider == "anthropic" else openai_mode if provider == "openai" else "apikey",
+                "ready": provider_ready,
+                "reason": provider_reason,
+            },
+            "tools": tools,
+            "workspace": {
+                "root": workspace_root,
+                "exists": workspace_exists,
+                "writable": workspace_writable,
+            },
+            "integrations": integrations_payload,
+            "active_run": active_run,
+            "latest_incident": active_incident,
+        }
+
     @router.get("/health")
     def v1_health() -> dict[str, Any]:
         cfg = ctx.load_config()
@@ -256,6 +398,10 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             "app_version": ctx.app_version,
             "features": flags.model_dump(),
         }
+
+    @router.get("/system/readiness")
+    def v1_system_readiness() -> dict[str, Any]:
+        return _system_readiness_payload()
 
     @router.get("/feature-flags")
     def v1_feature_flags() -> dict[str, Any]:
