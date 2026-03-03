@@ -5,6 +5,7 @@ import type {
   AutoLaunchStatus,
   ChatMessage,
   CompletionCelebrationPayload,
+  PromptExample,
   Project,
   RunDoneTerminalState,
   RunIncidentEvent,
@@ -269,6 +270,7 @@ const TYPEWRITER_SENTENCE_DELAY_MS = 52;
 const PROMPT_CATEGORY_ALL = 'all';
 const PROMPT_EXAMPLES_CATEGORY_KEY = 'compaas_prompt_examples_category';
 const PROMPT_EXAMPLES_RECENT_KEY = 'compaas_prompt_examples_recent';
+const PROMPT_EXAMPLES_SEEN_BY_PROJECT_KEY = 'compaas_prompt_examples_seen_by_project';
 const PROMPT_EXAMPLES_RECENT_LIMIT = 5;
 
 function looksExecutionRequest(input: string): boolean {
@@ -911,6 +913,95 @@ function MessageBubble({
 
 // ---- Empty state ----
 
+interface PromptExamplesStarterProps {
+  category: string;
+  onCategoryChange: (category: string) => void;
+  examples: PromptExample[];
+  recentExamples: PromptExample[];
+  onSelectExample: (exampleId: string) => void;
+  onClose: () => void;
+  showClose: boolean;
+}
+
+function PromptExamplesStarter({
+  category,
+  onCategoryChange,
+  examples,
+  recentExamples,
+  onSelectExample,
+  onClose,
+  showClose,
+}: PromptExamplesStarterProps) {
+  return (
+    <div className="prompt-starter-panel animate-slide-up">
+      <div className="prompt-starter-header">
+        <div>
+          <p className="prompt-starter-title">Prompt Examples</p>
+          <p className="prompt-starter-subtitle">Pick a starter app idea and we will inject the full prompt into chat.</p>
+        </div>
+        {showClose && (
+          <button type="button" className="prompt-starter-close" onClick={onClose}>
+            Hide
+          </button>
+        )}
+      </div>
+
+      <div className="prompt-starter-categories">
+        <button
+          type="button"
+          className={`prompt-starter-category${category === PROMPT_CATEGORY_ALL ? ' prompt-starter-category-active' : ''}`}
+          onClick={() => onCategoryChange(PROMPT_CATEGORY_ALL)}
+        >
+          All
+        </button>
+        {PROMPT_EXAMPLE_CATEGORIES.map((item) => (
+          <button
+            key={item}
+            type="button"
+            className={`prompt-starter-category${category === item ? ' prompt-starter-category-active' : ''}`}
+            onClick={() => onCategoryChange(item)}
+          >
+            {item}
+          </button>
+        ))}
+      </div>
+
+      {recentExamples.length > 0 && (
+        <div className="prompt-starter-recent">
+          <span className="prompt-starter-recent-label">Recent</span>
+          {recentExamples.map((example) => (
+            <button
+              key={`recent-${example.id}`}
+              type="button"
+              className="prompt-starter-recent-chip"
+              onClick={() => onSelectExample(example.id)}
+              title={example.prompt}
+            >
+              {example.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="prompt-starter-list">
+        {examples.map((example) => (
+          <button
+            key={example.id}
+            type="button"
+            className="prompt-starter-card"
+            onClick={() => onSelectExample(example.id)}
+            title={example.prompt}
+          >
+            <span className="prompt-starter-card-title">{example.label}</span>
+            <span className="prompt-starter-card-badge">{example.category}</span>
+            <span className="prompt-starter-card-preview">{example.prompt}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function EmptyState({ ceoName = 'CEO', requireProject = false }: { ceoName?: string; requireProject?: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-4 py-20">
@@ -1398,6 +1489,7 @@ export default function ChatPanel({
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [showPromptExamplesPanel, setShowPromptExamplesPanel] = useState(false);
   const [promptExampleCategory, setPromptExampleCategory] = useState<string>(() => {
     try {
       const stored = localStorage.getItem(PROMPT_EXAMPLES_CATEGORY_KEY) || '';
@@ -1426,7 +1518,23 @@ export default function ChatPanel({
       return [];
     }
   });
-  const [selectedPromptExampleId, setSelectedPromptExampleId] = useState('');
+  const [promptExamplesSeenByProject, setPromptExamplesSeenByProject] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem(PROMPT_EXAMPLES_SEEN_BY_PROJECT_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.entries(parsed as Record<string, unknown>).reduce<Record<string, boolean>>((acc, [key, value]) => {
+        const normalizedKey = String(key || '').trim();
+        if (!normalizedKey) return acc;
+        acc[normalizedKey] = Boolean(value);
+        return acc;
+      }, {});
+    } catch {
+      return {};
+    }
+  });
+  const [promptExamplesHiddenByProject, setPromptExamplesHiddenByProject] = useState<Record<string, boolean>>({});
 
   // Feature: Micro Project mode (fast solo CEO path)
   const [showMicroApprovalCard, setShowMicroApprovalCard] = useState(false);
@@ -1480,6 +1588,22 @@ export default function ChatPanel({
   const waitStartedAtRef = useRef<number | null>(null);
   const celebrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenCelebrationRunsRef = useRef<Set<string>>(new Set());
+  const activePromptProjectKey = activeProjectId || '__global__';
+
+  const markPromptExamplesSeen = useCallback((projectKey: string) => {
+    const normalized = String(projectKey || '').trim();
+    if (!normalized) return;
+    setPromptExamplesSeenByProject((prev) => {
+      if (prev[normalized]) return prev;
+      const next = { ...prev, [normalized]: true };
+      try {
+        localStorage.setItem(PROMPT_EXAMPLES_SEEN_BY_PROJECT_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage failures.
+      }
+      return next;
+    });
+  }, []);
 
   const focusInput = useCallback(() => {
     requestAnimationFrame(() => {
@@ -1535,6 +1659,18 @@ export default function ChatPanel({
       // Ignore storage failures.
     }
   }, [promptRecentExampleIds]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROMPT_EXAMPLES_SEEN_BY_PROJECT_KEY, JSON.stringify(promptExamplesSeenByProject));
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [promptExamplesSeenByProject]);
+
+  useEffect(() => {
+    setShowPromptExamplesPanel(false);
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (!isWaiting) {
@@ -1663,9 +1799,14 @@ export default function ChatPanel({
   // Load history
   useEffect(() => {
     fetchChatHistory(150, activeProjectId).then((history) => {
-      if (Array.isArray(history)) setMessages(history);
+      if (!Array.isArray(history)) return;
+      setMessages(history);
+      const hasConversation = history.some((message) => message && (message.role === 'user' || message.role === 'ceo'));
+      if (hasConversation) {
+        markPromptExamplesSeen(activeProjectId || '__global__');
+      }
     }).catch(() => {});
-  }, [activeProjectId]);
+  }, [activeProjectId, markPromptExamplesSeen]);
 
   // Load CEO memories
   useEffect(() => {
@@ -2346,6 +2487,7 @@ export default function ChatPanel({
       timestamp: new Date().toISOString(),
       project_id: activeProjectId,
     }]);
+    markPromptExamplesSeen(activePromptProjectKey);
     void safeMirrorTelegram(userName, text, activeProjectId || '');
     setInput('');
     focusInput();
@@ -2379,7 +2521,7 @@ export default function ChatPanel({
       return;
     }
     ws.send(payload);
-  }, [activeProjectId, connectWebSocket, focusInput, input, isWaiting, microProjectMode, safeMirrorTelegram, stopTypingAnimation, userName]);
+  }, [activeProjectId, activePromptProjectKey, connectWebSocket, focusInput, input, isWaiting, markPromptExamplesSeen, microProjectMode, safeMirrorTelegram, stopTypingAnimation, userName]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -2407,44 +2549,31 @@ export default function ChatPanel({
   const visibleApprovals = pendingApprovalProjects.filter((p) => !dismissedProjectIds.has(p.id));
   const hasMessages = messages.length > 0 || streamingContent;
   const activeProject = projects.find((p) => p.id === activeProjectId) || null;
-  const promptCategoryOptions = useMemo(() => {
-    return [
-      {
-        value: PROMPT_CATEGORY_ALL,
-        label: 'Examples',
-        description: 'All app categories',
-      },
-      ...PROMPT_EXAMPLE_CATEGORIES.map((category) => {
-        const total = PROMPT_EXAMPLES.filter((example) => example.category === category).length;
-        return {
-          value: category,
-          label: category,
-          description: `${total} prompts`,
-          badge: String(total),
-          keywords: [category, 'prompt examples'],
-        };
-      }),
-    ];
-  }, []);
+  const hasConversationHistory = useMemo(
+    () => messages.some((message) => message.role === 'user' || message.role === 'ceo'),
+    [messages],
+  );
+  const promptSeenForActiveProject = Boolean(promptExamplesSeenByProject[activePromptProjectKey]);
+  const promptHiddenForActiveProject = Boolean(promptExamplesHiddenByProject[activePromptProjectKey]);
   const filteredPromptExamples = useMemo(() => {
     if (promptExampleCategory === PROMPT_CATEGORY_ALL) return PROMPT_EXAMPLES;
     return PROMPT_EXAMPLES.filter((example) => example.category === promptExampleCategory);
   }, [promptExampleCategory]);
-  const promptExampleOptions = useMemo(() => {
-    return filteredPromptExamples.map((example) => ({
-      value: example.id,
-      label: example.label,
-      description: example.prompt,
-      badge: example.category,
-      keywords: [example.category, ...(example.keywords || []), example.label],
-    }));
-  }, [filteredPromptExamples]);
   const recentPromptExamples = useMemo(() => {
     return promptRecentExampleIds
       .map((exampleId) => PROMPT_EXAMPLES.find((example) => example.id === exampleId) || null)
       .filter((example): example is typeof PROMPT_EXAMPLES[number] => Boolean(example))
       .slice(0, PROMPT_EXAMPLES_RECENT_LIMIT);
   }, [promptRecentExampleIds]);
+  const shouldShowPromptStarter = Boolean(
+    activeProjectId
+    && !isWaiting
+    && !streamingContent
+    && !hasConversationHistory
+    && !promptSeenForActiveProject
+    && !promptHiddenForActiveProject,
+  );
+  const shouldRenderPromptStarter = Boolean(shouldShowPromptStarter || showPromptExamplesPanel);
   const applyPromptTemplate = useCallback((prompt: string) => {
     setInput(prompt);
     requestAnimationFrame(() => {
@@ -2461,17 +2590,26 @@ export default function ChatPanel({
     if (!nextId) return;
     const example = PROMPT_EXAMPLES.find((entry) => entry.id === nextId);
     if (!example) return;
-    setSelectedPromptExampleId(nextId);
     applyPromptTemplate(example.prompt);
     setPromptRecentExampleIds((prev) => [nextId, ...prev.filter((id) => id !== nextId)].slice(0, PROMPT_EXAMPLES_RECENT_LIMIT));
-  }, [applyPromptTemplate]);
+    setPromptExamplesHiddenByProject((prev) => ({ ...prev, [activePromptProjectKey]: true }));
+    setShowPromptExamplesPanel(false);
+  }, [activePromptProjectKey, applyPromptTemplate]);
   const handlePromptCategoryChange = useCallback((nextCategory: string) => {
     const normalized = String(nextCategory || '').trim();
     const valid = normalized === PROMPT_CATEGORY_ALL
       || PROMPT_EXAMPLE_CATEGORIES.includes(normalized as typeof PROMPT_EXAMPLE_CATEGORIES[number]);
     setPromptExampleCategory(valid ? normalized : PROMPT_CATEGORY_ALL);
-    setSelectedPromptExampleId('');
   }, []);
+  const handleOpenPromptExamplesPanel = useCallback(() => {
+    setPromptExamplesHiddenByProject((prev) => ({ ...prev, [activePromptProjectKey]: false }));
+    setShowPromptExamplesPanel(true);
+    setShowToolsMenu(false);
+  }, [activePromptProjectKey]);
+  const handleClosePromptExamplesPanel = useCallback(() => {
+    setPromptExamplesHiddenByProject((prev) => ({ ...prev, [activePromptProjectKey]: true }));
+    setShowPromptExamplesPanel(false);
+  }, [activePromptProjectKey]);
   const showConversationPanel = Boolean(
     hasMessages
     || isWaiting
@@ -2552,6 +2690,21 @@ export default function ChatPanel({
           >
             Memory{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
           </button>
+          {activeProjectId && (
+            <button
+              onClick={() => {
+                if (showPromptExamplesPanel) {
+                  handleClosePromptExamplesPanel();
+                  setShowToolsMenu(false);
+                  return;
+                }
+                handleOpenPromptExamplesPanel();
+              }}
+              style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showPromptExamplesPanel ? 'var(--tf-accent-blue)' : 'var(--tf-text-secondary)' }}
+            >
+              {showPromptExamplesPanel ? 'Hide Example Prompts' : 'Show Example Prompts'}
+            </button>
+          )}
           {pinnedIds.size > 0 && (
             <button
               onClick={() => {
@@ -2739,9 +2892,33 @@ export default function ChatPanel({
         style={floating ? { backgroundColor: 'var(--tf-bg)' } : { backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}
       >
         {!showConversationPanel ? (
-          <EmptyState ceoName={ceoName} requireProject={!activeProjectId} />
+          <div className="chat-empty-shell">
+            <EmptyState ceoName={ceoName} requireProject={!activeProjectId} />
+            {shouldRenderPromptStarter && (
+              <PromptExamplesStarter
+                category={promptExampleCategory}
+                onCategoryChange={handlePromptCategoryChange}
+                examples={filteredPromptExamples}
+                recentExamples={recentPromptExamples}
+                onSelectExample={applyPromptExample}
+                onClose={handleClosePromptExamplesPanel}
+                showClose
+              />
+            )}
+          </div>
         ) : (
           <>
+            {shouldRenderPromptStarter && (
+              <PromptExamplesStarter
+                category={promptExampleCategory}
+                onCategoryChange={handlePromptCategoryChange}
+                examples={filteredPromptExamples}
+                recentExamples={recentPromptExamples}
+                onSelectExample={applyPromptExample}
+                onClose={handleClosePromptExamplesPanel}
+                showClose
+              />
+            )}
             {searchQuery && (
               <div className="text-xs text-center py-1 mb-2" style={{ color: 'var(--tf-text-muted)', backgroundColor: 'color-mix(in srgb, var(--tf-accent-blue) 9%, transparent)', borderRadius: '6px' }}>
                 {filteredMessages.length} of {messages.length} messages match "{searchQuery}"
@@ -3218,46 +3395,6 @@ export default function ChatPanel({
       </div>
 
       {/* Input */}
-      <div className={`chat-prompt-library ${floating ? 'px-3 pt-2' : ''}`}>
-        <div className="chat-prompt-library-row">
-          <FloatingSelect
-            value={promptExampleCategory}
-            options={promptCategoryOptions}
-            onChange={handlePromptCategoryChange}
-            ariaLabel="Prompt examples category"
-            size="sm"
-            variant="input"
-            style={{ width: '150px' }}
-          />
-          <FloatingSelect
-            value={selectedPromptExampleId}
-            options={promptExampleOptions}
-            onChange={(exampleId) => applyPromptExample(exampleId)}
-            ariaLabel="Prompt examples"
-            placeholder="Choose example app prompt..."
-            searchable
-            size="sm"
-            variant="input"
-            style={{ flex: 1, minWidth: 0 }}
-          />
-        </div>
-        {recentPromptExamples.length > 0 && (
-          <div className="chat-prompt-recent">
-            <span className="chat-prompt-recent-label">Recent</span>
-            {recentPromptExamples.map((example) => (
-              <button
-                key={example.id}
-                type="button"
-                className="chat-prompt-chip"
-                title={example.prompt}
-                onClick={() => applyPromptExample(example.id)}
-              >
-                {example.label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
       <div className={`flex items-end gap-2 flex-shrink-0 ${floating ? 'px-3 py-2' : 'mt-3'}`}
         style={floating ? { borderTop: '1px solid var(--tf-surface-raised)' } : undefined}>
         <div className="flex-1 rounded-xl overflow-hidden" style={{ backgroundColor: 'var(--tf-surface)', border: '1px solid var(--tf-border)' }}>

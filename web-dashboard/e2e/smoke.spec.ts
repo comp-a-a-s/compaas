@@ -358,8 +358,8 @@ test('dashboard navigation and connector validation @smoke', async ({ page }) =>
   await expect(page.getByRole('option', { name: /Unpin Current Project/i })).toBeVisible();
   await page.keyboard.press('Escape');
 
-  await expect(page.getByRole('button', { name: 'Projects' })).toBeVisible();
-  await page.getByRole('button', { name: 'Projects' }).click();
+  await expect(page.getByRole('button', { name: 'Projects', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
   await expect(page.getByRole('button', { name: /Smoke Project Synthetic/i })).toBeVisible();
   await expect(page.getByText('#frontend').first()).toBeVisible();
   await expect(page.getByText('npm install').first()).toBeVisible();
@@ -535,11 +535,6 @@ test('ceo chat renders structured response with links, wrapping, focus, and icon
   await page.getByRole('button', { name: 'Restore previous chat width' }).click();
 
   const chatInput = page.locator('textarea').first();
-  await expect(page.getByRole('button', { name: 'Prompt examples category' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Prompt examples', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Prompt examples', exact: true }).click();
-  await page.getByRole('option', { name: /Task Manager/i }).click();
-  await expect(chatInput).toHaveValue(/minimalist task manager/i);
   await chatInput.click();
   await chatInput.fill('hello');
   await page.keyboard.press('Enter');

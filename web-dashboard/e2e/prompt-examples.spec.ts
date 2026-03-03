@@ -177,51 +177,57 @@ async function openChatPanel(page: Page) {
     }
   }
 
-  await expect(page.getByRole('button', { name: 'Prompt examples category' })).toBeVisible();
   await expect(page.locator('textarea').first()).toBeVisible();
 }
 
-test('prompt examples support category, search, replace injection, and recents persistence @smoke', async ({ page }) => {
+test('prompt starter supports first-message gating, recents, and manual reopen @smoke', async ({ page }) => {
   await page.goto('/');
   await openChatPanel(page);
 
   const chatInput = page.locator('textarea').first();
-  const categorySelect = page.getByRole('button', { name: 'Prompt examples category' });
-  const examplesSelect = page.getByRole('button', { name: 'Prompt examples', exact: true });
+  const starterTitle = page.locator('.prompt-starter-title');
+  await expect(starterTitle).toHaveText('Prompt Examples');
+  await page.getByRole('button', { name: 'Finance' }).first().click();
+  await expect(page.getByRole('button', { name: /Budget Tracker/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Task Manager/i })).toHaveCount(0);
 
-  await expect(categorySelect).toBeVisible();
-  await expect(examplesSelect).toBeVisible();
-
-  await categorySelect.click();
-  await page.getByRole('option', { name: /Finance/i }).click();
-
-  await examplesSelect.click();
-  await expect(page.getByRole('option', { name: /Task Manager/i })).toHaveCount(0);
-  await page.getByRole('option', { name: /Budget Tracker/i }).click();
+  await page.getByRole('button', { name: /Budget Tracker/i }).first().click();
   await expect(chatInput).toHaveValue(/personal budget app/i);
+  await expect(starterTitle).toHaveCount(0);
 
+  await page.getByRole('button', { name: 'Tools ▾' }).click();
+  await page.getByRole('button', { name: 'Show Example Prompts' }).click();
+  await expect(page.locator('.prompt-starter-recent')).toContainText('Budget Tracker');
   await chatInput.fill('temporary draft');
-  await examplesSelect.click();
-  await page.getByLabel('Prompt examples search').fill('portfolio');
-  await page.getByRole('option', { name: /Portfolio Tracker/i }).click();
+  await page.getByRole('button', { name: /Portfolio Tracker/i }).first().click();
   await expect(chatInput).toHaveValue(/investment portfolio tracker/i);
 
-  const recentRow = page.locator('.chat-prompt-recent');
-  await expect(recentRow).toContainText('Portfolio Tracker');
-  await expect(recentRow).toContainText('Budget Tracker');
+  const sendButton = page.getByRole('button', { name: 'Send message' });
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
+  await expect(sendButton).toBeDisabled();
+  await expect(starterTitle).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Tools ▾' }).click();
+  await page.getByRole('button', { name: 'Show Example Prompts' }).click();
+  await expect(starterTitle).toHaveText('Prompt Examples');
 
   await page.reload();
   await openChatPanel(page);
-  await expect(page.locator('.chat-prompt-recent')).toContainText('Portfolio Tracker');
-  await expect(page.locator('.chat-prompt-recent')).toContainText('Budget Tracker');
+  await expect(starterTitle).toHaveCount(0);
+  await page.getByRole('button', { name: 'Tools ▾' }).click();
+  await page.getByRole('button', { name: 'Show Example Prompts' }).click();
+  await expect(page.locator('.prompt-starter-recent')).toContainText('Portfolio Tracker');
+  await expect(page.locator('.prompt-starter-recent')).toContainText('Budget Tracker');
 });
 
-test('prompt examples row stays responsive on mobile @smoke', async ({ page }) => {
+test('prompt starter panel stays responsive on mobile @smoke', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await openChatPanel(page);
+  await expect(page.locator('.prompt-starter-title')).toHaveText('Prompt Examples');
 
-  const noOverflow = await page.locator('.chat-prompt-library').first().evaluate(
+  const noOverflow = await page.locator('.prompt-starter-panel').first().evaluate(
     (el) => el.scrollWidth <= el.clientWidth + 2,
   );
   expect(noOverflow).toBeTruthy();
