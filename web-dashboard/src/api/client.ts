@@ -16,6 +16,9 @@ import type {
   UpdateStatusResponse,
   PagedActivityResponse,
   PrQualityProfileResponse,
+  ContextPack,
+  ReviewComment,
+  ReviewSession,
 } from '../types';
 
 const BASE = '/api';
@@ -653,6 +656,67 @@ export async function updateMemoryPolicy(data: {
   return safeMutate(`${V1}/chat/memory-policy`, 'PATCH', data);
 }
 
+// ---- Context packs ----
+
+export async function listContextPacks(params?: {
+  scope?: 'global' | 'project';
+  project_id?: string;
+  enabled?: boolean;
+}): Promise<ContextPack[]> {
+  const query = new URLSearchParams();
+  if (params?.scope) query.set('scope', params.scope);
+  if (params?.project_id) query.set('project_id', params.project_id);
+  if (typeof params?.enabled === 'boolean') query.set('enabled', params.enabled ? 'true' : 'false');
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const payload = await safeFetch<{ status: string; packs: ContextPack[] }>(
+    `${V1}/context/packs${suffix}`,
+    { status: 'error', packs: [] },
+  );
+  return Array.isArray(payload.packs) ? payload.packs : [];
+}
+
+export async function createContextPack(data: {
+  scope: 'global' | 'project';
+  project_id?: string;
+  kind: 'product' | 'tech' | 'design' | 'ops' | 'constraints';
+  title: string;
+  content: string;
+  enabled?: boolean;
+  pinned?: boolean;
+  source?: string;
+}): Promise<ApiResult<{ status: string; pack?: ContextPack }>> {
+  return safeMutateResult<{ status: string; pack?: ContextPack }>(
+    `${V1}/context/packs`,
+    'POST',
+    data,
+  );
+}
+
+export async function updateContextPack(
+  packId: string,
+  data: Partial<{
+    kind: 'product' | 'tech' | 'design' | 'ops' | 'constraints';
+    title: string;
+    content: string;
+    enabled: boolean;
+    pinned: boolean;
+    source: string;
+  }>,
+): Promise<ApiResult<{ status: string; pack?: ContextPack }>> {
+  return safeMutateResult<{ status: string; pack?: ContextPack }>(
+    `${V1}/context/packs/${encodeURIComponent(packId)}`,
+    'PATCH',
+    data,
+  );
+}
+
+export async function deleteContextPack(packId: string): Promise<ApiResult<{ status: string; deleted?: boolean }>> {
+  return safeMutateResult<{ status: string; deleted?: boolean }>(
+    `${V1}/context/packs/${encodeURIComponent(packId)}`,
+    'DELETE',
+  );
+}
+
 // ---- Integrations ----
 
 export async function saveIntegrations(data: {
@@ -672,6 +736,14 @@ export async function saveIntegrations(data: {
   vercel_verified?: boolean;
   vercel_verified_at?: string;
   vercel_last_error?: string;
+  stripe_secret_key?: string;
+  stripe_publishable_key?: string;
+  stripe_webhook_secret?: string;
+  stripe_price_basic?: string;
+  stripe_price_pro?: string;
+  stripe_verified?: boolean;
+  stripe_verified_at?: string;
+  stripe_last_error?: string;
   slack_token?: string;
   webhook_url?: string;
 }): Promise<boolean> {
@@ -696,6 +768,14 @@ export async function saveIntegrationsResult(data: {
   vercel_verified?: boolean;
   vercel_verified_at?: string;
   vercel_last_error?: string;
+  stripe_secret_key?: string;
+  stripe_publishable_key?: string;
+  stripe_webhook_secret?: string;
+  stripe_price_basic?: string;
+  stripe_price_pro?: string;
+  stripe_verified?: boolean;
+  stripe_verified_at?: string;
+  stripe_last_error?: string;
   slack_token?: string;
   webhook_url?: string;
 }): Promise<ApiResult<Record<string, unknown>>> {
@@ -917,6 +997,135 @@ export async function vercelVerifyIntegration(data: { token?: string; project_na
     `${V1}/vercel/verify`,
     null,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function stripeVerifyIntegration(data: { secret_key?: string }): Promise<{
+  ok: boolean;
+  account?: Record<string, unknown>;
+  message: string;
+} | null> {
+  return safeFetch(
+    `${V1}/stripe/verify`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function listReviewSessions(
+  projectId: string,
+  params?: { status?: string; cursor?: string; limit?: number },
+): Promise<{ sessions: ReviewSession[]; next_cursor: string; total: number }> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set('status', params.status);
+  if (params?.cursor) query.set('cursor', params.cursor);
+  if (typeof params?.limit === 'number') query.set('limit', String(params.limit));
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const fallback = { status: 'error', sessions: [] as ReviewSession[], next_cursor: '', total: 0 };
+  const res = await safeFetch<{ status: string; sessions: ReviewSession[]; next_cursor: string; total: number }>(
+    `${V1}/projects/${encodeURIComponent(projectId)}/reviews/sessions${suffix}`,
+    fallback,
+  );
+  return {
+    sessions: Array.isArray(res.sessions) ? res.sessions : [],
+    next_cursor: typeof res.next_cursor === 'string' ? res.next_cursor : '',
+    total: Number(res.total || 0) || 0,
+  };
+}
+
+export async function createReviewSession(
+  projectId: string,
+  data: { deployment_url: string; run_id?: string; source?: string; created_by?: string },
+): Promise<ApiResult<{ status: string; session?: ReviewSession }>> {
+  return safeMutateResult<{ status: string; session?: ReviewSession }>(
+    `${V1}/projects/${encodeURIComponent(projectId)}/reviews/sessions`,
+    'POST',
+    data,
+  );
+}
+
+export async function fetchReviewSession(sessionId: string): Promise<{ session?: ReviewSession; comments: ReviewComment[]; project_id?: string }> {
+  const res = await safeFetch<{ status: string; session?: ReviewSession; comments?: ReviewComment[]; project_id?: string }>(
+    `${V1}/reviews/sessions/${encodeURIComponent(sessionId)}`,
+    { status: 'error', comments: [] },
+  );
+  return {
+    session: res.session,
+    comments: Array.isArray(res.comments) ? res.comments : [],
+    project_id: res.project_id,
+  };
+}
+
+export async function addReviewComment(
+  sessionId: string,
+  data: {
+    route?: string;
+    element_hint?: string;
+    note: string;
+    severity?: 'low' | 'medium' | 'high' | 'critical';
+    status?: 'open' | 'resolved';
+    author?: string;
+    tags?: string[];
+  },
+): Promise<ApiResult<{ status: string; comment?: ReviewComment }>> {
+  return safeMutateResult<{ status: string; comment?: ReviewComment }>(
+    `${V1}/reviews/sessions/${encodeURIComponent(sessionId)}/comments`,
+    'POST',
+    data,
+  );
+}
+
+export async function updateReviewComment(
+  commentId: string,
+  data: Partial<{
+    status: 'open' | 'resolved';
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    note: string;
+    route: string;
+    element_hint: string;
+    tags: string[];
+  }>,
+): Promise<ApiResult<{ status: string; comment?: ReviewComment }>> {
+  return safeMutateResult<{ status: string; comment?: ReviewComment }>(
+    `${V1}/reviews/comments/${encodeURIComponent(commentId)}`,
+    'PATCH',
+    data,
+  );
+}
+
+export async function fetchStripeBillingStatus(projectId: string): Promise<{
+  status: string;
+  project_id: string;
+  artifact_exists: boolean;
+  artifact_path: string;
+  artifact_updated_at?: string;
+  stripe_configured: boolean;
+  stripe_verified: boolean;
+  stripe_publishable_configured: boolean;
+  stripe_last_error?: string;
+  last_applied_at?: string;
+  detected_stack?: string;
+} | null> {
+  return safeFetch(
+    `${V1}/projects/${encodeURIComponent(projectId)}/billing/stripe/status`,
+    null,
+  );
+}
+
+export async function applyStripeBillingPack(
+  projectId: string,
+  data?: { scaffold_files?: boolean; sync_vercel_env?: boolean },
+): Promise<ApiResult<{
+  status: string;
+  project_id: string;
+  stack: string;
+  artifact_path: string;
+  scaffolded_files: string[];
+}>> {
+  return safeMutateResult(
+    `${V1}/projects/${encodeURIComponent(projectId)}/billing/stripe/apply`,
+    'POST',
+    data || {},
   );
 }
 

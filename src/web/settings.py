@@ -40,6 +40,9 @@ class FeatureFlags(BaseModel):
     onboarding_tours: bool = True
     run_progress_drawer: bool = True
     run_watchdog: bool = True
+    preview_review_layer: bool = True
+    context_packs: bool = True
+    stripe_billing_pack: bool = True
 
 
 class RuntimeSettings(BaseSettings):

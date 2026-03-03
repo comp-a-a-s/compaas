@@ -7,8 +7,12 @@ import {
   createProject,
   deleteProject as deleteProjectApi,
   updateProjectTags as updateProjectTagsApi,
+  applyStripeBillingPack,
+  fetchStripeBillingStatus,
 } from '../api/client';
 import FloatingSelect from './ui/FloatingSelect';
+import PreviewReviewPanel from './PreviewReviewPanel';
+import ContextPackPanel from './ContextPackPanel';
 
 interface ProjectPanelProps {
   projects: Project[];
@@ -24,6 +28,9 @@ interface ProjectPanelProps {
   defaultGithubRepo?: string;
   defaultGithubBranch?: string;
   githubConfigured?: boolean;
+  contextPacksEnabled?: boolean;
+  previewReviewEnabled?: boolean;
+  stripeBillingPackEnabled?: boolean;
   onGitHubSetupRequired?: () => void;
 }
 
@@ -1599,6 +1606,9 @@ interface ProjectDetailProps {
   tagsError?: string;
   initialTab?: ProjectTab;
   onApproved?: () => void;
+  contextPacksEnabled?: boolean;
+  previewReviewEnabled?: boolean;
+  stripeBillingPackEnabled?: boolean;
 }
 function ProjectDetail({
   project,
@@ -1612,6 +1622,9 @@ function ProjectDetail({
   tagsError = '',
   initialTab,
   onApproved,
+  contextPacksEnabled = true,
+  previewReviewEnabled = true,
+  stripeBillingPackEnabled = true,
 }: ProjectDetailProps) {
   void initialTab;
   void onApproved;
@@ -1653,10 +1666,48 @@ function ProjectDetail({
   ), [project.run_instructions]);
   const tagLabels = useMemo(() => normalizeTagList(project.tags ?? []), [project.tags]);
   const [tagDraft, setTagDraft] = useState(() => tagLabels.join(', '));
+  const [billingStatus, setBillingStatus] = useState<{
+    artifact_exists: boolean;
+    artifact_path: string;
+    stripe_configured: boolean;
+    stripe_verified: boolean;
+    stripe_last_error?: string;
+    detected_stack?: string;
+    last_applied_at?: string;
+  } | null>(null);
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingMessage, setBillingMessage] = useState('');
+  const [showContextPacks, setShowContextPacks] = useState(false);
+  const [showPreviewReviews, setShowPreviewReviews] = useState(false);
+
+  const loadBillingStatus = useCallback(async () => {
+    if (!stripeBillingPackEnabled) {
+      setBillingStatus(null);
+      return;
+    }
+    const payload = await fetchStripeBillingStatus(project.id);
+    if (!payload || payload.status !== 'ok') {
+      setBillingStatus(null);
+      return;
+    }
+    setBillingStatus({
+      artifact_exists: Boolean(payload.artifact_exists),
+      artifact_path: String(payload.artifact_path || ''),
+      stripe_configured: Boolean(payload.stripe_configured),
+      stripe_verified: Boolean(payload.stripe_verified),
+      stripe_last_error: payload.stripe_last_error,
+      detected_stack: payload.detected_stack,
+      last_applied_at: payload.last_applied_at,
+    });
+  }, [project.id, stripeBillingPackEnabled]);
 
   useEffect(() => {
     setTagDraft(tagLabels.join(', '));
   }, [project.id, tagLabels]);
+
+  useEffect(() => {
+    void loadBillingStatus();
+  }, [loadBillingStatus]);
 
   return (
     <div
@@ -1890,6 +1941,107 @@ function ProjectDetail({
               ))}
             </div>
           )}
+
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            {contextPacksEnabled && (
+              <button
+                type="button"
+                onClick={() => setShowContextPacks((prev) => !prev)}
+                className="text-xs px-2.5 py-1.5 rounded-md"
+                style={{
+                  border: '1px solid var(--tf-border)',
+                  backgroundColor: 'var(--tf-surface-raised)',
+                  color: 'var(--tf-text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                {showContextPacks ? 'Hide Context Packs' : 'Context Packs'}
+              </button>
+            )}
+            {stripeBillingPackEnabled && (
+              <button
+                type="button"
+                onClick={() => {
+                  setBillingBusy(true);
+                  setBillingMessage('Generating billing pack...');
+                  void applyStripeBillingPack(project.id, { scaffold_files: false, sync_vercel_env: false }).then((result) => {
+                    setBillingBusy(false);
+                    if (!result.ok) {
+                      setBillingMessage(result.detail || 'Failed to generate billing pack.');
+                      return;
+                    }
+                    setBillingMessage('Billing pack generated.');
+                    void loadBillingStatus();
+                  }).catch(() => {
+                    setBillingBusy(false);
+                    setBillingMessage('Failed to generate billing pack.');
+                  });
+                }}
+                disabled={billingBusy}
+                className="text-xs px-2.5 py-1.5 rounded-md"
+                style={{
+                  border: '1px solid var(--tf-border)',
+                  backgroundColor: billingBusy ? 'var(--tf-surface-raised)' : 'var(--tf-surface-raised)',
+                  color: 'var(--tf-text-secondary)',
+                  cursor: billingBusy ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {billingBusy ? 'Generating…' : 'Generate Billing Pack'}
+              </button>
+            )}
+            {previewReviewEnabled && (
+              <button
+                type="button"
+                onClick={() => setShowPreviewReviews((prev) => !prev)}
+                className="text-xs px-2.5 py-1.5 rounded-md"
+                style={{
+                  border: '1px solid var(--tf-border)',
+                  backgroundColor: 'var(--tf-surface-raised)',
+                  color: 'var(--tf-text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                {showPreviewReviews ? 'Hide Reviews' : 'Preview Reviews'}
+              </button>
+            )}
+          </div>
+          {stripeBillingPackEnabled && billingStatus && (
+            <div className="mt-2 rounded-lg px-3 py-2" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}>
+              <p className="text-xs" style={{ color: 'var(--tf-text-secondary)', margin: 0 }}>
+                Stripe: {billingStatus.stripe_verified ? 'Verified' : billingStatus.stripe_configured ? 'Configured (not verified)' : 'Not configured'}
+              </p>
+              {billingStatus.detected_stack && (
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)', marginBottom: 0 }}>
+                  Stack: {billingStatus.detected_stack}
+                </p>
+              )}
+              {billingStatus.artifact_exists && billingStatus.artifact_path && (
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)', marginBottom: 0, overflowWrap: 'anywhere' }}>
+                  Artifact: {billingStatus.artifact_path}
+                </p>
+              )}
+              {!billingStatus.stripe_verified && billingStatus.stripe_last_error && (
+                <p className="text-xs mt-1" style={{ color: 'var(--tf-warning)', marginBottom: 0 }}>
+                  {billingStatus.stripe_last_error}
+                </p>
+              )}
+            </div>
+          )}
+          {stripeBillingPackEnabled && billingMessage && (
+            <p className="text-xs mt-2" style={{ color: 'var(--tf-text-muted)' }}>
+              {billingMessage}
+            </p>
+          )}
+          {contextPacksEnabled && showContextPacks && (
+            <div className="mt-3">
+              <ContextPackPanel activeProjectId={project.id} defaultScope="project" />
+            </div>
+          )}
+          {previewReviewEnabled && showPreviewReviews && (
+            <div className="mt-3">
+              <PreviewReviewPanel projectId={project.id} />
+            </div>
+          )}
         </section>
       </div>
     </div>
@@ -1911,6 +2063,9 @@ export default function ProjectPanel({
   defaultGithubRepo = '',
   defaultGithubBranch = 'master',
   githubConfigured = false,
+  contextPacksEnabled = true,
+  previewReviewEnabled = true,
+  stripeBillingPackEnabled = true,
   onGitHubSetupRequired,
 }: ProjectPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2353,6 +2508,9 @@ export default function ProjectPanel({
             savingTags={savingTags}
             tagsError={tagsError}
             initialTab={initialProjectId ? 'overview' : undefined}
+            contextPacksEnabled={contextPacksEnabled}
+            previewReviewEnabled={previewReviewEnabled}
+            stripeBillingPackEnabled={stripeBillingPackEnabled}
           />
         </div>
       )}

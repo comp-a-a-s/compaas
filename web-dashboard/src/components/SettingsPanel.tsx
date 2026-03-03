@@ -7,6 +7,7 @@ import {
   saveIntegrationsResult,
   githubVerifyIntegration,
   vercelVerifyIntegration,
+  stripeVerifyIntegration,
   fetchGithubRepos,
   createGithubRepo,
   githubSecretScan,
@@ -27,13 +28,14 @@ import type { AppConfig, LlmConfig, UpdateStatusResponse } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
 import FloatingSelect from './ui/FloatingSelect';
+import ContextPackPanel from './ContextPackPanel';
 
 // ---- Types ----
 
 interface SettingsPanelProps {
   onConfigUpdated?: () => void;
   initialTab?: SettingsTab;
-  focusConnector?: 'github' | 'vercel' | null;
+  focusConnector?: 'github' | 'vercel' | 'stripe' | null;
 }
 
 // ---- CSS variable colour references (no hard-coded hex) ----
@@ -107,6 +109,14 @@ interface IntegrationSettings {
   vercel_verified: boolean;
   vercel_verified_at: string;
   vercel_last_error: string;
+  stripe_secret_key: string;
+  stripe_publishable_key: string;
+  stripe_webhook_secret: string;
+  stripe_price_basic: string;
+  stripe_price_pro: string;
+  stripe_verified: boolean;
+  stripe_verified_at: string;
+  stripe_last_error: string;
   slack_token: string;
   webhook_url: string;
 }
@@ -131,6 +141,14 @@ function integrationsFromConfig(config: AppConfig | null): IntegrationSettings {
     vercel_verified: Boolean(config?.integrations?.vercel_verified),
     vercel_verified_at: config?.integrations?.vercel_verified_at ?? '',
     vercel_last_error: config?.integrations?.vercel_last_error ?? '',
+    stripe_secret_key: config?.integrations?.stripe_secret_key ?? '',
+    stripe_publishable_key: config?.integrations?.stripe_publishable_key ?? '',
+    stripe_webhook_secret: config?.integrations?.stripe_webhook_secret ?? '',
+    stripe_price_basic: config?.integrations?.stripe_price_basic ?? '',
+    stripe_price_pro: config?.integrations?.stripe_price_pro ?? '',
+    stripe_verified: Boolean(config?.integrations?.stripe_verified),
+    stripe_verified_at: config?.integrations?.stripe_verified_at ?? '',
+    stripe_last_error: config?.integrations?.stripe_last_error ?? '',
     slack_token: config?.integrations?.slack_token ?? '',
     webhook_url: config?.integrations?.webhook_url ?? '',
   };
@@ -1218,10 +1236,17 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [vercelToken, setVercelToken] = useState('');
   const [vercelTeamId, setVercelTeamId] = useState('');
   const [vercelProjectName, setVercelProjectName] = useState('');
+  const [stripeSecretKey, setStripeSecretKey] = useState('');
+  const [stripePublishableKey, setStripePublishableKey] = useState('');
+  const [stripeWebhookSecret, setStripeWebhookSecret] = useState('');
+  const [stripePriceBasic, setStripePriceBasic] = useState('');
+  const [stripePricePro, setStripePricePro] = useState('');
   const [slackToken, setSlackToken] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
   const [githubTokenMasked, setGithubTokenMasked] = useState(false);
   const [vercelTokenMasked, setVercelTokenMasked] = useState(false);
+  const [stripeSecretKeyMasked, setStripeSecretKeyMasked] = useState(false);
+  const [stripeWebhookSecretMasked, setStripeWebhookSecretMasked] = useState(false);
   const [slackTokenMasked, setSlackTokenMasked] = useState(false);
   const [githubVerified, setGithubVerified] = useState(false);
   const [githubVerifiedAt, setGithubVerifiedAt] = useState('');
@@ -1229,14 +1254,18 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [vercelVerified, setVercelVerified] = useState(false);
   const [vercelVerifiedAt, setVercelVerifiedAt] = useState('');
   const [vercelLastError, setVercelLastError] = useState('');
+  const [stripeVerified, setStripeVerified] = useState(false);
+  const [stripeVerifiedAt, setStripeVerifiedAt] = useState('');
+  const [stripeLastError, setStripeLastError] = useState('');
   const [vercelDefaultTarget, setVercelDefaultTarget] = useState<'preview' | 'production'>('preview');
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [githubRepoOptions, setGithubRepoOptions] = useState<Array<{ full_name: string; default_branch: string }>>([]);
   const [integrationOpsStatus, setIntegrationOpsStatus] = useState('');
   const [integrationOpsBusy, setIntegrationOpsBusy] = useState(false);
-  const [quickVerifyBusy, setQuickVerifyBusy] = useState<'' | 'github' | 'vercel'>('');
+  const [quickVerifyBusy, setQuickVerifyBusy] = useState<'' | 'github' | 'vercel' | 'stripe'>('');
   const [githubInlineStatus, setGithubInlineStatus] = useState('');
   const [vercelInlineStatus, setVercelInlineStatus] = useState('');
+  const [stripeInlineStatus, setStripeInlineStatus] = useState('');
   const [showAdvancedIntegrationControls, setShowAdvancedIntegrationControls] = useState(false);
   const [repoPathForOps, setRepoPathForOps] = useState('');
   const [rollbackCommit, setRollbackCommit] = useState('');
@@ -1245,6 +1274,7 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [vercelEnvValue, setVercelEnvValue] = useState('');
   const [prQualityProfile, setPrQualityProfile] = useState<'strict' | 'balanced' | 'fast'>('balanced');
   const [prProfileStatus, setPrProfileStatus] = useState('');
+  const stripeBillingEnabled = config?.feature_flags?.stripe_billing_pack !== false;
 
   const refreshUpdateStatus = useCallback(async (forceRefresh = false) => {
     setUpdateStatusBusy(true);
@@ -1538,6 +1568,53 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     setQuickVerifyBusy('');
   };
 
+  const handleQuickVerifyStripe = async () => {
+    const secretForVerify = stripeSecretKeyMasked ? undefined : stripeSecretKey.trim();
+    setStripeInlineStatus('');
+    if (!secretForVerify && !stripeSecretKeyMasked) {
+      setStripeInlineStatus('Secret key is required for verification.');
+      setIntegrationOpsStatus('Stripe verification requires a secret key.');
+      return;
+    }
+    setQuickVerifyBusy('stripe');
+    setStripeInlineStatus('Saving connector settings...');
+    setIntegrationOpsStatus('Saving Stripe connector settings...');
+    const saved = await saveIntegrationsResult({
+      stripe_secret_key: stripeSecretKeyMasked ? REDACTED_SECRET : stripeSecretKey.trim(),
+      stripe_publishable_key: stripePublishableKey.trim(),
+      stripe_webhook_secret: stripeWebhookSecretMasked ? REDACTED_SECRET : stripeWebhookSecret.trim(),
+      stripe_price_basic: stripePriceBasic.trim(),
+      stripe_price_pro: stripePricePro.trim(),
+    });
+    if (!saved.ok) {
+      setQuickVerifyBusy('');
+      setStripeVerified(false);
+      const detail = saved.detail || 'Failed to save settings before verification.';
+      setStripeInlineStatus(detail);
+      setIntegrationOpsStatus(detail);
+      return;
+    }
+    setStripeInlineStatus('Verifying connector...');
+    setIntegrationOpsStatus('Verifying Stripe connector...');
+    const result = await stripeVerifyIntegration({ secret_key: secretForVerify });
+    if (!result) {
+      setQuickVerifyBusy('');
+      setStripeVerified(false);
+      setStripeLastError('Network error during Stripe verification.');
+      setStripeInlineStatus('Verification failed due to a network error.');
+      setIntegrationOpsStatus('Stripe verification failed due to a network error.');
+      return;
+    }
+    const verified = Boolean(result.ok);
+    const verifiedAt = verified ? new Date().toISOString() : '';
+    setStripeVerified(verified);
+    setStripeVerifiedAt(verifiedAt);
+    setStripeLastError(verified ? '' : result.message || 'Stripe verification failed.');
+    setStripeInlineStatus(result.message || (verified ? 'Stripe connector verified.' : 'Stripe verification failed.'));
+    setIntegrationOpsStatus(result.message || (verified ? 'Stripe connector verified.' : 'Stripe verification failed.'));
+    setQuickVerifyBusy('');
+  };
+
   useEffect(() => {
     // Apply compact mode on mount
     document.body.classList.toggle('compact-mode', compactMode);
@@ -1585,6 +1662,26 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         setVercelVerified(Boolean(integrationCfg.vercel_verified));
         setVercelVerifiedAt(integrationCfg.vercel_verified_at || '');
         setVercelLastError(integrationCfg.vercel_last_error || '');
+        if (integrationCfg.stripe_secret_key === REDACTED_SECRET) {
+          setStripeSecretKey('');
+          setStripeSecretKeyMasked(true);
+        } else {
+          setStripeSecretKey(integrationCfg.stripe_secret_key);
+          setStripeSecretKeyMasked(false);
+        }
+        if (integrationCfg.stripe_webhook_secret === REDACTED_SECRET) {
+          setStripeWebhookSecret('');
+          setStripeWebhookSecretMasked(true);
+        } else {
+          setStripeWebhookSecret(integrationCfg.stripe_webhook_secret);
+          setStripeWebhookSecretMasked(false);
+        }
+        setStripePublishableKey(integrationCfg.stripe_publishable_key);
+        setStripePriceBasic(integrationCfg.stripe_price_basic);
+        setStripePricePro(integrationCfg.stripe_price_pro);
+        setStripeVerified(Boolean(integrationCfg.stripe_verified));
+        setStripeVerifiedAt(integrationCfg.stripe_verified_at || '');
+        setStripeLastError(integrationCfg.stripe_last_error || '');
         if (integrationCfg.slack_token === REDACTED_SECRET) {
           setSlackToken('');
           setSlackTokenMasked(true);
@@ -1605,13 +1702,16 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
 
   useEffect(() => {
     if (!focusConnector) return;
+    if (focusConnector === 'stripe' && !stripeBillingEnabled) return;
     setActiveTab('integrations');
     if (focusConnector === 'github') {
       setIntegrationOpsStatus('GitHub setup is required before creating GitHub projects. Connect and verify below.');
     } else if (focusConnector === 'vercel') {
       setIntegrationOpsStatus('Vercel setup is required for deployments. Connect and verify below.');
+    } else if (focusConnector === 'stripe') {
+      setIntegrationOpsStatus('Stripe setup is required for billing scaffolds. Connect and verify below.');
     }
-  }, [focusConnector]);
+  }, [focusConnector, stripeBillingEnabled]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -1672,6 +1772,14 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         vercel_verified: vercelVerified,
         vercel_verified_at: vercelVerifiedAt,
         vercel_last_error: vercelLastError,
+        stripe_secret_key: stripeSecretKeyMasked ? REDACTED_SECRET : stripeSecretKey.trim(),
+        stripe_publishable_key: stripePublishableKey.trim(),
+        stripe_webhook_secret: stripeWebhookSecretMasked ? REDACTED_SECRET : stripeWebhookSecret.trim(),
+        stripe_price_basic: stripePriceBasic.trim(),
+        stripe_price_pro: stripePricePro.trim(),
+        stripe_verified: stripeVerified,
+        stripe_verified_at: stripeVerifiedAt,
+        stripe_last_error: stripeLastError,
         slack_token: slackTokenMasked ? REDACTED_SECRET : slackToken.trim(),
         webhook_url: webhookUrl.trim(),
       };
@@ -1682,6 +1790,8 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       const vercelConfigChanged =
         nextIntegrations.vercel_project_name !== currentIntegrations.vercel_project_name
         || nextIntegrations.vercel_token !== currentIntegrations.vercel_token;
+      const stripeConfigChanged =
+        nextIntegrations.stripe_secret_key !== currentIntegrations.stripe_secret_key;
       if (githubConfigChanged) {
         nextIntegrations.github_verified = false;
         nextIntegrations.github_verified_at = '';
@@ -1691,6 +1801,11 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         nextIntegrations.vercel_verified = false;
         nextIntegrations.vercel_verified_at = '';
         nextIntegrations.vercel_last_error = 'Vercel configuration changed. Re-verify connector.';
+      }
+      if (stripeConfigChanged) {
+        nextIntegrations.stripe_verified = false;
+        nextIntegrations.stripe_verified_at = '';
+        nextIntegrations.stripe_last_error = 'Stripe configuration changed. Re-verify connector.';
       }
       const integrationsChanged = JSON.stringify(nextIntegrations) !== JSON.stringify(currentIntegrations);
 
@@ -1720,6 +1835,9 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       setVercelVerified(nextIntegrations.vercel_verified);
       setVercelVerifiedAt(nextIntegrations.vercel_verified_at);
       setVercelLastError(nextIntegrations.vercel_last_error);
+      setStripeVerified(nextIntegrations.stripe_verified);
+      setStripeVerifiedAt(nextIntegrations.stripe_verified_at);
+      setStripeLastError(nextIntegrations.stripe_last_error);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
       onConfigUpdated?.();
@@ -1752,6 +1870,11 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     : (!vercelProjectName.trim()
       ? 'Project name is required.'
       : ((!vercelTokenMasked && !vercelToken.trim()) ? 'Token is required for verification.' : ''));
+  const stripeVerifyDisabledReason = (quickVerifyBusy.length > 0 && quickVerifyBusy !== 'stripe')
+    ? 'Another connector verification is in progress.'
+    : ((!stripeSecretKeyMasked && !stripeSecretKey.trim())
+      ? 'Secret key is required for verification.'
+      : '');
 
   return (
     <div style={{ maxWidth: '720px', margin: '0 auto' }} className="animate-fade-in">
@@ -1993,13 +2116,23 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       )}
 
       {activeTab === 'ai' && (
-        <Section title="AI Model Provider">
-          <AiProviderSection
-            key={`${config?.llm?.provider ?? 'none'}|${config?.llm?.base_url ?? 'none'}|${config?.llm?.model ?? 'none'}`}
-            llm={config?.llm}
-            onSaved={() => { fetchConfig().then((c) => { if (c) setConfig(c); }); onConfigUpdated?.(); }}
-          />
-        </Section>
+        <>
+          <Section title="AI Model Provider">
+            <AiProviderSection
+              key={`${config?.llm?.provider ?? 'none'}|${config?.llm?.base_url ?? 'none'}|${config?.llm?.model ?? 'none'}`}
+              llm={config?.llm}
+              onSaved={() => { fetchConfig().then((c) => { if (c) setConfig(c); }); onConfigUpdated?.(); }}
+            />
+          </Section>
+          {config?.feature_flags?.context_packs !== false && (
+            <Section title="Global Context Packs">
+              <p style={{ fontSize: '12px', color: C.textSecondary, marginBottom: '12px' }}>
+                Pinned global packs are injected into CEO prompts across all projects.
+              </p>
+              <ContextPackPanel defaultScope="global" />
+            </Section>
+          )}
+        </>
       )}
 
       {activeTab === 'agents' && (
@@ -2392,6 +2525,97 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                   />
                 </div>
               </div>
+
+              {stripeBillingEnabled && (
+                <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Stripe Connector</div>
+                      <div style={{ fontSize: '11px', color: C.textSecondary }}>Billing keys + verify</div>
+                    </div>
+                    <span style={{ fontSize: '11px', color: stripeVerified ? C.success : C.textMuted }}>
+                      {stripeVerified ? 'Verified' : 'Not verified'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: '1fr' }}>
+                    <input
+                      type="password"
+                      value={stripeSecretKey}
+                      onChange={(e) => setStripeSecretKey(e.target.value)}
+                      onInput={() => setStripeSecretKeyMasked(false)}
+                      placeholder={stripeSecretKeyMasked ? 'Saved (hidden). Type to replace.' : 'sk_test_...'}
+                      style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    />
+                    <input
+                      type="text"
+                      value={stripePublishableKey}
+                      onChange={(e) => setStripePublishableKey(e.target.value)}
+                      placeholder="pk_test_... (optional for verify)"
+                      style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    />
+                    <input
+                      type="password"
+                      value={stripeWebhookSecret}
+                      onChange={(e) => setStripeWebhookSecret(e.target.value)}
+                      onInput={() => setStripeWebhookSecretMasked(false)}
+                      placeholder={stripeWebhookSecretMasked ? 'Saved (hidden). Type to replace.' : 'whsec_...'}
+                      style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    />
+                    <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: '1fr 1fr', maxWidth: '420px' }}>
+                      <input
+                        type="text"
+                        value={stripePriceBasic}
+                        onChange={(e) => setStripePriceBasic(e.target.value)}
+                        placeholder="price_basic (optional)"
+                        style={{ ...inputStyle({ fontSize: '12px' }) }}
+                      />
+                      <input
+                        type="text"
+                        value={stripePricePro}
+                        onChange={(e) => setStripePricePro(e.target.value)}
+                        placeholder="price_pro (optional)"
+                        style={{ ...inputStyle({ fontSize: '12px' }) }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => { void handleQuickVerifyStripe(); }}
+                        disabled={quickVerifyBusy.length > 0 || Boolean(stripeVerifyDisabledReason)}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: '7px',
+                          border: `1px solid ${stripeVerified ? C.success : C.accent}`,
+                          backgroundColor: stripeVerified ? 'rgba(63,185,80,0.12)' : C.accentDim,
+                          color: stripeVerified ? C.success : C.accent,
+                          fontSize: '12px',
+                          cursor: (quickVerifyBusy.length > 0 || stripeVerifyDisabledReason) ? 'not-allowed' : 'pointer',
+                          opacity: (quickVerifyBusy.length > 0 || stripeVerifyDisabledReason) ? 0.75 : 1,
+                        }}
+                      >
+                        {quickVerifyBusy === 'stripe' ? 'Verifying…' : stripeVerified ? 'Verified' : 'Connect & Verify'}
+                      </button>
+                      {stripeVerifiedAt && (
+                        <span style={{ fontSize: '11px', color: C.textMuted }}>
+                          Verified {new Date(stripeVerifiedAt).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                    {stripeVerifyDisabledReason && (
+                      <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>
+                        {stripeVerifyDisabledReason}
+                      </p>
+                    )}
+                    {!stripeVerifyDisabledReason && stripeInlineStatus && (
+                      <p style={{ margin: 0, fontSize: '11px', color: stripeVerified ? C.success : C.textSecondary }}>
+                        {stripeInlineStatus}
+                      </p>
+                    )}
+                    {!stripeVerified && stripeLastError && (
+                      <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>{stripeLastError}</p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                 <p style={{ margin: 0, fontSize: '11px', color: C.textMuted }}>

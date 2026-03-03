@@ -46,6 +46,8 @@ from src.web.settings import get_runtime_settings
 from src.web.services.run_service import RunService
 from src.web.services.project_service import ProjectService
 from src.web.services.integration_service import IntegrationService
+from src.web.services.context_pack_service import ContextPackService
+from src.web.services.review_service import ReviewService
 from src.web.services.workforce_presence import WorkforcePresenceService
 from src.web.services.run_supervisor import ACTIVE_RUN_STATES, build_run_status_payload, detect_run_incident
 from src.web.routers.v1 import V1Context, create_v1_router
@@ -68,6 +70,8 @@ task_board = TaskBoard(DATA_DIR)
 run_service = RunService(DATA_DIR, runtime_settings)
 project_service = ProjectService(DATA_DIR, state_manager, task_board)
 integration_service = IntegrationService(DATA_DIR, workspace_root=WORKSPACE_ROOT)
+context_pack_service = ContextPackService(DATA_DIR)
+review_service = ReviewService(DATA_DIR)
 workforce_presence_service = WorkforcePresenceService(DATA_DIR, run_service=run_service)
 try:
     workforce_presence_service.rebuild_from_activity_log_and_runs(
@@ -368,7 +372,13 @@ def _env_first(*names: str) -> str:
 
 
 REDACTED_SECRET = "__COMPAAS_REDACTED__"
-SENSITIVE_INTEGRATION_KEYS = ("github_token", "slack_token", "vercel_token")
+SENSITIVE_INTEGRATION_KEYS = (
+    "github_token",
+    "slack_token",
+    "vercel_token",
+    "stripe_secret_key",
+    "stripe_webhook_secret",
+)
 
 
 def _redact_config_for_response(config: dict) -> dict:
@@ -1235,6 +1245,14 @@ DEFAULT_CONFIG: dict = {
         "vercel_verified": False,
         "vercel_verified_at": "",
         "vercel_last_error": "",
+        "stripe_secret_key": "",
+        "stripe_publishable_key": "",
+        "stripe_webhook_secret": "",
+        "stripe_price_basic": "",
+        "stripe_price_pro": "",
+        "stripe_verified": False,
+        "stripe_verified_at": "",
+        "stripe_last_error": "",
         "slack_token": "",
         "webhook_url": "",
     },
@@ -2112,6 +2130,7 @@ def _build_context_prompt(
     active_project = state_manager.get_project(project_id) if project_id else None
     cfg = _load_config()
     integrations = cfg.get("integrations", {}) if isinstance(cfg, dict) else {}
+    feature_flags_cfg = cfg.get("feature_flags", {}) if isinstance(cfg.get("feature_flags"), dict) else {}
 
     parts: list[str] = []
 
@@ -2161,6 +2180,20 @@ def _build_context_prompt(
             memory_text = memory_file.read().strip()
         if memory_text:
             parts.append(f"[YOUR PERSISTENT MEMORIES from previous sessions:\n{memory_text}]")
+            parts.append("")
+
+    if bool(feature_flags_cfg.get("context_packs", True)):
+        try:
+            context_payload = context_pack_service.build_prompt_context(
+                project_id=project_id,
+                max_packs=8,
+                max_chars=3500,
+            )
+        except Exception:
+            context_payload = {"text": "", "packs": []}
+        context_text = str(context_payload.get("text", "") or "").strip()
+        if context_text:
+            parts.append(context_text)
             parts.append("")
 
     if recent:
@@ -7570,6 +7603,7 @@ def save_integrations(request: Request, body: dict) -> dict:
     previous_github_repo = str(integrations.get("github_repo", "") or "").strip()
     previous_vercel_token = str(integrations.get("vercel_token", "") or "").strip()
     previous_vercel_project = str(integrations.get("vercel_project_name", "") or "").strip()
+    previous_stripe_secret = str(integrations.get("stripe_secret_key", "") or "").strip()
     sanitized = _sanitize_integration_payload(body)
     for key in (
         "workspace_mode",
@@ -7588,6 +7622,14 @@ def save_integrations(request: Request, body: dict) -> dict:
         "vercel_verified",
         "vercel_verified_at",
         "vercel_last_error",
+        "stripe_secret_key",
+        "stripe_publishable_key",
+        "stripe_webhook_secret",
+        "stripe_price_basic",
+        "stripe_price_pro",
+        "stripe_verified",
+        "stripe_verified_at",
+        "stripe_last_error",
         "slack_token",
         "webhook_url",
     ):
@@ -7606,12 +7648,17 @@ def save_integrations(request: Request, body: dict) -> dict:
         integrations["vercel_verified"] = False
         integrations["vercel_last_error"] = "Vercel configuration changed. Re-verify connector."
 
+    stripe_secret_changed = str(integrations.get("stripe_secret_key", "") or "").strip() != previous_stripe_secret
+    if stripe_secret_changed:
+        integrations["stripe_verified"] = False
+        integrations["stripe_last_error"] = "Stripe configuration changed. Re-verify connector."
+
     config["integrations"] = integrations
     _save_config(config)
     return {"status": "ok"}
 
 
-@app.get("/api/integrations/capabilities", summary="Summarise available GitHub/Vercel capabilities")
+@app.get("/api/integrations/capabilities", summary="Summarise available GitHub/Vercel/Stripe capabilities")
 def get_integration_capabilities() -> dict:
     """Return non-secret capability metadata for configured integrations."""
     integrations = _load_config().get("integrations", {})
@@ -7634,6 +7681,11 @@ def get_integration_capabilities() -> dict:
     vercel_default_target = str(integrations.get("vercel_default_target", "preview") or "preview").strip().lower()
     if vercel_default_target not in {"preview", "production"}:
         vercel_default_target = "preview"
+    stripe_secret_set = bool(str(integrations.get("stripe_secret_key", "") or "").strip())
+    stripe_publishable_set = bool(str(integrations.get("stripe_publishable_key", "") or "").strip())
+    stripe_verified = bool(integrations.get("stripe_verified"))
+    stripe_verified_at = str(integrations.get("stripe_verified_at", "") or "").strip()
+    stripe_last_error = str(integrations.get("stripe_last_error", "") or "").strip()
 
     github_capabilities = [
         "create_branch",
@@ -7649,6 +7701,11 @@ def get_integration_capabilities() -> dict:
         "deploy_preview",
         "deploy_production",
     ] if vercel_token_set else []
+    stripe_capabilities = [
+        "checkout_sessions",
+        "customer_portal",
+        "webhook_validation",
+    ] if stripe_secret_set else []
 
     return {
         "workspace_mode": workspace_mode,
@@ -7675,6 +7732,15 @@ def get_integration_capabilities() -> dict:
             "verified_at": vercel_verified_at,
             "last_error": vercel_last_error,
             "capabilities": vercel_capabilities,
+        },
+        "stripe": {
+            "configured": stripe_secret_set or stripe_publishable_set,
+            "verified": stripe_verified and stripe_secret_set,
+            "secret_configured": stripe_secret_set,
+            "publishable_configured": stripe_publishable_set,
+            "verified_at": stripe_verified_at,
+            "last_error": stripe_last_error,
+            "capabilities": stripe_capabilities,
         },
     }
 

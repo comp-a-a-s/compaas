@@ -152,6 +152,59 @@ export interface PromptExample {
   keywords?: string[];
 }
 
+export type ReviewSeverity = 'low' | 'medium' | 'high' | 'critical';
+export type ReviewStatus = 'open' | 'resolved';
+export type ReviewSessionStatus = 'open' | 'closed';
+
+export interface ReviewSession {
+  id: string;
+  project_id: string;
+  run_id?: string;
+  deployment_url: string;
+  source?: string;
+  status: ReviewSessionStatus | string;
+  created_at: string;
+  updated_at: string;
+  created_by?: string;
+  counts?: {
+    total: number;
+    unresolved: number;
+  };
+}
+
+export interface ReviewComment {
+  id: string;
+  session_id: string;
+  route?: string;
+  element_hint?: string;
+  note: string;
+  severity: ReviewSeverity | string;
+  status: ReviewStatus | string;
+  author?: string;
+  created_at: string;
+  resolved_at?: string;
+  tags?: string[];
+}
+
+export type ContextPackScope = 'global' | 'project';
+export type ContextPackKind = 'product' | 'tech' | 'design' | 'ops' | 'constraints';
+export type ContextPackSource = 'manual' | 'imported' | string;
+
+export interface ContextPack {
+  id: string;
+  scope: ContextPackScope | string;
+  project_id?: string;
+  kind: ContextPackKind | string;
+  title: string;
+  content: string;
+  enabled: boolean;
+  pinned: boolean;
+  source?: ContextPackSource;
+  hash?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'ceo' | 'system';
   content: string;
@@ -297,6 +350,9 @@ export interface FeatureFlags {
   onboarding_tours?: boolean;
   run_progress_drawer?: boolean;
   run_watchdog?: boolean;
+  preview_review_layer?: boolean;
+  context_packs?: boolean;
+  stripe_billing_pack?: boolean;
 }
 
 export type RunState = 'queued' | 'planning' | 'executing' | 'verifying' | 'done' | 'failed' | 'cancelled';
@@ -449,6 +505,14 @@ export interface AppConfig {
     vercel_verified?: boolean;
     vercel_verified_at?: string;
     vercel_last_error?: string;
+    stripe_secret_key?: string;
+    stripe_publishable_key?: string;
+    stripe_webhook_secret?: string;
+    stripe_price_basic?: string;
+    stripe_price_pro?: string;
+    stripe_verified?: boolean;
+    stripe_verified_at?: string;
+    stripe_last_error?: string;
     slack_token?: string;
     webhook_url?: string;
   };

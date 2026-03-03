@@ -959,6 +959,53 @@ def test_build_context_prompt_includes_completion_sections_guidance(monkeypatch)
     assert "Never end an execution turn with standby-only phrasing" in prompt
 
 
+def test_build_context_prompt_includes_context_pack_payload_when_enabled(monkeypatch):
+    monkeypatch.setattr(api, "_load_chat_messages", lambda *args, **kwargs: [])
+
+    class _DummyContextPackService:
+        @staticmethod
+        def build_prompt_context(**_kwargs):
+            return {
+                "text": "[CONTEXT PACKS: Apply these constraints and preferences before responding.]\\n- Tech Defaults (project/tech)\\nUse TypeScript strict mode.",
+                "packs": [{"id": "pack-1"}],
+            }
+
+    monkeypatch.setattr(api, "context_pack_service", _DummyContextPackService())
+    monkeypatch.setattr(
+        api,
+        "_load_config",
+        lambda: {
+            "user": {"name": "Idan"},
+            "agents": {},
+            "integrations": {},
+            "feature_flags": {"context_packs": True},
+        },
+    )
+
+    prompt = api._build_context_prompt("build a dashboard", user_name="Idan", ceo_name="Ari", project_id="proj12345")
+
+    assert "CONTEXT PACKS" in prompt
+    assert "Use TypeScript strict mode." in prompt
+
+
+def test_build_context_prompt_skips_context_pack_payload_when_disabled(monkeypatch):
+    monkeypatch.setattr(api, "_load_chat_messages", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        api,
+        "_load_config",
+        lambda: {
+            "user": {"name": "Idan"},
+            "agents": {},
+            "integrations": {},
+            "feature_flags": {"context_packs": False},
+        },
+    )
+
+    prompt = api._build_context_prompt("build a dashboard", user_name="Idan", ceo_name="Ari", project_id="proj12345")
+
+    assert "CONTEXT PACKS" not in prompt
+
+
 def test_structured_response_payload_extracts_deliverables_validation_and_next_actions():
     payload = api._structured_response_payload(
         """

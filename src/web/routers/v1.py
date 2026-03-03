@@ -13,9 +13,12 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.utils import emit_activity
+from src.validators import validate_safe_id
 from src.web.problem import problem_http_exception
 from src.web.services.integration_service import IntegrationService
 from src.web.services.project_service import ProjectService
+from src.web.services.context_pack_service import ContextPackService
+from src.web.services.review_service import ReviewService
 from src.web.services.run_service import RunService
 from src.web.services.workforce_presence import WorkforcePresenceService
 from src.web.services.run_supervisor import build_run_status_payload, detect_run_incident
@@ -135,6 +138,61 @@ class PrQualityProfileRequest(BaseModel):
     profile: str = Field(default="balanced")
 
 
+class ReviewSessionCreateRequest(BaseModel):
+    deployment_url: str = Field(min_length=1, max_length=500)
+    run_id: str = Field(default="", max_length=120)
+    source: str = Field(default="vercel_preview", max_length=80)
+    created_by: str = Field(default="chairman", max_length=120)
+
+
+class ReviewCommentCreateRequest(BaseModel):
+    route: str = Field(default="", max_length=240)
+    element_hint: str = Field(default="", max_length=240)
+    note: str = Field(min_length=1, max_length=4000)
+    severity: str = Field(default="medium", max_length=20)
+    status: str = Field(default="open", max_length=20)
+    author: str = Field(default="chairman", max_length=120)
+    tags: list[str] = Field(default_factory=list)
+
+
+class ReviewCommentPatchRequest(BaseModel):
+    status: str = Field(default="", max_length=20)
+    severity: str = Field(default="", max_length=20)
+    note: str = Field(default="", max_length=4000)
+    route: str = Field(default="", max_length=240)
+    element_hint: str = Field(default="", max_length=240)
+    tags: list[str] = Field(default_factory=list)
+
+
+class ContextPackCreateRequest(BaseModel):
+    scope: str = Field(default="project", max_length=20)
+    project_id: str = Field(default="", max_length=80)
+    kind: str = Field(default="ops", max_length=30)
+    title: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=15000)
+    enabled: bool = True
+    pinned: bool = True
+    source: str = Field(default="manual", max_length=80)
+
+
+class ContextPackUpdateRequest(BaseModel):
+    kind: str = Field(default="", max_length=30)
+    title: str = Field(default="", max_length=160)
+    content: str = Field(default="", max_length=15000)
+    enabled: bool | None = None
+    pinned: bool | None = None
+    source: str = Field(default="", max_length=80)
+
+
+class StripeVerifyRequest(BaseModel):
+    secret_key: str = Field(default="")
+
+
+class StripeBillingApplyRequest(BaseModel):
+    scaffold_files: bool = Field(default=False)
+    sync_vercel_env: bool = Field(default=False)
+
+
 def _classify_intent(message: str) -> dict[str, Any]:
     text = (message or "").strip().lower()
     if not text:
@@ -161,10 +219,26 @@ def _classify_intent(message: str) -> dict[str, Any]:
 
 def create_v1_router(ctx: V1Context) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["v1"])
+    review_service = ReviewService(ctx.data_dir)
+    context_pack_service = ContextPackService(ctx.data_dir)
 
     def _require_mutation_auth(request: Request) -> None:
         if ctx.require_write_auth is not None:
             ctx.require_write_auth(request)
+
+    def _feature_enabled(flag_name: str) -> bool:
+        flags = merge_feature_flags(ctx.load_config())
+        return bool(getattr(flags, flag_name, False))
+
+    def _ensure_feature(flag_name: str, title: str, path_hint: str) -> None:
+        if _feature_enabled(flag_name):
+            return
+        raise problem_http_exception(
+            status=404,
+            title=title,
+            detail=f"{title} is disabled by feature flag '{flag_name}'.",
+            type_=f"https://compaas.dev/problems/{path_hint}",
+        )
 
     def _raise_invalid_repo_path(result: dict[str, Any]) -> None:
         if result.get("status") != "error":
@@ -382,6 +456,114 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         ctx.save_config(cfg)
         return {"status": "ok", "chat_policy": policy}
 
+    @router.get("/context/packs")
+    def v1_list_context_packs(
+        scope: str = Query(default="", description="global | project"),
+        project_id: str = Query(default="", description="Project ID for project-scoped packs"),
+        enabled: str = Query(default="", description="Filter enabled state: true/false"),
+    ) -> dict[str, Any]:
+        _ensure_feature("context_packs", "Context Packs", "context-packs-disabled")
+        enabled_filter: bool | None = None
+        normalized_enabled = str(enabled or "").strip().lower()
+        if normalized_enabled in {"true", "1", "yes"}:
+            enabled_filter = True
+        elif normalized_enabled in {"false", "0", "no"}:
+            enabled_filter = False
+        packs = context_pack_service.list_packs(
+            scope=scope,
+            project_id=project_id,
+            enabled=enabled_filter,
+        )
+        return {"status": "ok", "packs": packs}
+
+    @router.post("/context/packs")
+    def v1_create_context_pack(request: Request, body: ContextPackCreateRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("context_packs", "Context Packs", "context-packs-disabled")
+        try:
+            pack = context_pack_service.create_pack(
+                scope=body.scope,
+                project_id=body.project_id.strip(),
+                kind=body.kind,
+                title=body.title,
+                content=body.content,
+                enabled=body.enabled,
+                pinned=body.pinned,
+                source=body.source,
+            )
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=400,
+                title="Invalid Context Pack",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/invalid-context-pack",
+            )
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "CREATED",
+            f"Context pack '{pack.get('title', '')}' created",
+            project_id=str(pack.get("project_id", "") or ""),
+            metadata={"scope": pack.get("scope", ""), "kind": pack.get("kind", "")},
+        )
+        return {"status": "ok", "pack": pack}
+
+    @router.patch("/context/packs/{pack_id}")
+    def v1_update_context_pack(request: Request, pack_id: str, body: ContextPackUpdateRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("context_packs", "Context Packs", "context-packs-disabled")
+        updates: dict[str, Any] = {}
+        if body.kind:
+            updates["kind"] = body.kind
+        if body.title:
+            updates["title"] = body.title
+        if body.content:
+            updates["content"] = body.content
+        if body.enabled is not None:
+            updates["enabled"] = body.enabled
+        if body.pinned is not None:
+            updates["pinned"] = body.pinned
+        if body.source:
+            updates["source"] = body.source
+        pack = context_pack_service.update_pack(pack_id, updates)
+        if not pack:
+            raise problem_http_exception(
+                status=404,
+                title="Context Pack Not Found",
+                detail=f"Context pack '{pack_id}' was not found.",
+                type_="https://compaas.dev/problems/context-pack-not-found",
+            )
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "UPDATED",
+            f"Context pack '{pack.get('title', '')}' updated",
+            project_id=str(pack.get("project_id", "") or ""),
+            metadata={"pack_id": pack_id, "scope": pack.get("scope", "")},
+        )
+        return {"status": "ok", "pack": pack}
+
+    @router.delete("/context/packs/{pack_id}")
+    def v1_delete_context_pack(request: Request, pack_id: str) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("context_packs", "Context Packs", "context-packs-disabled")
+        deleted = context_pack_service.delete_pack(pack_id)
+        if not deleted:
+            raise problem_http_exception(
+                status=404,
+                title="Context Pack Not Found",
+                detail=f"Context pack '{pack_id}' was not found.",
+                type_="https://compaas.dev/problems/context-pack-not-found",
+            )
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "DELETED",
+            f"Context pack '{pack_id}' deleted",
+            metadata={"pack_id": pack_id},
+        )
+        return {"status": "ok", "deleted": True, "pack_id": pack_id}
+
     @router.post("/projects")
     def v1_create_project(
         request: Request,
@@ -432,6 +614,163 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
                 type_="https://compaas.dev/problems/project-not-found",
             )
         return {"status": "ok", "metadata": metadata}
+
+    @router.get("/projects/{project_id}/reviews/sessions")
+    def v1_list_review_sessions(
+        project_id: str,
+        status: str = Query(default="", description="Filter by session status"),
+        cursor: str = Query(default="", description="Offset cursor"),
+        limit: int = Query(default=20, ge=1, le=200),
+    ) -> dict[str, Any]:
+        _ensure_feature("preview_review_layer", "Preview Review Layer", "preview-review-disabled")
+        try:
+            payload = review_service.list_sessions(
+                project_id,
+                status=status,
+                cursor=cursor,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=404,
+                title="Project Not Found",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/project-not-found",
+            )
+        return {"status": "ok", **payload}
+
+    @router.post("/projects/{project_id}/reviews/sessions")
+    def v1_create_review_session(
+        request: Request,
+        project_id: str,
+        body: ReviewSessionCreateRequest,
+    ) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("preview_review_layer", "Preview Review Layer", "preview-review-disabled")
+        try:
+            session = review_service.create_session(
+                project_id,
+                deployment_url=body.deployment_url,
+                run_id=body.run_id,
+                source=body.source,
+                created_by=body.created_by,
+            )
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=400,
+                title="Invalid Review Session",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/invalid-review-session",
+            )
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "REVIEW_OPENED",
+            f"Preview review opened for project {project_id}.",
+            project_id=project_id,
+            metadata={
+                "session_id": session.get("id", ""),
+                "deployment_url": session.get("deployment_url", ""),
+            },
+        )
+        return {"status": "ok", "session": session}
+
+    @router.get("/reviews/sessions/{session_id}")
+    def v1_get_review_session(session_id: str) -> dict[str, Any]:
+        _ensure_feature("preview_review_layer", "Preview Review Layer", "preview-review-disabled")
+        payload = review_service.get_session(session_id)
+        if not payload:
+            raise problem_http_exception(
+                status=404,
+                title="Review Session Not Found",
+                detail=f"Review session '{session_id}' was not found.",
+                type_="https://compaas.dev/problems/review-session-not-found",
+            )
+        return {"status": "ok", **payload}
+
+    @router.post("/reviews/sessions/{session_id}/comments")
+    def v1_add_review_comment(
+        request: Request,
+        session_id: str,
+        body: ReviewCommentCreateRequest,
+    ) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("preview_review_layer", "Preview Review Layer", "preview-review-disabled")
+        try:
+            comment = review_service.add_comment(
+                session_id,
+                route=body.route,
+                element_hint=body.element_hint,
+                note=body.note,
+                severity=body.severity,
+                status=body.status,
+                author=body.author,
+                tags=body.tags,
+            )
+        except ValueError as exc:
+            raise problem_http_exception(
+                status=400,
+                title="Invalid Review Comment",
+                detail=str(exc),
+                type_="https://compaas.dev/problems/invalid-review-comment",
+            )
+        session_payload = review_service.get_session(session_id)
+        project_id_value = str((session_payload or {}).get("project_id", "") or "")
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "REVIEW_COMMENTED",
+            "Review comment added.",
+            project_id=project_id_value,
+            metadata={
+                "session_id": session_id,
+                "comment_id": comment.get("id", ""),
+                "severity": comment.get("severity", ""),
+            },
+        )
+        return {"status": "ok", "comment": comment}
+
+    @router.patch("/reviews/comments/{comment_id}")
+    def v1_update_review_comment(
+        request: Request,
+        comment_id: str,
+        body: ReviewCommentPatchRequest,
+    ) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("preview_review_layer", "Preview Review Layer", "preview-review-disabled")
+        updates: dict[str, Any] = {}
+        if body.status:
+            updates["status"] = body.status
+        if body.severity:
+            updates["severity"] = body.severity
+        if body.note:
+            updates["note"] = body.note
+        if body.route:
+            updates["route"] = body.route
+        if body.element_hint:
+            updates["element_hint"] = body.element_hint
+        if body.tags:
+            updates["tags"] = body.tags
+        comment = review_service.update_comment(comment_id, updates)
+        if not comment:
+            raise problem_http_exception(
+                status=404,
+                title="Review Comment Not Found",
+                detail=f"Review comment '{comment_id}' was not found.",
+                type_="https://compaas.dev/problems/review-comment-not-found",
+            )
+        action = "REVIEW_RESOLVED" if str(comment.get("status", "")).lower() == "resolved" else "REVIEW_COMMENTED"
+        session_payload = review_service.get_session(str(comment.get("session_id", "") or ""))
+        project_id_value = str((session_payload or {}).get("project_id", "") or "")
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            action,
+            "Review comment updated.",
+            project_id=project_id_value,
+            metadata={"comment_id": comment_id, "status": comment.get("status", "")},
+        )
+        return {"status": "ok", "comment": comment}
 
     @router.post("/projects/{project_id}/clone")
     def v1_clone_project(request: Request, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -1130,6 +1469,31 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             "message": result.get("message", ""),
         }
 
+    @router.post("/stripe/verify")
+    def v1_stripe_verify(request: Request, body: StripeVerifyRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("stripe_billing_pack", "Stripe Billing Pack", "stripe-billing-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        secret = body.secret_key.strip() or str(integrations.get("stripe_secret_key", "") or "").strip()
+        result = ctx.integration_service.stripe_verify_connection(secret)
+        if secret:
+            integrations["stripe_secret_key"] = secret
+        verified = bool(result.get("ok"))
+        integrations["stripe_verified"] = verified
+        integrations["stripe_last_error"] = "" if verified else str(result.get("message", "") or "Stripe verification failed.")
+        if verified:
+            integrations["stripe_verified_at"] = datetime.now(timezone.utc).isoformat()
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+
+        account = result.get("account", {})
+        return {
+            "ok": verified,
+            "account": account if isinstance(account, dict) else {},
+            "message": result.get("message", ""),
+        }
+
     @router.post("/vercel/deploy")
     def v1_vercel_deploy(request: Request, body: VercelDeployRequest) -> dict[str, Any]:
         _require_mutation_auth(request)
@@ -1255,6 +1619,178 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             project_id=project_id,
             body=ProjectVercelDeployRequest(target="production"),
         )
+
+    @router.get("/projects/{project_id}/billing/stripe/status")
+    def v1_project_stripe_billing_status(project_id: str) -> dict[str, Any]:
+        _ensure_feature("stripe_billing_pack", "Stripe Billing Pack", "stripe-billing-disabled")
+        try:
+            validate_safe_id(project_id, "project_id")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid project ID format.")
+        project = ctx.project_service.state_manager.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        artifact_path = os.path.join(ctx.data_dir, "projects", project_id, "artifacts", "04_billing_pack.md")
+        artifact_exists = os.path.exists(artifact_path)
+        artifact_updated_at = ""
+        if artifact_exists:
+            try:
+                artifact_updated_at = datetime.fromtimestamp(os.path.getmtime(artifact_path), tz=timezone.utc).isoformat()
+            except OSError:
+                artifact_updated_at = ""
+        metadata = ctx.project_service.get_metadata(project_id)
+        billing_meta = metadata.get("billing", {}) if isinstance(metadata.get("billing"), dict) else {}
+        stripe_meta = billing_meta.get("stripe", {}) if isinstance(billing_meta.get("stripe"), dict) else {}
+        return {
+            "status": "ok",
+            "project_id": project_id,
+            "artifact_exists": artifact_exists,
+            "artifact_path": artifact_path if artifact_exists else "",
+            "artifact_updated_at": artifact_updated_at,
+            "stripe_configured": bool(str(integrations.get("stripe_secret_key", "") or "").strip()),
+            "stripe_verified": bool(integrations.get("stripe_verified")),
+            "stripe_publishable_configured": bool(str(integrations.get("stripe_publishable_key", "") or "").strip()),
+            "stripe_last_error": str(integrations.get("stripe_last_error", "") or "").strip(),
+            "last_applied_at": str(stripe_meta.get("last_applied_at", "") or "").strip(),
+            "detected_stack": str(stripe_meta.get("stack", "") or "").strip(),
+        }
+
+    @router.post("/projects/{project_id}/billing/stripe/apply")
+    def v1_project_apply_stripe_billing(
+        request: Request,
+        project_id: str,
+        body: StripeBillingApplyRequest,
+    ) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("stripe_billing_pack", "Stripe Billing Pack", "stripe-billing-disabled")
+        try:
+            validate_safe_id(project_id, "project_id")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid project ID format.")
+
+        project = ctx.project_service.state_manager.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        stripe_secret = str(integrations.get("stripe_secret_key", "") or "").strip()
+        stripe_publishable = str(integrations.get("stripe_publishable_key", "") or "").strip()
+        if not stripe_secret:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "stripe_not_configured",
+                    "message": "Stripe is not configured yet. Add Stripe keys in Settings → Integrations.",
+                    "settings_target": "stripe",
+                },
+            )
+        if not bool(integrations.get("stripe_verified")):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "stripe_not_verified",
+                    "message": "Stripe is configured but not verified yet. Verify the connector in Settings.",
+                    "settings_target": "stripe",
+                },
+            )
+
+        project_name = str(project.get("name", project_id) or project_id)
+        workspace_path = str(project.get("workspace_path", "") or "").strip()
+        stack = ctx.integration_service.detect_project_stack(workspace_path)
+        markdown = ctx.integration_service.build_stripe_billing_pack(
+            project_name=project_name,
+            workspace_path=workspace_path,
+            stack=stack,
+            publishable_key=stripe_publishable,
+            has_secret_key=bool(stripe_secret),
+            price_basic=str(integrations.get("stripe_price_basic", "") or "").strip(),
+            price_pro=str(integrations.get("stripe_price_pro", "") or "").strip(),
+        )
+        artifacts_dir = os.path.join(ctx.data_dir, "projects", project_id, "artifacts")
+        os.makedirs(artifacts_dir, exist_ok=True)
+        artifact_path = os.path.join(artifacts_dir, "04_billing_pack.md")
+        with open(artifact_path, "w") as f:
+            f.write(markdown)
+
+        scaffolded_files: list[str] = []
+        if body.scaffold_files and workspace_path and os.path.isdir(workspace_path):
+            env_example = os.path.join(workspace_path, ".env.billing.example")
+            with open(env_example, "w") as f:
+                f.write(
+                    "STRIPE_SECRET_KEY=\n"
+                    "STRIPE_PUBLISHABLE_KEY=\n"
+                    "STRIPE_WEBHOOK_SECRET=\n"
+                    "STRIPE_PRICE_BASIC=\n"
+                    "STRIPE_PRICE_PRO=\n"
+                )
+            scaffolded_files.append(env_example)
+
+        if body.sync_vercel_env:
+            vercel_token = str(integrations.get("vercel_token", "") or "").strip()
+            vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
+            vercel_team_id = str(integrations.get("vercel_team_id", "") or "").strip()
+            if vercel_token and vercel_project_name:
+                if stripe_publishable:
+                    ctx.integration_service.vercel_set_env(
+                        vercel_token,
+                        project_name=vercel_project_name,
+                        key="STRIPE_PUBLISHABLE_KEY",
+                        value=stripe_publishable,
+                        target=["preview", "production"],
+                        team_id=vercel_team_id,
+                    )
+                if str(integrations.get("stripe_price_basic", "") or "").strip():
+                    ctx.integration_service.vercel_set_env(
+                        vercel_token,
+                        project_name=vercel_project_name,
+                        key="STRIPE_PRICE_BASIC",
+                        value=str(integrations.get("stripe_price_basic", "") or "").strip(),
+                        target=["preview", "production"],
+                        team_id=vercel_team_id,
+                    )
+                if str(integrations.get("stripe_price_pro", "") or "").strip():
+                    ctx.integration_service.vercel_set_env(
+                        vercel_token,
+                        project_name=vercel_project_name,
+                        key="STRIPE_PRICE_PRO",
+                        value=str(integrations.get("stripe_price_pro", "") or "").strip(),
+                        target=["preview", "production"],
+                        team_id=vercel_team_id,
+                    )
+
+        metadata = ctx.project_service.get_metadata(project_id)
+        billing_meta = metadata.get("billing", {}) if isinstance(metadata.get("billing"), dict) else {}
+        billing_meta["stripe"] = {
+            "artifact_path": artifact_path,
+            "stack": stack,
+            "last_applied_at": datetime.now(timezone.utc).isoformat(),
+            "scaffolded_files": scaffolded_files,
+        }
+        ctx.project_service.update_metadata(project_id, {"billing": billing_meta})
+
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "UPDATED",
+            f"Stripe billing pack generated for {project_name}.",
+            project_id=project_id,
+            metadata={
+                "artifact_path": artifact_path,
+                "stack": stack,
+                "scaffolded_files": scaffolded_files,
+            },
+        )
+        return {
+            "status": "ok",
+            "project_id": project_id,
+            "stack": stack,
+            "artifact_path": artifact_path,
+            "scaffolded_files": scaffolded_files,
+        }
 
     @router.get("/projects/{project_id}/release-notes")
     def v1_project_release_notes(project_id: str, run_id: str = Query(default="")) -> dict[str, Any]:

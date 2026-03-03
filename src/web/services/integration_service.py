@@ -1,4 +1,4 @@
-"""Service helpers for GitHub and Vercel integration workflows."""
+"""Service helpers for GitHub, Vercel, and Stripe integration workflows."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import re
 import ssl
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
@@ -23,7 +24,7 @@ def _utcnow_iso() -> str:
 
 
 class IntegrationService:
-    """Best-effort integration actions for GitHub/Vercel workflows."""
+    """Best-effort integration actions for GitHub/Vercel/Stripe workflows."""
 
     def __init__(self, data_dir: str, workspace_root: str = ""):
         self.data_dir = data_dir
@@ -369,6 +370,43 @@ class IntegrationService:
         except Exception as exc:
             return 0, {"message": str(exc)}
 
+    @staticmethod
+    def _stripe_request(
+        token: str,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        url = f"https://api.stripe.com{path}"
+        data = None
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "COMPaaS",
+        }
+        if payload is not None:
+            encoded = urllib.parse.urlencode(payload)
+            data = encoded.encode("utf-8")
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        req = urllib.request.Request(
+            url,
+            data=data,
+            method=method.upper(),
+            headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20, context=IntegrationService._request_ssl_context()) as resp:
+                body = resp.read().decode("utf-8")
+                return resp.getcode(), json.loads(body) if body else {}
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            try:
+                parsed = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                parsed = {"message": body}
+            return exc.code, parsed
+        except Exception as exc:
+            return 0, {"message": str(exc)}
+
     def vercel_link_project(self, token: str, *, name: str, team_id: str = "") -> dict[str, Any]:
         path = f"/v10/projects{f'?teamId={team_id}' if team_id else ''}"
         status, body = self._vercel_request(token, "POST", path, {"name": name})
@@ -493,6 +531,122 @@ class IntegrationService:
         if status not in (200, 201):
             return {"status": "error", "http_status": status, "message": body.get("error", {}).get("message") or body.get("message", "Failed to set environment variable")}
         return {"status": "ok", "result": body}
+
+    def stripe_verify_connection(self, secret_key: str) -> dict[str, Any]:
+        token = (secret_key or "").strip()
+        if not token:
+            return {"status": "error", "ok": False, "message": "Stripe secret key is required."}
+        status, body = self._stripe_request(token, "GET", "/v1/account")
+        if status != 200:
+            raw_message = (
+                body.get("error", {}).get("message")
+                or body.get("message")
+                or "Failed to verify Stripe key."
+            )
+            message = self._humanize_external_error(str(raw_message or ""), provider="Stripe")
+            return {
+                "status": "error",
+                "ok": False,
+                "http_status": status,
+                "message": message,
+            }
+        account = {
+            "id": str(body.get("id", "") or "").strip(),
+            "email": str(body.get("email", "") or "").strip(),
+            "country": str(body.get("country", "") or "").strip(),
+            "business_type": str(body.get("business_type", "") or "").strip(),
+        }
+        return {
+            "status": "ok",
+            "ok": True,
+            "account": account,
+            "message": "Stripe key is valid.",
+        }
+
+    @staticmethod
+    def detect_project_stack(workspace_path: str) -> str:
+        root = str(workspace_path or "").strip()
+        if not root:
+            return "generic"
+        pkg_path = os.path.join(root, "package.json")
+        pyproject_path = os.path.join(root, "pyproject.toml")
+        requirements_path = os.path.join(root, "requirements.txt")
+        if os.path.exists(pkg_path):
+            return "node"
+        if os.path.exists(pyproject_path) or os.path.exists(requirements_path):
+            return "python"
+        return "generic"
+
+    @staticmethod
+    def build_stripe_billing_pack(
+        *,
+        project_name: str,
+        workspace_path: str,
+        stack: str,
+        publishable_key: str = "",
+        has_secret_key: bool = False,
+        price_basic: str = "",
+        price_pro: str = "",
+    ) -> str:
+        stack_setup = {
+            "node": [
+                "1. Install dependency: `npm install stripe`",
+                "2. Add API routes for checkout session and portal session.",
+                "3. Store secrets in `.env` and never ship secret keys to the browser.",
+            ],
+            "python": [
+                "1. Install dependency: `pip install stripe`",
+                "2. Add backend endpoints for checkout and customer portal.",
+                "3. Keep secret keys server-side only and load from environment variables.",
+            ],
+            "generic": [
+                "1. Add backend endpoints for checkout and billing portal.",
+                "2. Keep secret keys in server-only environment variables.",
+                "3. Integrate webhook handling before enabling production mode.",
+            ],
+        }
+        setup_steps = stack_setup.get(stack, stack_setup["generic"])
+        workspace_hint = workspace_path or "(workspace not set)"
+        lines = [
+            f"# Billing Pack: {project_name or 'Project'}",
+            "",
+            "## Summary",
+            "- Stripe billing scaffold instructions generated by COMPaaS.",
+            "- Default mode is test/sandbox. Switch to production only after webhook validation.",
+            "",
+            "## Environment Variables",
+            f"- `STRIPE_SECRET_KEY={'***configured***' if has_secret_key else '<set in Settings → Integrations>'}`",
+            f"- `STRIPE_PUBLISHABLE_KEY={publishable_key or '<set in Settings → Integrations>'}",
+            f"- `STRIPE_PRICE_BASIC={price_basic or '<optional>'}",
+            f"- `STRIPE_PRICE_PRO={price_pro or '<optional>'}",
+            "- `STRIPE_WEBHOOK_SECRET=<set after creating endpoint in Stripe Dashboard>`",
+            "",
+            "## Stack Detection",
+            f"- Detected stack: `{stack}`",
+            f"- Workspace: `{workspace_hint}`",
+            "",
+            "## Implementation Steps",
+        ]
+        lines.extend(f"- {step}" for step in setup_steps)
+        lines.extend(
+            [
+                "",
+                "## Webhook Checklist",
+                "- Create webhook endpoint in Stripe Dashboard.",
+                "- Listen to: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`.",
+                "- Verify webhook signature with `STRIPE_WEBHOOK_SECRET`.",
+                "",
+                "## Test Mode Validation",
+                "- Use Stripe test cards (e.g., `4242 4242 4242 4242`).",
+                "- Verify successful checkout + portal access.",
+                "- Confirm webhook events are received and logged.",
+                "",
+                "## Vercel Sync (Optional)",
+                "- If Vercel is connected, add Stripe env vars to preview and production environments.",
+                "- Redeploy after env updates.",
+            ]
+        )
+        return "\n".join(lines).strip() + "\n"
 
     def vercel_deploy_saved(
         self,

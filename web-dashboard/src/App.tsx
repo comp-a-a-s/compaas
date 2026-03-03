@@ -272,7 +272,7 @@ export default function App() {
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
-  const [settingsConnectorFocus, setSettingsConnectorFocus] = useState<'github' | 'vercel' | null>(null);
+  const [settingsConnectorFocus, setSettingsConnectorFocus] = useState<'github' | 'vercel' | 'stripe' | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStep, setTourStep] = useState(0);
 
@@ -287,7 +287,7 @@ export default function App() {
     setActiveProjectId(projectId);
   }, []);
 
-  const openConnectorSetup = useCallback((connector: 'github' | 'vercel') => {
+  const openConnectorSetup = useCallback((connector: 'github' | 'vercel' | 'stripe') => {
     setSettingsConnectorFocus(connector);
     setActiveTab('settings');
     setChatOpen(false);
@@ -1314,6 +1314,9 @@ export default function App() {
               defaultGithubRepo={config?.integrations?.github_repo || ''}
               defaultGithubBranch={config?.integrations?.github_default_branch || 'master'}
               githubConfigured={githubConfigured}
+              contextPacksEnabled={contextPacksEnabled}
+              previewReviewEnabled={previewReviewEnabled}
+              stripeBillingPackEnabled={stripeBillingPackEnabled}
               onProjectCreated={(projectId) => {
                 setActiveProjectId(projectId);
                 setPendingProjectId(projectId);
@@ -1358,7 +1361,7 @@ export default function App() {
             <SettingsPanel
               onConfigUpdated={handleConfigUpdated}
               initialTab={settingsConnectorFocus ? 'integrations' : 'general'}
-              focusConnector={settingsConnectorFocus}
+              focusConnector={settingsConnectorFocus === 'stripe' && !stripeBillingPackEnabled ? null : settingsConnectorFocus}
             />
           );
 
@@ -1387,6 +1390,9 @@ export default function App() {
   const ceoName = config?.agents?.['ceo'] || 'CEO';
   const userName = config?.user?.name || 'You';
   const telegramConfigured = readTelegramSnapshot().configured;
+  const previewReviewEnabled = config?.feature_flags?.preview_review_layer !== false;
+  const contextPacksEnabled = config?.feature_flags?.context_packs !== false;
+  const stripeBillingPackEnabled = config?.feature_flags?.stripe_billing_pack !== false;
   const githubConfigured = Boolean(
     config?.integrations?.github_token
     && config?.integrations?.github_repo
@@ -1501,6 +1507,9 @@ export default function App() {
               runControlBusyAction={runControlBusyAction}
               runControlMessage={runControlMessage}
               completionCelebrationEnabled={config?.ui?.completion_celebration_enabled !== false}
+              previewReviewEnabled={previewReviewEnabled}
+              contextPacksEnabled={contextPacksEnabled}
+              stripeBillingPackEnabled={stripeBillingPackEnabled}
             />
           </Suspense>
         }

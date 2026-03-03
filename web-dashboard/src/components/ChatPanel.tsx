@@ -27,10 +27,13 @@ import {
   updateMemoryPolicy,
   deployProjectToVercel,
   fetchProjectReleaseNotes,
+  applyStripeBillingPack,
 } from '../api/client';
 import FloatingSelect from './ui/FloatingSelect';
 import { useToast } from './Toast';
 import { PROMPT_EXAMPLES, PROMPT_EXAMPLE_CATEGORIES } from '../constants/promptExamples';
+import ContextPackPanel from './ContextPackPanel';
+import PreviewReviewPanel from './PreviewReviewPanel';
 
 // ---- Helpers ----
 
@@ -717,6 +720,10 @@ interface MessageBubbleProps {
   onDeployPreview?: (projectId: string) => void;
   onPromoteProduction?: (projectId: string) => void;
   onGenerateReleaseNotes?: (projectId: string) => void;
+  onStartReview?: (projectId: string, deploymentUrl?: string) => void;
+  onAddBillingPack?: (projectId: string) => void;
+  reviewActionsEnabled?: boolean;
+  billingActionsEnabled?: boolean;
 }
 
 function MessageBubble({
@@ -732,6 +739,10 @@ function MessageBubble({
   onDeployPreview,
   onPromoteProduction,
   onGenerateReleaseNotes,
+  onStartReview,
+  onAddBillingPack,
+  reviewActionsEnabled = true,
+  billingActionsEnabled = true,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [hovered, setHovered] = useState(false);
@@ -757,6 +768,11 @@ function MessageBubble({
     ? trimLinkTarget(String(autoLaunch.open_url).replace(/^open app:\s*/i, '').replace(/\*+$/g, ''))
     : '';
   const canOpenAutoLaunchUrl = normalizedAutoLaunchUrl ? isHttpUrl(normalizedAutoLaunchUrl) : false;
+  const completionPreviewUrl = useMemo(() => {
+    const links = message.structured?.open_links || [];
+    const candidate = links.find((item) => item.kind === 'url' && isHttpUrl(String(item.target || '')));
+    return candidate ? trimLinkTarget(String(candidate.target || '')) : '';
+  }, [message.structured]);
 
   return (
     <div
@@ -823,6 +839,24 @@ function MessageBubble({
                       <button type="button" className="chat-summary-copy-btn" onClick={() => onGenerateReleaseNotes?.(message.project_id || '')}>
                         Release notes
                       </button>
+                      {reviewActionsEnabled && (
+                        <button
+                          type="button"
+                          className="chat-summary-copy-btn"
+                          onClick={() => onStartReview?.(message.project_id || '', completionPreviewUrl || undefined)}
+                        >
+                          Start review
+                        </button>
+                      )}
+                      {billingActionsEnabled && (
+                        <button
+                          type="button"
+                          className="chat-summary-copy-btn"
+                          onClick={() => onAddBillingPack?.(message.project_id || '')}
+                        >
+                          Add billing pack
+                        </button>
+                      )}
                     </div>
                   )}
                   {searchQuery
@@ -1428,6 +1462,9 @@ interface ChatPanelProps {
   runControlBusyAction?: 'status' | 'retry_step' | 'cancel' | 'continue' | '';
   runControlMessage?: string;
   completionCelebrationEnabled?: boolean;
+  previewReviewEnabled?: boolean;
+  contextPacksEnabled?: boolean;
+  stripeBillingPackEnabled?: boolean;
 }
 
 export default function ChatPanel({
@@ -1460,6 +1497,9 @@ export default function ChatPanel({
   runControlBusyAction = '',
   runControlMessage = '',
   completionCelebrationEnabled = true,
+  previewReviewEnabled = true,
+  contextPacksEnabled = true,
+  stripeBillingPackEnabled = true,
 }: ChatPanelProps) {
   const { toast } = useToast();
   // Core state
@@ -1489,6 +1529,9 @@ export default function ChatPanel({
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [showContextPacks, setShowContextPacks] = useState(false);
+  const [showPreviewReview, setShowPreviewReview] = useState(false);
+  const [reviewDeploymentUrl, setReviewDeploymentUrl] = useState('');
   const [showPromptExamplesPanel, setShowPromptExamplesPanel] = useState(false);
   const [promptExampleCategory, setPromptExampleCategory] = useState<string>(() => {
     try {
@@ -1978,6 +2021,52 @@ export default function ChatPanel({
       }]);
     });
   }, [pushCeoMessage]);
+
+  const handleStartReviewFromCompletion = useCallback((projectId: string, deploymentUrl?: string) => {
+    if (!previewReviewEnabled) return;
+    const pid = String(projectId || '').trim();
+    if (!pid) return;
+    if (pid !== activeProjectId && onActiveProjectChange) {
+      onActiveProjectChange(pid);
+    }
+    setReviewDeploymentUrl(String(deploymentUrl || '').trim());
+    setShowPreviewReview(true);
+    setShowContextPacks(false);
+    setShowMemory(false);
+  }, [activeProjectId, onActiveProjectChange, previewReviewEnabled]);
+
+  const handleAddBillingPack = useCallback((projectId: string) => {
+    if (!stripeBillingPackEnabled) return;
+    const pid = String(projectId || '').trim();
+    if (!pid) return;
+    pushCeoMessage('Generating Stripe billing pack...', pid);
+    void applyStripeBillingPack(pid, { scaffold_files: false, sync_vercel_env: false }).then((result) => {
+      if (!result.ok || !result.data) {
+        const detail = result.detail || 'Unable to generate billing pack.';
+        setMessages((prev) => [...prev, {
+          role: 'ceo',
+          content: `[Error] ${detail}`,
+          timestamp: new Date().toISOString(),
+          project_id: pid,
+        }]);
+        return;
+      }
+      const artifactPath = String(result.data.artifact_path || '').trim();
+      const stack = String(result.data.stack || 'generic').trim();
+      pushCeoMessage(
+        `Billing pack is ready (${stack}). ${artifactPath ? `Artifact: ${artifactPath}` : ''}`.trim(),
+        pid,
+      );
+      onProjectDataRefresh?.();
+    }).catch(() => {
+      setMessages((prev) => [...prev, {
+        role: 'ceo',
+        content: '[Error] Billing pack generation failed due to a network error.',
+        timestamp: new Date().toISOString(),
+        project_id: pid,
+      }]);
+    });
+  }, [onProjectDataRefresh, pushCeoMessage, stripeBillingPackEnabled]);
 
   const completeAssistantTurn = useCallback(() => {
     turnErroredRef.current = false;
@@ -2619,6 +2708,8 @@ export default function ChatPanel({
     || microPendingDecision
     || planningPendingDecision
     || deployOffer
+    || (contextPacksEnabled && showContextPacks)
+    || (previewReviewEnabled && showPreviewReview)
   );
 
   // ---- Shared header controls ----
@@ -2684,12 +2775,40 @@ export default function ChatPanel({
           <button
             onClick={() => {
               setShowMemory((v) => !v);
+              setShowContextPacks(false);
+              setShowPreviewReview(false);
               setShowToolsMenu(false);
             }}
             style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showMemory ? 'var(--tf-accent-blue)' : 'var(--tf-text-secondary)' }}
           >
             Memory{memoryEntries.length > 0 ? ` (${memoryEntries.length})` : ''}
           </button>
+          {activeProjectId && contextPacksEnabled && (
+            <button
+              onClick={() => {
+                setShowContextPacks((v) => !v);
+                setShowMemory(false);
+                setShowPreviewReview(false);
+                setShowToolsMenu(false);
+              }}
+              style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showContextPacks ? 'var(--tf-accent-blue)' : 'var(--tf-text-secondary)' }}
+            >
+              {showContextPacks ? 'Hide Context Packs' : 'Context Packs'}
+            </button>
+          )}
+          {activeProjectId && previewReviewEnabled && (
+            <button
+              onClick={() => {
+                setShowPreviewReview((v) => !v);
+                setShowMemory(false);
+                setShowContextPacks(false);
+                setShowToolsMenu(false);
+              }}
+              style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showPreviewReview ? 'var(--tf-accent-blue)' : 'var(--tf-text-secondary)' }}
+            >
+              {showPreviewReview ? 'Hide Preview Reviews' : 'Preview Reviews'}
+            </button>
+          )}
           {activeProjectId && (
             <button
               onClick={() => {
@@ -2808,6 +2927,36 @@ export default function ChatPanel({
             <button onClick={() => { void handleAddMemory(); }} disabled={memorySaving || !newMemoryText.trim()} style={{ padding: '4px 8px', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', border: 'none', backgroundColor: 'var(--tf-accent-blue)', color: 'var(--tf-bg)' }}>
               {memorySaving ? '...' : '+'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {contextPacksEnabled && showContextPacks && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            zIndex: 50,
+          }}
+        >
+          <ContextPackPanel activeProjectId={activeProjectId} defaultScope={activeProjectId ? 'project' : 'global'} />
+        </div>
+      )}
+
+      {previewReviewEnabled && showPreviewReview && activeProjectId && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            zIndex: 50,
+          }}
+        >
+          <div style={{ width: '320px', maxWidth: '80vw' }}>
+            <PreviewReviewPanel projectId={activeProjectId} initialDeploymentUrl={reviewDeploymentUrl} />
           </div>
         </div>
       )}
@@ -3219,6 +3368,10 @@ export default function ChatPanel({
                   onDeployPreview={(projectId) => handleDeployFromCompletion(projectId, 'preview')}
                   onPromoteProduction={(projectId) => handleDeployFromCompletion(projectId, 'production')}
                   onGenerateReleaseNotes={handleGenerateReleaseNotes}
+                  onStartReview={handleStartReviewFromCompletion}
+                  onAddBillingPack={handleAddBillingPack}
+                  reviewActionsEnabled={previewReviewEnabled}
+                  billingActionsEnabled={stripeBillingPackEnabled}
                 />
               );
             })}
@@ -3347,6 +3500,10 @@ export default function ChatPanel({
                 onDeployPreview={(projectId) => handleDeployFromCompletion(projectId, 'preview')}
                 onPromoteProduction={(projectId) => handleDeployFromCompletion(projectId, 'production')}
                 onGenerateReleaseNotes={handleGenerateReleaseNotes}
+                onStartReview={handleStartReviewFromCompletion}
+                onAddBillingPack={handleAddBillingPack}
+                reviewActionsEnabled={previewReviewEnabled}
+                billingActionsEnabled={stripeBillingPackEnabled}
               />
             )}
             {isWaiting && !streamingContent && actionLog.length === 0 && showThinking && (
