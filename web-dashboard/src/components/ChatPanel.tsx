@@ -1242,6 +1242,11 @@ interface ChatPanelProps {
   onRunStatus?: (event: RunStatusEvent) => void;
   onRunIncident?: (event: RunIncidentEvent | null) => void;
   onRunStart?: (runId: string, projectId: string) => void;
+  runStatus?: RunStatusEvent | null;
+  runIncident?: RunIncidentEvent | null;
+  onRunControl?: (action: 'status' | 'retry_step' | 'cancel' | 'continue') => void;
+  runControlBusyAction?: 'status' | 'retry_step' | 'cancel' | 'continue' | '';
+  runControlMessage?: string;
 }
 
 export default function ChatPanel({
@@ -1268,6 +1273,11 @@ export default function ChatPanel({
   onRunStatus,
   onRunIncident,
   onRunStart,
+  runStatus = null,
+  runIncident = null,
+  onRunControl,
+  runControlBusyAction = '',
+  runControlMessage = '',
 }: ChatPanelProps) {
   const { toast } = useToast();
   // Core state
@@ -1284,6 +1294,8 @@ export default function ChatPanel({
   const [delegationContext, setDelegationContext] = useState<DelegationContext | null>(null);
   const [showActionDetails, setShowActionDetails] = useState(false);
   const [latestRunId, setLatestRunId] = useState('');
+  const [liveRunStatus, setLiveRunStatus] = useState<RunStatusEvent | null>(runStatus);
+  const [liveRunIncident, setLiveRunIncident] = useState<RunIncidentEvent | null>(runIncident);
   const [planningPendingDecision, setPlanningPendingDecision] = useState<{ message: string; reason: string; missingItems?: string[] } | null>(null);
   const [dismissedProjectIds, setDismissedProjectIds] = useState<Set<string>>(new Set());
   const [deployOffer, setDeployOffer] = useState<{ projectId: string; projectName: string; target: 'preview' | 'production' } | null>(null);
@@ -1372,6 +1384,8 @@ export default function ChatPanel({
   useEffect(() => { onRunStatusRef.current = onRunStatus; }, [onRunStatus]);
   useEffect(() => { onRunIncidentRef.current = onRunIncident; }, [onRunIncident]);
   useEffect(() => { onRunStartRef.current = onRunStart; }, [onRunStart]);
+  useEffect(() => { setLiveRunStatus(runStatus); }, [runStatus]);
+  useEffect(() => { setLiveRunIncident(runIncident); }, [runIncident]);
   useEffect(() => { isWaitingRef.current = isWaiting; }, [isWaiting]);
   useEffect(() => { telegramMirrorEnabledRef.current = telegramMirrorEnabled; }, [telegramMirrorEnabled]);
 
@@ -1390,6 +1404,10 @@ export default function ChatPanel({
     }, 1000);
     return () => clearInterval(timer);
   }, [isWaiting]);
+
+  const handleInlineRunControl = useCallback((action: 'status' | 'retry_step' | 'cancel' | 'continue') => {
+    onRunControl?.(action);
+  }, [onRunControl]);
 
   // Telegram incoming message polling
   useEffect(() => {
@@ -1697,6 +1715,7 @@ export default function ChatPanel({
                 const parsed = normalizeRunStatusEvent(data.content);
                 if (!parsed) break;
                 setLatestRunId(parsed.run_id);
+                setLiveRunStatus(parsed);
                 onRunStatusRef.current?.(parsed);
               }
               break;
@@ -1705,6 +1724,7 @@ export default function ChatPanel({
                 const parsed = normalizeRunStatusEvent(data.content);
                 if (!parsed) break;
                 setLatestRunId(parsed.run_id);
+                setLiveRunStatus(parsed);
                 onRunStatusRef.current?.(parsed);
               }
               break;
@@ -1712,6 +1732,7 @@ export default function ChatPanel({
               {
                 const parsed = normalizeRunIncidentEvent(data.content);
                 if (!parsed) break;
+                setLiveRunIncident(parsed);
                 onRunIncidentRef.current?.(parsed);
               }
               break;
@@ -1856,6 +1877,7 @@ export default function ChatPanel({
               streamingAccumRef.current = '';
               if (data.run_id) setLatestRunId(data.run_id);
               onRunIncidentRef.current?.(null);
+              setLiveRunIncident(null);
               const projectId = data.project_id || activeProjectIdRef.current;
               onProjectDataRefreshRef.current?.();
               const offer = data.deploy_offer;
@@ -1885,6 +1907,7 @@ export default function ChatPanel({
               turnErroredRef.current = true;
               streamingAccumRef.current = '';
               onRunIncidentRef.current?.(null);
+              setLiveRunIncident(null);
               setMessages((prev) => [...prev, {
                 role: 'ceo',
                 content: `[Error] ${wsContentText(data.content, 'Unknown error')}`,
@@ -2724,11 +2747,92 @@ export default function ChatPanel({
                   </p>
                 </div>
                 <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-                  {ceoName} is still working. This card will stay active until the run finishes.
+                  {ceoName} is still working. This card stays active until completion.
                 </p>
+                {liveRunStatus && (
+                  <div className="mt-2 rounded-lg px-2.5 py-2" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-bg)' }}>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-xs font-semibold" style={{ color: 'var(--tf-text-secondary)' }}>
+                        Phase: {liveRunStatus.phase_label || 'Execution in progress'}
+                      </span>
+                      <span className="text-[11px]" style={{ color: 'var(--tf-text-muted)' }}>
+                        Last update: {liveRunStatus.last_activity_at ? formatTime(liveRunStatus.last_activity_at) : 'just now'}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 text-[11px]" style={{ color: 'var(--tf-text-muted)' }}>
+                      Heartbeat #{Math.max(0, Number(liveRunStatus.heartbeat_seq || 0))}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {Array.isArray(liveRunStatus.active_agents) && liveRunStatus.active_agents.length > 0 ? (
+                        liveRunStatus.active_agents.slice(0, 4).map((agent) => (
+                          <span
+                            key={`${agent.agent_id}-${agent.state}`}
+                            className="px-2 py-1 rounded-full text-[11px]"
+                            style={{ border: '1px solid var(--tf-border)', color: 'var(--tf-text-secondary)', backgroundColor: 'var(--tf-surface)' }}
+                          >
+                            {agent.agent_name} · {agent.state}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-[11px]" style={{ color: 'var(--tf-text-muted)' }}>
+                          No active agent details yet.
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {liveRunIncident && (
+                  <div
+                    className="mt-2 rounded-lg px-2.5 py-2"
+                    style={{
+                      border: `1px solid ${liveRunIncident.severity === 'critical' ? 'var(--tf-error)' : 'var(--tf-warning)'}`,
+                      backgroundColor: 'var(--tf-bg)',
+                    }}
+                  >
+                    <p className="text-xs font-semibold" style={{ color: liveRunIncident.severity === 'critical' ? 'var(--tf-error)' : 'var(--tf-warning)' }}>
+                      Watchdog {liveRunIncident.severity === 'critical' ? 'critical' : 'warning'}
+                    </p>
+                    <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
+                      {liveRunIncident.reason.replace(/_/g, ' ')} • inactive {Math.max(0, Math.floor(liveRunIncident.inactive_seconds || 0))}s
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(['status', 'retry_step', 'continue', 'cancel'] as const).map((action) => (
+                        <button
+                          key={action}
+                          type="button"
+                          onClick={() => handleInlineRunControl(action)}
+                          disabled={!onRunControl || Boolean(runControlBusyAction)}
+                          className="text-[11px] px-2 py-1 rounded-lg"
+                          style={{
+                            border: '1px solid var(--tf-border)',
+                            backgroundColor: action === 'status' ? 'color-mix(in srgb, var(--tf-accent-blue) 14%, transparent)' : 'transparent',
+                            color: action === 'status' ? 'var(--tf-accent-blue)' : 'var(--tf-text-secondary)',
+                            cursor: !onRunControl || Boolean(runControlBusyAction) ? 'default' : 'pointer',
+                            opacity: !onRunControl || Boolean(runControlBusyAction) ? 0.75 : 1,
+                          }}
+                        >
+                          {runControlBusyAction === action
+                            ? '...'
+                            : action === 'retry_step'
+                              ? 'Retry Step'
+                              : action === 'continue'
+                                ? 'Continue'
+                                : action === 'cancel'
+                                  ? 'Cancel Run'
+                                  : 'Get Status'}
+                        </button>
+                      ))}
+                    </div>
+                    {runControlMessage && (
+                      <p className="text-[11px] mt-2" style={{ color: 'var(--tf-text-muted)' }}>
+                        {runControlMessage}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {waitElapsedSec >= 180 && (
                   <p className="text-xs mt-1" style={{ color: 'var(--tf-warning)' }}>
-                    Long run detected. If this does not complete soon, send a status check message.
+                    Long run detected. Automatic watchdog updates are active while execution continues.
                   </p>
                 )}
               </div>

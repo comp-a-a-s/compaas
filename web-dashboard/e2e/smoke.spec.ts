@@ -524,6 +524,7 @@ test('ceo chat renders structured response with links, wrapping, focus, and icon
     await openChatButton.first().click();
   }
   await expect(page.locator('aside.split-chat-panel.split-chat-panel-open')).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Run Progress/i })).toHaveCount(0);
 
   const chatPane = page.locator('aside.split-chat-panel');
   const widthBefore = await chatPane.evaluate((el) => el.getBoundingClientRect().width);
@@ -542,6 +543,7 @@ test('ceo chat renders structured response with links, wrapping, focus, and icon
   await page.keyboard.press('Enter');
   await expect(chatInput).toBeFocused();
   await expect(chatInput).toBeEditable();
+  await expect(page.getByRole('heading', { name: /Run Progress/i })).toHaveCount(0);
 
   await expect(page.getByText('Completion Summary')).toBeVisible();
   await expect(page.getByText('Completion Summary')).toHaveCount(1);

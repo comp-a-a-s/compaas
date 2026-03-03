@@ -767,7 +767,6 @@ export default function App() {
       const runId = String(candidate?.id || '').trim();
       if (!runId) return;
       setActiveRunId(runId);
-      setRunDrawerOpen(true);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [activeProjectId, activeRunId, showWizard]);
@@ -1030,7 +1029,6 @@ export default function App() {
     const normalizedRunId = runId.trim();
     if (!normalizedRunId) return;
     setActiveRunId(normalizedRunId);
-    setRunDrawerOpen(true);
     setRunControlMessage('');
     if (projectId && projectId !== activeProjectId) {
       setActiveProjectId(projectId);
@@ -1081,9 +1079,6 @@ export default function App() {
     setRunLiveSnapshot((prev) => (prev ? { ...prev, incident: event } : prev));
     if (event?.run_id && event.run_id !== activeRunId) {
       setActiveRunId(event.run_id);
-    }
-    if (event) {
-      setRunDrawerOpen(true);
     }
   }, [activeRunId]);
 
@@ -1256,7 +1251,8 @@ export default function App() {
     && config?.integrations?.github_verified
   );
   const currentTourStep = ONBOARDING_STEPS[Math.max(0, Math.min(tourStep, ONBOARDING_STEPS.length - 1))];
-  const runDrawerEnabled = config?.feature_flags?.run_progress_drawer !== false;
+  // Inline-only progress mode: keep drawer surfaces disabled.
+  const runDrawerEnabled = false;
   const effectiveRunStatus = runStatusEvent ?? runLiveSnapshot?.run_status ?? null;
   const effectiveRunIncident = runIncidentEvent ?? runLiveSnapshot?.incident ?? null;
 
@@ -1357,6 +1353,11 @@ export default function App() {
               onRunStart={handleRunStart}
               onRunStatus={handleRunStatusEvent}
               onRunIncident={handleRunIncidentEvent}
+              runStatus={effectiveRunStatus}
+              runIncident={effectiveRunIncident}
+              onRunControl={(action) => { void handleRunControl(action); }}
+              runControlBusyAction={runControlBusyAction}
+              runControlMessage={runControlMessage}
             />
           </Suspense>
         }

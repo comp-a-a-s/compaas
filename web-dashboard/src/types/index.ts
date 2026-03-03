@@ -340,6 +340,8 @@ export interface LlmConfig {
   model: string;
   /** API key — use a placeholder (e.g. "ollama") for local servers */
   api_key: string;
+  /** Max auto-retries when Claude returns passive waiting language on execution turns */
+  claude_passive_retry_max?: number;
   /** Optional system prompt override for the CEO persona */
   system_prompt: string;
   /** Phase 2: route all agent subprocesses through a LiteLLM proxy */
@@ -356,6 +358,7 @@ export interface AppConfig {
     theme: string;
     poll_interval_ms: number;
     always_on_mode?: 'guarded_autopilot' | 'manual';
+    run_progress_surface?: 'inline_chat' | 'drawer';
     run_heartbeat_seconds?: number;
     run_stall_warning_seconds?: number;
     run_stall_critical_seconds?: number;

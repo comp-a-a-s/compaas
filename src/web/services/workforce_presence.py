@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from threading import RLock
 from typing import Any
@@ -40,6 +41,25 @@ def _safe_iso(value: str) -> str:
 
 def _agent_slug(value: str) -> str:
     return str(value or "").strip().lower().replace(" ", "-")
+
+
+def _sanitize_task_text(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\b\d+\s*→\s*", " ", text)
+    text = text.replace("→", " ")
+    text = text.replace("\n", " ").replace("\r", " ").replace("\t", " ")
+    text = re.sub(r"\s+", " ", text).strip(" -:;.,")
+    if not text:
+        return ""
+    alnum_chars = sum(1 for ch in text if ch.isalnum())
+    if alnum_chars == 0:
+        return "Task update in progress"
+    if len(text) > 180:
+        text = f"{text[:177].rstrip()}..."
+    return text
 
 
 def _is_non_worker(agent_id: str) -> bool:
@@ -249,7 +269,7 @@ class WorkforcePresenceService:
         work_state = self._derive_work_state(event, meta)
         run_id = str(meta.get("run_id", "") or "").strip()
         project_id = str(event.get("project_id", "") or meta.get("project_id", "") or "").strip()
-        task = str(meta.get("task", "") or event.get("detail", "") or "").strip()[:280]
+        task = _sanitize_task_text(str(meta.get("task", "") or event.get("detail", "") or ""))[:280]
         agent_id = self._derive_agent_id(event, meta, work_state)
         source_agent = _agent_slug(str(meta.get("source_agent", "") or event.get("agent", "") or ""))
         if _is_non_worker(agent_id):
@@ -444,7 +464,7 @@ class WorkforcePresenceService:
                         "state": state,
                         "project_id": str(row.get("project_id", "") or ""),
                         "run_id": str(row.get("run_id", "") or ""),
-                        "task": str(row.get("task", "") or ""),
+                        "task": _sanitize_task_text(str(row.get("task", "") or "")),
                         "source": str(row.get("source", "real") or "real"),
                         "started_at": started,
                         "updated_at": _safe_iso(str(row.get("updated_at", "") or "")),

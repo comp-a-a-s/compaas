@@ -447,6 +447,135 @@ async def test_handle_ceo_claude_retries_incomplete_clarification_stub(monkeypat
     )
 
 
+def test_is_passive_waiting_response_detects_standby_only_updates():
+    assert api._is_passive_waiting_response(
+        "Good — both Jessica and Marissa are working in parallel. I'll wait for both to deliver. Standing by."
+    )
+    assert not api._is_passive_waiting_response(
+        "Outcome: Build complete.\nRun Commands:\n- npm run dev\nOpen Links:\n- http://localhost:5173"
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_ceo_claude_retries_passive_waiting_response(monkeypatch):
+    calls = {"count": 0}
+    passive_lines = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Good — both Jessica (design) and Marissa (product) are working in parallel. "
+                                "I'll wait for both to deliver before briefing Sheryl on the build. Standing by."
+                            ),
+                        }
+                    ]
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "result",
+                "result": (
+                    "Good — both Jessica (design) and Marissa (product) are working in parallel. "
+                    "I'll wait for both to deliver before briefing Sheryl on the build. Standing by."
+                ),
+            }
+        ),
+    ]
+    active_lines = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Proceeding now with implementation using default assumptions. "},
+                    ]
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "result",
+                "result": (
+                    "Proceeding now with implementation using default assumptions.\n\n"
+                    "Outcome: MVP implementation in progress with active delivery checkpoints."
+                ),
+            }
+        ),
+    ]
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        calls["count"] += 1
+        return _FakeProcess(lines=passive_lines if calls["count"] == 1 else active_lines, returncode=0)
+
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(api, "_emit_chat_activity", lambda *args, **kwargs: None)
+
+    ws = _FakeWebSocket()
+    result = await api._handle_ceo_claude(
+        websocket=ws,
+        prompt="build a web app",
+        claude_path="/usr/bin/claude",
+        llm_cfg={"anthropic_mode": "cli", "claude_passive_retry_max": 3},
+        ceo_name="Marcus",
+        user_message="build a web app",
+        intent={"intent": "execution", "actionable": True},
+    )
+
+    assert calls["count"] == 2
+    assert result is not None
+    assert "proceeding now with implementation" in result.lower()
+    assert any(
+        event.get("type") == "warning"
+        and "passive waiting response detected" in str(event.get("content", "")).lower()
+        for event in ws.events
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_ceo_claude_fails_after_passive_retry_exhausted(monkeypatch):
+    calls = {"count": 0}
+    passive_text = (
+        "All teams are working in parallel. I'll wait for both to deliver and report back. Standing by."
+    )
+    passive_lines = [
+        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": passive_text}]}}),
+        json.dumps({"type": "result", "result": passive_text}),
+    ]
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        calls["count"] += 1
+        return _FakeProcess(lines=passive_lines, returncode=0)
+
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(api, "_emit_chat_activity", lambda *args, **kwargs: None)
+
+    ws = _FakeWebSocket()
+    result = await api._handle_ceo_claude(
+        websocket=ws,
+        prompt="build a web app",
+        claude_path="/usr/bin/claude",
+        llm_cfg={"anthropic_mode": "cli", "claude_passive_retry_max": 3},
+        ceo_name="Marcus",
+        run_id="run-passive",
+        project_id="project123",
+        user_message="build a web app",
+        intent={"intent": "execution", "actionable": True},
+    )
+
+    assert calls["count"] == 3
+    assert result is None
+    assert any(
+        event.get("type") == "error"
+        and "stopped to prevent a silent stall" in str(event.get("content", "")).lower()
+        for event in ws.events
+    )
+
+
 @pytest.mark.asyncio
 async def test_handle_ceo_claude_empty_response_returns_fallback(monkeypatch):
     async def _fake_create_subprocess_exec(*_args, **_kwargs):
@@ -827,6 +956,7 @@ def test_build_context_prompt_includes_completion_sections_guidance(monkeypatch)
     prompt = api._build_context_prompt("build a dashboard", user_name="Idan", ceo_name="Ari")
 
     assert "'Outcome', 'Deliverables', 'Validation', 'Run Commands', 'Open Links', and 'Next Steps'" in prompt
+    assert "Never end an execution turn with standby-only phrasing" in prompt
 
 
 def test_structured_response_payload_extracts_deliverables_validation_and_next_actions():

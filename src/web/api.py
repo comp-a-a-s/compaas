@@ -1172,6 +1172,7 @@ DEFAULT_CONFIG: dict = {
         "theme": "midnight",
         "poll_interval_ms": 5000,
         "always_on_mode": "guarded_autopilot",
+        "run_progress_surface": "inline_chat",
         "run_heartbeat_seconds": 5,
         "run_stall_warning_seconds": 90,
         "run_stall_critical_seconds": 180,
@@ -1197,6 +1198,7 @@ DEFAULT_CONFIG: dict = {
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-4o",
         "api_key": "",
+        "claude_passive_retry_max": 3,
         "system_prompt": "",
         # Phase 2: route ALL agent subprocesses through a LiteLLM proxy
         "proxy_enabled": False,
@@ -2213,6 +2215,8 @@ def _build_context_prompt(
         "If requirements are ambiguous, state concise assumptions and proceed with execution immediately. "
         "Do not use interactive question tools. "
         "For build requests, delegate to your specialist team via the Task tool and report their progress. "
+        "If you announce that agents are working in parallel, continue orchestration in the same turn and do not end with passive waiting language. "
+        "Never end an execution turn with standby-only phrasing such as 'I'll wait', 'standing by', or 'once they finish'. "
         "For product and UI work, involve the designer by default and ensure design choices match user purpose, audience, and workflow (avoid generic boilerplate output). "
         "When implementation work is completed, structure the final update using short sections in this order: "
         "'Outcome', 'Deliverables', 'Validation', 'Run Commands', 'Open Links', and 'Next Steps'. "
@@ -4456,6 +4460,138 @@ def _is_incomplete_clarification_stub(text: str) -> bool:
     return False
 
 
+def _is_passive_waiting_response(text: str) -> bool:
+    """Detect passive handoff replies that end without concrete execution follow-through."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    normalized = re.sub(r"\s+", " ", raw).strip().lower().replace("’", "'")
+    passive_markers = (
+        "standing by",
+        "i'll wait",
+        "i will wait",
+        "once they finish",
+        "once they deliver",
+        "wait for both",
+        "wait for them",
+        "before briefing",
+        "before i brief",
+        "report back when",
+        "working in parallel",
+        "they're all running in parallel",
+        "all three teams are actively working",
+    )
+    if not any(marker in normalized for marker in passive_markers):
+        return False
+    actionable_markers = (
+        "outcome",
+        "deliverables",
+        "validation",
+        "run commands",
+        "open links",
+        "next steps",
+        "build complete",
+        "completed",
+        "implemented",
+        "created",
+        "activation guide",
+        "handoff",
+        "npm run",
+        "open app",
+        "http://",
+        "https://",
+    )
+    has_actionable = any(marker in normalized for marker in actionable_markers)
+    has_action_list = bool(re.search(r"\n\s*(?:[-*]|\d+[.)])\s+\S+", raw))
+    has_code_block = "```" in raw
+    if has_actionable or has_action_list or has_code_block:
+        return False
+    if normalized.endswith(":"):
+        return False
+    return True
+
+
+def _build_active_management_retry_prompt(
+    original_prompt: str,
+    prior_response: str,
+    *,
+    attempt: int,
+    max_attempts: int,
+) -> str:
+    """Build a strict retry prompt when Claude returns passive waiting language."""
+    safe_attempt = max(1, int(attempt))
+    safe_max = max(safe_attempt, int(max_attempts))
+    prior_excerpt = (prior_response or "").strip()[:1200]
+    prefix = (
+        f"[ACTIVE MANAGEMENT RETRY {safe_attempt}/{safe_max}: NON-INTERACTIVE DASHBOARD MODE. "
+        "Do not end with waiting language. Do not say standing by. "
+        "If teams are parallel, continue immediately by collecting outputs, integrating decisions, "
+        "and driving execution to the next concrete milestone in this same turn.]"
+    )
+    return (
+        f"{prefix}\n\n"
+        "Prior passive reply to replace:\n"
+        f"{prior_excerpt}\n\n"
+        "Now continue actively and produce a concrete execution update.\n\n"
+        f"{original_prompt}"
+    )
+
+
+def _build_passive_retry_exhausted_notice(
+    *,
+    ceo_name: str,
+    run_id: str,
+    project_id: str,
+    max_attempts: int,
+) -> str:
+    """Build deterministic failure guidance when passive retries are exhausted."""
+    run = run_service.get_run(run_id) if run_id else None
+    timeline_labels: list[str] = []
+    phase_label = ""
+    if isinstance(run, dict):
+        phase_label = str(run.get("status", "") or "").strip().lower()
+        timeline = run.get("timeline", [])
+        if isinstance(timeline, list):
+            for row in timeline[-4:]:
+                if not isinstance(row, dict):
+                    continue
+                label = str(row.get("label", "") or row.get("state", "") or "").strip()
+                if label:
+                    timeline_labels.append(label)
+            if timeline:
+                latest = timeline[-1] if isinstance(timeline[-1], dict) else {}
+                if isinstance(latest, dict):
+                    latest_label = str(latest.get("label", "") or "").strip()
+                    if latest_label:
+                        phase_label = latest_label
+    workforce = workforce_presence_service.snapshot(
+        project_id=project_id or None,
+        include_assigned=True,
+        include_reporting=True,
+    )
+    workers = workforce.get("workers", []) if isinstance(workforce, dict) else []
+    active_rows: list[str] = []
+    if isinstance(workers, list):
+        for row in workers[:4]:
+            if not isinstance(row, dict):
+                continue
+            agent_name = str(row.get("agent_name", "") or row.get("agent_id", "") or "").strip()
+            state = str(row.get("state", "") or "").strip()
+            if not agent_name:
+                continue
+            active_rows.append(f"{agent_name} ({state or 'working'})")
+    active_text = ", ".join(active_rows) if active_rows else "No active agents were reported."
+    timeline_text = "; ".join(timeline_labels[-3:]) if timeline_labels else "No recent timeline entries."
+    phase_text = phase_label or "Execution in progress"
+    return (
+        f"{ceo_name} returned passive waiting updates {max_attempts} times in a row, so this run was stopped to prevent a silent stall.\n"
+        f"Last known phase: {phase_text}.\n"
+        f"Active agents: {active_text}\n"
+        f"Recent timeline: {timeline_text}\n"
+        "Send a new message like 'continue build now with assumptions and finish delivery' to resume immediately."
+    )
+
+
 def _build_assumption_first_retry_prompt(prompt: str) -> str:
     """Force a non-interactive retry path when Claude returns a clarification stub."""
     prefix = (
@@ -4538,8 +4674,11 @@ async def _handle_ceo_claude(
     user_message: str = "",
     support_agents: list[str] | None = None,
     config: dict[str, Any] | None = None,
+    intent: dict[str, Any] | None = None,
     synthetic_delegation_fallback: bool = False,
     allow_clarification_retry: bool = True,
+    passive_retry_attempt: int = 1,
+    passive_retry_max: int | None = None,
 ) -> str | None:
     """Handle a CEO chat turn using the Claude Code CLI subprocess.
 
@@ -4553,6 +4692,19 @@ async def _handle_ceo_claude(
     """
     env = _sanitize_subprocess_env(os.environ.copy())
     anthropic_mode = str(llm_cfg.get("anthropic_mode", "cli") or "cli").lower()
+    inferred_intent = intent if isinstance(intent, dict) else _classify_execution_intent(user_message or "")
+    is_execution_turn = (
+        str(inferred_intent.get("intent", "") or "").strip().lower() == "execution"
+        and bool(inferred_intent.get("actionable"))
+    )
+    passive_retry_max_cfg = passive_retry_max
+    if passive_retry_max_cfg is None:
+        try:
+            passive_retry_max_cfg = int(llm_cfg.get("claude_passive_retry_max", 3) or 3)
+        except (TypeError, ValueError):
+            passive_retry_max_cfg = 3
+    passive_retry_max_cfg = max(1, min(5, int(passive_retry_max_cfg)))
+    passive_retry_attempt = max(1, int(passive_retry_attempt or 1))
     interactive_tools_blocked = ["AskUserQuestion"]
     runtime_metadata = {
         "provider": "anthropic",
@@ -4560,6 +4712,9 @@ async def _handle_ceo_claude(
         "runtime": "claude_cli",
         "model": str(llm_cfg.get("model", "claude") or "claude"),
         "interactive_tools_blocked": interactive_tools_blocked,
+        "execution_turn": is_execution_turn,
+        "passive_retry_attempt": passive_retry_attempt,
+        "passive_retry_max": passive_retry_max_cfg,
     }
     if run_id:
         runtime_metadata["run_id"] = run_id
@@ -5119,8 +5274,11 @@ async def _handle_ceo_claude(
                     user_message=user_message,
                     support_agents=support_agents,
                     config=config,
+                    intent=intent,
                     synthetic_delegation_fallback=False,
                     allow_clarification_retry=False,
+                    passive_retry_attempt=passive_retry_attempt,
+                    passive_retry_max=passive_retry_max_cfg,
                 )
             _emit_chat_activity(
                 "ceo",
@@ -5133,6 +5291,86 @@ async def _handle_ceo_claude(
                     **runtime_metadata,
                 },
             )
+
+        if full_response and is_execution_turn and _is_passive_waiting_response(full_response):
+            _emit_chat_activity(
+                "ceo",
+                "WARNING",
+                "Passive waiting response detected during execution turn.",
+                project_id=project_id,
+                metadata={
+                    "passive_wait_detected": True,
+                    "passive_retry_attempt": passive_retry_attempt,
+                    "passive_retry_max": passive_retry_max_cfg,
+                    **runtime_metadata,
+                },
+            )
+            if passive_retry_attempt < passive_retry_max_cfg:
+                next_attempt = passive_retry_attempt + 1
+                await websocket.send_json({
+                    "type": "warning",
+                    "content": (
+                        f"Passive waiting response detected. Continuing automatically "
+                        f"({next_attempt}/{passive_retry_max_cfg}) with active orchestration."
+                    ),
+                })
+                return await _handle_ceo_claude(
+                    websocket=websocket,
+                    prompt=_build_active_management_retry_prompt(
+                        prompt,
+                        full_response,
+                        attempt=next_attempt,
+                        max_attempts=passive_retry_max_cfg,
+                    ),
+                    claude_path=claude_path,
+                    llm_cfg=llm_cfg,
+                    ceo_name=ceo_name,
+                    micro_project_mode=micro_project_mode,
+                    project_id=project_id,
+                    run_id=run_id,
+                    user_message=user_message,
+                    support_agents=support_agents,
+                    config=config,
+                    intent=intent,
+                    synthetic_delegation_fallback=False,
+                    allow_clarification_retry=False,
+                    passive_retry_attempt=next_attempt,
+                    passive_retry_max=passive_retry_max_cfg,
+                )
+
+            exhausted_notice = _build_passive_retry_exhausted_notice(
+                ceo_name=ceo_name,
+                run_id=run_id,
+                project_id=project_id,
+                max_attempts=passive_retry_max_cfg,
+            )
+            await websocket.send_json({"type": "error", "content": exhausted_notice})
+            _emit_chat_activity(
+                "ceo",
+                "ERROR",
+                "Passive waiting retries exhausted; run failed to prevent silent stall.",
+                project_id=project_id,
+                metadata={
+                    "passive_wait_detected": True,
+                    "passive_retry_exhausted": True,
+                    "passive_retry_attempt": passive_retry_attempt,
+                    "passive_retry_max": passive_retry_max_cfg,
+                    **runtime_metadata,
+                },
+            )
+            if run_id:
+                _transition_run_state(
+                    run_id,
+                    state="failed",
+                    label=f"Passive waiting retries exhausted ({passive_retry_max_cfg})",
+                    metadata={
+                        "passive_wait_detected": True,
+                        "passive_retry_exhausted": True,
+                        "passive_retry_attempt": passive_retry_attempt,
+                        "passive_retry_max": passive_retry_max_cfg,
+                    },
+                )
+            return None
 
         if micro_project_mode and saw_tool_use:
             await websocket.send_json({
@@ -6105,6 +6343,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
     heartbeat_seq = 0
     last_phase_state = ""
     last_incident_signature = ""
+    last_progress_checkpoint_signature = ""
 
     config = _load_config()
     ui_cfg = config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}
@@ -6114,13 +6353,61 @@ async def chat_websocket(websocket: WebSocket) -> None:
     run_stall_critical_seconds = max(run_stall_warning_seconds, int(ui_cfg.get("run_stall_critical_seconds", 180) or 180))
     run_watchdog_enabled = bool(feature_flags_cfg.get("run_watchdog", True))
 
+    def _run_checkpoint_message(run_status: dict[str, Any]) -> tuple[str, str]:
+        phase_label = str(run_status.get("phase_label", "") or "Executing").strip() or "Executing"
+        elapsed_seconds = max(0, int(run_status.get("elapsed_seconds", 0) or 0))
+        elapsed_minutes = elapsed_seconds // 60
+        elapsed_remainder = elapsed_seconds % 60
+        elapsed_text = f"{elapsed_minutes}m {elapsed_remainder:02d}s" if elapsed_minutes else f"{elapsed_remainder}s"
+        active_agents = run_status.get("active_agents", [])
+        agent_chunks: list[str] = []
+        signature_chunks: list[str] = []
+        if isinstance(active_agents, list):
+            for row in active_agents[:3]:
+                if not isinstance(row, dict):
+                    continue
+                agent_id = str(row.get("agent_id", "") or "").strip().lower()
+                agent_name = str(row.get("agent_name", "") or agent_id or "agent").strip()
+                agent_state = str(row.get("state", "") or "working").strip().lower()
+                if not agent_name:
+                    continue
+                agent_chunks.append(f"{agent_name} ({agent_state})")
+                if agent_id:
+                    signature_chunks.append(f"{agent_id}:{agent_state}")
+        if not agent_chunks:
+            agent_summary = "No active specialist updates yet"
+        elif len(agent_chunks) == 1:
+            agent_summary = agent_chunks[0]
+        else:
+            agent_summary = ", ".join(agent_chunks[:-1]) + f", and {agent_chunks[-1]}"
+        message = f"Progress checkpoint: {phase_label} • elapsed {elapsed_text} • active: {agent_summary}."
+        state = str(run_status.get("state", "") or "").strip().lower()
+        signature = "|".join(
+            [
+                state,
+                phase_label.lower(),
+                str(elapsed_seconds // 30),
+                ",".join(signature_chunks),
+            ]
+        )
+        return message, signature
+
+    def _run_incident_notice(run_status: dict[str, Any], incident: dict[str, Any]) -> str:
+        phase_label = str(run_status.get("phase_label", "") or "Execution").strip() or "Execution"
+        reason = str(incident.get("reason", "silent_run") or "silent_run").replace("_", " ")
+        inactive_seconds = max(0, int(incident.get("inactive_seconds", 0) or 0))
+        return (
+            f"Run watchdog notice: {phase_label} appears stalled ({inactive_seconds}s inactive, {reason}). "
+            "Use inline run controls to get status, retry, continue, or cancel."
+        )
+
     async def _emit_run_progress(
         run_id: str,
         project_id: str,
         *,
         force_phase: bool = False,
     ) -> None:
-        nonlocal heartbeat_seq, last_phase_state, last_incident_signature
+        nonlocal heartbeat_seq, last_phase_state, last_incident_signature, last_progress_checkpoint_signature
         run = run_service.get_run(run_id)
         if not isinstance(run, dict):
             return
@@ -6139,6 +6426,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
         )
         await websocket.send_json({"type": "run_status", "content": run_status})
         state = str(run_status.get("state", "") or "")
+        if state.lower() in ACTIVE_RUN_STATES:
+            checkpoint_message, checkpoint_signature = _run_checkpoint_message(run_status)
+            if checkpoint_signature and checkpoint_signature != last_progress_checkpoint_signature:
+                last_progress_checkpoint_signature = checkpoint_signature
+                await websocket.send_json({"type": "thinking", "content": checkpoint_message})
+        else:
+            last_progress_checkpoint_signature = ""
         if force_phase or state != last_phase_state:
             last_phase_state = state
             await websocket.send_json(
@@ -6172,6 +6466,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 if signature != last_incident_signature:
                     last_incident_signature = signature
                     await websocket.send_json({"type": "run_incident", "content": incident})
+                    await websocket.send_json({"type": "warning", "content": _run_incident_notice(run_status, incident)})
             elif state not in ACTIVE_RUN_STATES:
                 last_incident_signature = ""
 
@@ -6210,13 +6505,14 @@ async def chat_websocket(websocket: WebSocket) -> None:
         heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
     async def _clear_inflight_tracking() -> None:
-        nonlocal inflight_run_id, inflight_project_id, heartbeat_seq, last_phase_state, last_incident_signature
+        nonlocal inflight_run_id, inflight_project_id, heartbeat_seq, last_phase_state, last_incident_signature, last_progress_checkpoint_signature
         await _stop_heartbeat()
         inflight_run_id = ""
         inflight_project_id = ""
         heartbeat_seq = 0
         last_phase_state = ""
         last_incident_signature = ""
+        last_progress_checkpoint_signature = ""
 
     async def _close_inflight_run(
         reason: str,
@@ -6647,6 +6943,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     user_message=user_message,
                     support_agents=support_agents,
                     config=config,
+                    intent=intent,
                     synthetic_delegation_fallback=(
                         bool(support_agents)
                         and not no_delegation_mode

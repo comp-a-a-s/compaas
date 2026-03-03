@@ -6,6 +6,7 @@ share the same run status/incident contract.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -87,6 +88,25 @@ def _normalize_guardrails(guardrails: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _sanitize_task_text(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\b\d+\s*→\s*", " ", text)
+    text = text.replace("→", " ")
+    text = text.replace("\n", " ").replace("\r", " ").replace("\t", " ")
+    text = re.sub(r"\s+", " ", text).strip(" -:;.,")
+    if not text:
+        return ""
+    alnum_chars = sum(1 for ch in text if ch.isalnum())
+    if alnum_chars == 0:
+        return "Task update in progress"
+    if len(text) > 180:
+        text = f"{text[:177].rstrip()}..."
+    return text
+
+
 def _build_active_agents(workforce_snapshot: dict[str, Any], run_id: str) -> list[dict[str, Any]]:
     workers = workforce_snapshot.get("workers", [])
     if not isinstance(workers, list):
@@ -100,7 +120,7 @@ def _build_active_agents(workforce_snapshot: dict[str, Any], run_id: str) -> lis
         agent_id = str(worker.get("agent_id", "") or "").strip()
         agent_name = str(worker.get("agent_name", "") or agent_id).strip()
         state = str(worker.get("state", "") or "").strip()
-        task = str(worker.get("task", "") or "").strip()
+        task = _sanitize_task_text(str(worker.get("task", "") or ""))
         if not agent_id or not agent_name:
             continue
         payload: dict[str, Any] = {
@@ -177,4 +197,3 @@ def detect_run_incident(
         "suggested_actions": ["status", "retry_step", "cancel", "continue"],
         "default_action": "status",
     }
-
