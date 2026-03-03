@@ -129,6 +129,29 @@ export interface WorkforceLiveSnapshot {
   client_meta?: WorkforceClientMeta;
 }
 
+export type PromptExampleCategory =
+  | 'Productivity'
+  | 'Finance'
+  | 'Health'
+  | 'Education'
+  | 'Community'
+  | 'Business'
+  | 'AI + Design'
+  | 'AI + Lifestyle'
+  | 'Creator'
+  | 'Commerce'
+  | 'Product Ops'
+  | 'Maps + Data'
+  | 'Creative Tech';
+
+export interface PromptExample {
+  id: string;
+  category: PromptExampleCategory;
+  label: string;
+  prompt: string;
+  keywords?: string[];
+}
+
 export interface ChatMessage {
   role: 'user' | 'ceo' | 'system';
   content: string;

@@ -535,9 +535,11 @@ test('ceo chat renders structured response with links, wrapping, focus, and icon
   await page.getByRole('button', { name: 'Restore previous chat width' }).click();
 
   const chatInput = page.locator('textarea').first();
-  await expect(page.getByRole('button', { name: 'Build MVP' })).toBeVisible();
-  await page.getByRole('button', { name: 'Build MVP' }).click();
-  await expect(chatInput).toHaveValue(/Build an MVP/);
+  await expect(page.getByRole('button', { name: 'Prompt examples category' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Prompt examples', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Prompt examples', exact: true }).click();
+  await page.getByRole('option', { name: /Task Manager/i }).click();
+  await expect(chatInput).toHaveValue(/minimalist task manager/i);
   await chatInput.click();
   await chatInput.fill('hello');
   await page.keyboard.press('Enter');

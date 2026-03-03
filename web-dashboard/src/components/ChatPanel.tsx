@@ -29,6 +29,7 @@ import {
 } from '../api/client';
 import FloatingSelect from './ui/FloatingSelect';
 import { useToast } from './Toast';
+import { PROMPT_EXAMPLES, PROMPT_EXAMPLE_CATEGORIES } from '../constants/promptExamples';
 
 // ---- Helpers ----
 
@@ -265,6 +266,10 @@ const TYPEWRITER_MIN_DELAY_MS = 14;
 const TYPEWRITER_BASE_DELAY_MS = 34;
 const TYPEWRITER_COMMA_DELAY_MS = 26;
 const TYPEWRITER_SENTENCE_DELAY_MS = 52;
+const PROMPT_CATEGORY_ALL = 'all';
+const PROMPT_EXAMPLES_CATEGORY_KEY = 'compaas_prompt_examples_category';
+const PROMPT_EXAMPLES_RECENT_KEY = 'compaas_prompt_examples_recent';
+const PROMPT_EXAMPLES_RECENT_LIMIT = 5;
 
 function looksExecutionRequest(input: string): boolean {
   const lower = input.trim().toLowerCase();
@@ -1393,6 +1398,35 @@ export default function ChatPanel({
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [promptExampleCategory, setPromptExampleCategory] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem(PROMPT_EXAMPLES_CATEGORY_KEY) || '';
+      if (stored === PROMPT_CATEGORY_ALL) return PROMPT_CATEGORY_ALL;
+      if (PROMPT_EXAMPLE_CATEGORIES.includes(stored as typeof PROMPT_EXAMPLE_CATEGORIES[number])) {
+        return stored;
+      }
+    } catch {
+      // Ignore storage errors and use default.
+    }
+    return PROMPT_CATEGORY_ALL;
+  });
+  const [promptRecentExampleIds, setPromptRecentExampleIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(PROMPT_EXAMPLES_RECENT_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((entry) => String(entry || '').trim())
+        .filter(Boolean)
+        .filter((id, idx, arr) => arr.indexOf(id) === idx)
+        .filter((id) => PROMPT_EXAMPLES.some((example) => example.id === id))
+        .slice(0, PROMPT_EXAMPLES_RECENT_LIMIT);
+    } catch {
+      return [];
+    }
+  });
+  const [selectedPromptExampleId, setSelectedPromptExampleId] = useState('');
 
   // Feature: Micro Project mode (fast solo CEO path)
   const [showMicroApprovalCard, setShowMicroApprovalCard] = useState(false);
@@ -1485,6 +1519,22 @@ export default function ChatPanel({
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROMPT_EXAMPLES_CATEGORY_KEY, promptExampleCategory || PROMPT_CATEGORY_ALL);
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [promptExampleCategory]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROMPT_EXAMPLES_RECENT_KEY, JSON.stringify(promptRecentExampleIds.slice(0, PROMPT_EXAMPLES_RECENT_LIMIT)));
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [promptRecentExampleIds]);
 
   useEffect(() => {
     if (!isWaiting) {
@@ -2357,27 +2407,71 @@ export default function ChatPanel({
   const visibleApprovals = pendingApprovalProjects.filter((p) => !dismissedProjectIds.has(p.id));
   const hasMessages = messages.length > 0 || streamingContent;
   const activeProject = projects.find((p) => p.id === activeProjectId) || null;
-  const promptTemplates = useMemo(() => {
-    const projectName = activeProject?.name || 'this project';
+  const promptCategoryOptions = useMemo(() => {
     return [
       {
-        label: 'Build MVP',
-        prompt: `Build an MVP for ${projectName}. Include scope, milestones, and begin implementation.`,
+        value: PROMPT_CATEGORY_ALL,
+        label: 'Examples',
+        description: 'All app categories',
       },
-      {
-        label: 'Fix Bug',
-        prompt: `Investigate and fix a critical bug in ${projectName}. Provide root cause, patch, and validation steps.`,
-      },
-      {
-        label: 'Deploy Preview',
-        prompt: `Prepare ${projectName} for preview deployment and share exact run/verification steps.`,
-      },
+      ...PROMPT_EXAMPLE_CATEGORIES.map((category) => {
+        const total = PROMPT_EXAMPLES.filter((example) => example.category === category).length;
+        return {
+          value: category,
+          label: category,
+          description: `${total} prompts`,
+          badge: String(total),
+          keywords: [category, 'prompt examples'],
+        };
+      }),
     ];
-  }, [activeProject?.name]);
+  }, []);
+  const filteredPromptExamples = useMemo(() => {
+    if (promptExampleCategory === PROMPT_CATEGORY_ALL) return PROMPT_EXAMPLES;
+    return PROMPT_EXAMPLES.filter((example) => example.category === promptExampleCategory);
+  }, [promptExampleCategory]);
+  const promptExampleOptions = useMemo(() => {
+    return filteredPromptExamples.map((example) => ({
+      value: example.id,
+      label: example.label,
+      description: example.prompt,
+      badge: example.category,
+      keywords: [example.category, ...(example.keywords || []), example.label],
+    }));
+  }, [filteredPromptExamples]);
+  const recentPromptExamples = useMemo(() => {
+    return promptRecentExampleIds
+      .map((exampleId) => PROMPT_EXAMPLES.find((example) => example.id === exampleId) || null)
+      .filter((example): example is typeof PROMPT_EXAMPLES[number] => Boolean(example))
+      .slice(0, PROMPT_EXAMPLES_RECENT_LIMIT);
+  }, [promptRecentExampleIds]);
   const applyPromptTemplate = useCallback((prompt: string) => {
     setInput(prompt);
-    focusInput();
+    requestAnimationFrame(() => {
+      const inputEl = inputRef.current;
+      if (inputEl) {
+        inputEl.style.height = 'auto';
+        inputEl.style.height = `${Math.min(inputEl.scrollHeight, 120)}px`;
+      }
+      focusInput();
+    });
   }, [focusInput]);
+  const applyPromptExample = useCallback((exampleId: string) => {
+    const nextId = String(exampleId || '').trim();
+    if (!nextId) return;
+    const example = PROMPT_EXAMPLES.find((entry) => entry.id === nextId);
+    if (!example) return;
+    setSelectedPromptExampleId(nextId);
+    applyPromptTemplate(example.prompt);
+    setPromptRecentExampleIds((prev) => [nextId, ...prev.filter((id) => id !== nextId)].slice(0, PROMPT_EXAMPLES_RECENT_LIMIT));
+  }, [applyPromptTemplate]);
+  const handlePromptCategoryChange = useCallback((nextCategory: string) => {
+    const normalized = String(nextCategory || '').trim();
+    const valid = normalized === PROMPT_CATEGORY_ALL
+      || PROMPT_EXAMPLE_CATEGORIES.includes(normalized as typeof PROMPT_EXAMPLE_CATEGORIES[number]);
+    setPromptExampleCategory(valid ? normalized : PROMPT_CATEGORY_ALL);
+    setSelectedPromptExampleId('');
+  }, []);
   const showConversationPanel = Boolean(
     hasMessages
     || isWaiting
@@ -3124,24 +3218,45 @@ export default function ChatPanel({
       </div>
 
       {/* Input */}
-      <div className={`flex flex-wrap gap-1.5 ${floating ? 'px-3 pt-2' : ''}`}>
-        {promptTemplates.map((template) => (
-          <button
-            key={template.label}
-            type="button"
-            onClick={() => applyPromptTemplate(template.prompt)}
-            className="text-xs px-2.5 py-1 rounded-full"
-            style={{
-              border: '1px solid var(--tf-border)',
-              backgroundColor: 'var(--tf-surface-raised)',
-              color: 'var(--tf-text-secondary)',
-              cursor: 'pointer',
-            }}
-            title={template.prompt}
-          >
-            {template.label}
-          </button>
-        ))}
+      <div className={`chat-prompt-library ${floating ? 'px-3 pt-2' : ''}`}>
+        <div className="chat-prompt-library-row">
+          <FloatingSelect
+            value={promptExampleCategory}
+            options={promptCategoryOptions}
+            onChange={handlePromptCategoryChange}
+            ariaLabel="Prompt examples category"
+            size="sm"
+            variant="input"
+            style={{ width: '150px' }}
+          />
+          <FloatingSelect
+            value={selectedPromptExampleId}
+            options={promptExampleOptions}
+            onChange={(exampleId) => applyPromptExample(exampleId)}
+            ariaLabel="Prompt examples"
+            placeholder="Choose example app prompt..."
+            searchable
+            size="sm"
+            variant="input"
+            style={{ flex: 1, minWidth: 0 }}
+          />
+        </div>
+        {recentPromptExamples.length > 0 && (
+          <div className="chat-prompt-recent">
+            <span className="chat-prompt-recent-label">Recent</span>
+            {recentPromptExamples.map((example) => (
+              <button
+                key={example.id}
+                type="button"
+                className="chat-prompt-chip"
+                title={example.prompt}
+                onClick={() => applyPromptExample(example.id)}
+              >
+                {example.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className={`flex items-end gap-2 flex-shrink-0 ${floating ? 'px-3 py-2' : 'mt-3'}`}
         style={floating ? { borderTop: '1px solid var(--tf-surface-raised)' } : undefined}>
