@@ -7,6 +7,9 @@ interface EventLogPanelProps {
   streamHealth?: ActivityStreamHealth;
   streamSource?: ActivityStreamSource;
   totalEstimate?: number;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
 }
 
 // ---- Helpers ----
@@ -325,6 +328,9 @@ export default function EventLogPanel({
   streamHealth = 'live',
   streamSource = 'SSE',
   totalEstimate = 0,
+  hasOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
 }: EventLogPanelProps) {
   const [search, setSearch] = useState('');
   const [agentFilter, setAgentFilter] = useState('');
@@ -464,6 +470,9 @@ export default function EventLogPanel({
             )}
             {' '}
             {filteredEvents.length === 1 ? 'event' : 'events'}
+          </span>
+          <span style={{ fontSize: '11px', color: 'var(--tf-text-muted)' }}>
+            Loaded {events.length} of {Math.max(events.length, totalEstimate || 0)}
           </span>
         </div>
 
@@ -714,6 +723,25 @@ export default function EventLogPanel({
               }}
             >
               Older
+            </button>
+            <button
+              type="button"
+              onClick={() => onLoadOlder?.()}
+              disabled={!hasOlder || loadingOlder || !onLoadOlder}
+              style={{
+                fontSize: '10px',
+                padding: '3px 9px',
+                borderRadius: '99px',
+                border: '1px solid var(--tf-border)',
+                backgroundColor: 'var(--tf-surface)',
+                color: (!hasOlder || loadingOlder || !onLoadOlder) ? 'var(--tf-text-muted)' : 'var(--tf-text)',
+                cursor: (!hasOlder || loadingOlder || !onLoadOlder) ? 'not-allowed' : 'pointer',
+                opacity: (!hasOlder || loadingOlder || !onLoadOlder) ? 0.6 : 1,
+                whiteSpace: 'nowrap',
+              }}
+              aria-label="Load older events from history"
+            >
+              {loadingOlder ? 'Loading…' : hasOlder ? 'Load older' : 'No older'}
             </button>
           </div>
         </div>

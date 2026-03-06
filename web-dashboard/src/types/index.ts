@@ -38,6 +38,12 @@ export interface Project {
   plan_packet?: PlanningPacketStatus;
   metadata?: ProjectMetadata;
   run_instructions?: string;
+  high_level_tasks?: Array<{
+    owner: string;
+    headline: string;
+    status: string;
+  }>;
+  high_level_tasks_updated_at?: string;
 }
 
 export interface PlanningPacketStatus {
@@ -263,6 +269,16 @@ export interface ApiResult<T> {
   correlation_id?: string;
   actions?: GuidanceAction[];
   action_required?: boolean;
+}
+
+export interface OpenWorkspaceResult {
+  status: 'ok' | 'error';
+  opened: boolean;
+  path: string;
+  launcher: 'open' | 'explorer' | 'xdg-open' | 'none' | string;
+  detail?: string;
+  correlation_id: string;
+  actions?: GuidanceAction[];
 }
 
 export type GuidanceActionKind =

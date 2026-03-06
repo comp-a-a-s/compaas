@@ -18,6 +18,7 @@ import ipaddress
 import time
 import uuid
 import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -847,6 +848,141 @@ def _backfill_project_run_instructions(project_id: str) -> str:
     return run_instructions
 
 
+_GENERIC_TASK_TITLE_RE = re.compile(
+    r"\b(execution stream|delivery stream|work stream|workstream|implementation stream|task stream)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _normalize_lane_status(raw_status: Any) -> str:
+    status = str(raw_status or "").strip().lower().replace(" ", "_")
+    if status in {"todo", "in_progress", "review", "done", "blocked"}:
+        return status
+    if status in {"completed", "complete"}:
+        return "done"
+    if status in {"inprogress", "working", "active"}:
+        return "in_progress"
+    return "todo"
+
+
+def _lane_status_rank(status: str) -> int:
+    normalized = _normalize_lane_status(status)
+    if normalized == "in_progress":
+        return 0
+    if normalized == "blocked":
+        return 1
+    if normalized in {"todo", "review"}:
+        return 2
+    if normalized == "done":
+        return 3
+    return 4
+
+
+def _compact_headline(text: str, *, max_chars: int = 96) -> str:
+    collapsed = re.sub(r"\s+", " ", str(text or "").strip())
+    if not collapsed:
+        return ""
+    if len(collapsed) <= max_chars:
+        return collapsed
+    return f"{collapsed[: max_chars - 3].rstrip()}..."
+
+
+def _headline_from_description(description: str) -> str:
+    raw = re.sub(r"\s+", " ", str(description or "").strip())
+    if not raw:
+        return ""
+
+    focus_match = re.search(r"request focus:\s*(.+)$", raw, flags=re.IGNORECASE)
+    if focus_match:
+        return _compact_headline(focus_match.group(1))
+
+    lowered = raw.lower()
+    if lowered.startswith("contribute specialist implementation output."):
+        trimmed = raw[len("Contribute specialist implementation output.") :].strip(" -:")
+        if trimmed:
+            return _compact_headline(trimmed)
+
+    sentence = re.split(r"(?<=[.!?])\s+", raw, maxsplit=1)[0]
+    return _compact_headline(sentence)
+
+
+def _lane_headline_for_task(task: dict[str, Any], project: dict[str, Any]) -> str:
+    title = _compact_headline(str(task.get("title", "") or ""))
+    if title and not _GENERIC_TASK_TITLE_RE.search(title):
+        return title
+
+    description_headline = _headline_from_description(str(task.get("description", "") or ""))
+    if description_headline:
+        return description_headline
+
+    project_summary = _compact_headline(str(project.get("description", "") or ""))
+    if project_summary and not project_summary.lower().startswith("auto-created from ceo chat request"):
+        return project_summary
+
+    project_name = _compact_headline(str(project.get("name", "project") or "project"), max_chars=60)
+    return f"Advance {project_name} delivery scope".strip()
+
+
+def _compute_project_high_level_tasks(
+    project: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    *,
+    limit: int = 12,
+) -> tuple[list[dict[str, str]], str]:
+    best_by_owner: dict[str, dict[str, str]] = {}
+    best_rank: dict[str, tuple[int, str]] = {}
+    latest_update = ""
+
+    for task in tasks:
+        owner = str(task.get("assigned_to", "") or "").strip()
+        if not owner:
+            continue
+        status = _normalize_lane_status(task.get("status"))
+        rank = _lane_status_rank(status)
+        updated_at = str(task.get("updated_at", "") or task.get("created_at", "") or "").strip()
+        if updated_at and updated_at > latest_update:
+            latest_update = updated_at
+
+        headline = _lane_headline_for_task(task, project)
+        if not headline:
+            continue
+
+        existing = best_rank.get(owner)
+        if existing is not None:
+            existing_rank, existing_updated = existing
+            if rank > existing_rank:
+                continue
+            if rank == existing_rank and existing_updated and updated_at and updated_at <= existing_updated:
+                continue
+
+        best_rank[owner] = (rank, updated_at)
+        best_by_owner[owner] = {
+            "owner": owner,
+            "headline": headline,
+            "status": status,
+        }
+
+    ordered = sorted(
+        best_by_owner.values(),
+        key=lambda row: (
+            _lane_status_rank(str(row.get("status", "") or "")),
+            str(row.get("owner", "") or "").lower(),
+        ),
+    )
+    if limit > 0:
+        ordered = ordered[:limit]
+    return ordered, latest_update
+
+
+def _workspace_path_allowed(path_value: str) -> bool:
+    manager_root = str(getattr(state_manager, "workspace_root", "") or "").strip()
+    root = os.path.realpath(manager_root or WORKSPACE_ROOT)
+    candidate = os.path.realpath(path_value)
+    if candidate == root:
+        return False
+    return candidate.startswith(root.rstrip(os.sep) + os.sep)
+
+
 @app.get("/api/projects", summary="List all projects with status and task progress")
 def list_projects() -> list[dict]:
     """Return every project with its status and a summary of task counts by
@@ -861,6 +997,7 @@ def list_projects() -> list[dict]:
             if run_instructions:
                 proj = {**proj, "run_instructions": run_instructions}
         tasks = task_board.get_board(proj["id"])
+        high_level_tasks, high_level_tasks_updated_at = _compute_project_high_level_tasks(proj, tasks)
         status_counts: dict[str, int] = {}
         for t in tasks:
             s = t.get("status", "todo")
@@ -888,6 +1025,8 @@ def list_projects() -> list[dict]:
             "team": team,
             "task_counts": status_counts,
             "total_tasks": len(tasks),
+            "high_level_tasks": high_level_tasks,
+            "high_level_tasks_updated_at": high_level_tasks_updated_at,
             "plan_packet": plan_packet,
         })
     return result
@@ -979,6 +1118,7 @@ def get_project(project_id: str) -> dict:
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
     tasks = task_board.get_board(project_id)
+    high_level_tasks, high_level_tasks_updated_at = _compute_project_high_level_tasks(project, tasks)
     try:
         plan_packet = project_service.plan_packet_status(project_id)
     except ValueError:
@@ -987,7 +1127,14 @@ def get_project(project_id: str) -> dict:
             "missing_items": ["Project metadata unavailable."],
             "summary": "Planning packet could not be evaluated.",
         }
-    return {**project, "tasks": tasks, "project": project, "plan_packet": plan_packet}
+    return {
+        **project,
+        "tasks": tasks,
+        "project": project,
+        "plan_packet": plan_packet,
+        "high_level_tasks": high_level_tasks,
+        "high_level_tasks_updated_at": high_level_tasks_updated_at,
+    }
 
 
 def _delete_project_impl(request: Request, project_id: str) -> dict:
@@ -1056,6 +1203,123 @@ def project_post_action(request: Request, project_id: str, body: dict | None = N
     if action == "delete":
         return _delete_project_impl(request, project_id)
     raise HTTPException(status_code=400, detail="Unsupported project action.")
+
+
+@app.post("/api/projects/{project_id}/workspace/open", summary="Open project workspace folder on host OS")
+def open_project_workspace(request: Request, project_id: str) -> dict:
+    _require_write_auth(request)
+    correlation_id = uuid.uuid4().hex[:12]
+    try:
+        validate_safe_id(project_id, "project_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID format.")
+
+    project = state_manager.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+
+    workspace_path = str(project.get("workspace_path", "") or "").strip()
+    resolved_workspace = os.path.realpath(os.path.abspath(workspace_path)) if workspace_path else ""
+
+    base_payload = {
+        "path": workspace_path,
+        "correlation_id": correlation_id,
+    }
+    copy_action = {
+        "id": "copy-workspace-path",
+        "label": "Copy workspace path",
+        "kind": "copy",
+        "payload": {"text": workspace_path},
+    }
+    if not workspace_path:
+        return {
+            "status": "error",
+            "opened": False,
+            "launcher": "none",
+            "detail": "Workspace path is not configured for this project.",
+            "actions": [copy_action],
+            **base_payload,
+        }
+    if not os.path.isdir(resolved_workspace):
+        return {
+            "status": "error",
+            "opened": False,
+            "launcher": "none",
+            "detail": "Workspace path does not exist on this machine.",
+            "actions": [copy_action],
+            **base_payload,
+        }
+    if not _workspace_path_allowed(resolved_workspace):
+        return {
+            "status": "error",
+            "opened": False,
+            "launcher": "none",
+            "detail": "Workspace path is outside the allowed workspace root.",
+            "actions": [copy_action],
+            **base_payload,
+        }
+    if not _is_loopback_client(request):
+        return {
+            "status": "error",
+            "opened": False,
+            "launcher": "none",
+            "detail": "Workspace opening is only available from the local COMPaaS host.",
+            "actions": [copy_action],
+            **base_payload,
+        }
+
+    if sys.platform == "darwin":
+        launcher = "open"
+        command = ["open", resolved_workspace]
+    elif os.name == "nt":
+        launcher = "explorer"
+        command = ["explorer", resolved_workspace]
+    else:
+        launcher = "xdg-open"
+        if not shutil.which("xdg-open"):
+            return {
+                "status": "error",
+                "opened": False,
+                "launcher": "none",
+                "detail": "xdg-open is unavailable on this host.",
+                "actions": [copy_action],
+                **base_payload,
+            }
+        command = ["xdg-open", resolved_workspace]
+
+    try:
+        subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return {
+            "status": "error",
+            "opened": False,
+            "launcher": "none",
+            "detail": f"Failed to launch workspace folder: {str(exc)}",
+            "actions": [copy_action],
+            **base_payload,
+        }
+
+    emit_activity(
+        DATA_DIR,
+        "ceo",
+        "OPENED",
+        "Workspace folder opened from project panel.",
+        project_id=project_id,
+        metadata={"workspace_path": resolved_workspace, "launcher": launcher, "correlation_id": correlation_id},
+    )
+    return {
+        "status": "ok",
+        "opened": True,
+        "path": resolved_workspace,
+        "launcher": launcher,
+        "detail": "Workspace folder opened.",
+        "correlation_id": correlation_id,
+    }
 
 
 @app.patch("/api/projects/{project_id}", summary="Update mutable project metadata")
@@ -4334,7 +4598,7 @@ def _seed_project_execution_scaffold(
         for idx, agent_id in enumerate(support[:4]):
             task_templates.append(
                 (
-                    f"{_configured_agent_name(agent_id, config)} execution stream",
+                    f"{_configured_agent_name(agent_id, config)} - {_headline_from_description(_agent_task_summary(agent_id, user_message)) or 'Implementation milestone'}",
                     _agent_task_summary(agent_id, user_message),
                     _configured_agent_name(agent_id, config),
                     "p1" if idx < 2 else "p2",

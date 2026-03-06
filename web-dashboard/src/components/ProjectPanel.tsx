@@ -7,12 +7,9 @@ import {
   createProject,
   deleteProject as deleteProjectApi,
   updateProjectTags as updateProjectTagsApi,
-  applyStripeBillingPack,
-  fetchStripeBillingStatus,
+  openProjectWorkspace,
 } from '../api/client';
 import FloatingSelect from './ui/FloatingSelect';
-import PreviewReviewPanel from './PreviewReviewPanel';
-import ContextPackPanel from './ContextPackPanel';
 import InlineActionCard from './InlineActionCard';
 
 interface ProjectPanelProps {
@@ -29,9 +26,6 @@ interface ProjectPanelProps {
   defaultGithubRepo?: string;
   defaultGithubBranch?: string;
   githubConfigured?: boolean;
-  contextPacksEnabled?: boolean;
-  previewReviewEnabled?: boolean;
-  stripeBillingPackEnabled?: boolean;
   onGitHubSetupRequired?: () => void;
 }
 
@@ -122,9 +116,9 @@ function Skeleton({ className = '' }: { className?: string }) {
 // ---- Project list card ----
 interface ProjectListCardProps {
   project: Project;
-  tasks?: Task[];
   selected: boolean;
   onSelect: () => void;
+  onOpenWorkspace?: (project: Project) => void;
 }
 
 const AGENT_DISPLAY_NAMES: Record<string, string> = {
@@ -172,17 +166,13 @@ function parseTagInput(value: string): string[] {
   return normalizeTagList(value.split(','));
 }
 
-function openWorkspaceFolder(pathValue: string): void {
-  const target = String(pathValue || '').trim();
-  if (!target) return;
-  const normalized = target.replace(/\\/g, '/');
-  const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`;
-  try {
-    window.open(fileUrl, '_blank', 'noopener,noreferrer');
-  } catch {
-    // ignore popup/open failures and still copy path below
-  }
-  void navigator.clipboard.writeText(target).catch(() => undefined);
+function laneStatusColor(status: string): string {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'in_progress' || normalized === 'in progress') return 'var(--tf-accent-blue)';
+  if (normalized === 'blocked') return 'var(--tf-error)';
+  if (normalized === 'review') return 'var(--tf-warning)';
+  if (normalized === 'done') return 'var(--tf-success)';
+  return 'var(--tf-text-muted)';
 }
 
 function statusAccent(status: string): string {
@@ -206,12 +196,13 @@ function statusIcon(status: string): string {
 }
 void statusIcon; // kept for potential future use
 
-function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) {
+function ProjectListCard({ project, selected, onSelect, onOpenWorkspace }: ProjectListCardProps) {
   const accent = statusAccent(project.status);
   const isCompleted = String(project.status || '').toLowerCase() === 'completed';
 
   const teamNames = project.team ?? [];
   const tagLabels = normalizeTagList(project.tags ?? []);
+  const teamLanes = Array.isArray(project.high_level_tasks) ? project.high_level_tasks.slice(0, 3) : [];
 
   return (
     <button
@@ -278,6 +269,38 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
                 <path d="M23 21v-2a4 4 0 00-3-3.87" /><path d="M16 3.13a4 4 0 010 7.75" />
               </svg>
               <span>{teamNames.map(resolveTeamName).join(', ')}</span>
+            </div>
+          )}
+
+          {teamLanes.length > 0 && (
+            <div className="rounded-md px-2 py-1.5" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-bg)' }}>
+              <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--tf-text-muted)' }}>
+                Team Lanes
+              </p>
+              <div className="space-y-1">
+                {teamLanes.map((lane, index) => (
+                  <div key={`${lane.owner}-${index}`} className="flex items-start gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: '7px',
+                        height: '7px',
+                        borderRadius: '999px',
+                        backgroundColor: laneStatusColor(lane.status),
+                        marginTop: '4px',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <p
+                      className="text-[10px]"
+                      style={{ color: 'var(--tf-text-secondary)', lineHeight: '1.35', overflowWrap: 'anywhere' }}
+                    >
+                      <span style={{ color: 'var(--tf-text)', fontWeight: 600 }}>{resolveTeamName(lane.owner)}:</span>{' '}
+                      {lane.headline}
+                    </p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -357,7 +380,7 @@ function ProjectListCard({ project, selected, onSelect }: ProjectListCardProps) 
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  openWorkspaceFolder(project.workspace_path || '');
+                  onOpenWorkspace?.(project);
                 }}
                 className="text-[10px] px-2 py-1 rounded-md"
                 style={{
@@ -1597,30 +1620,34 @@ interface ProjectDetailProps {
   project: Project;
   tasks: Task[];
   onClose: () => void;
+  onOpenWorkspace?: (project: Project) => void;
   onDelete?: () => void;
   deleting?: boolean;
   deleteError?: string;
   onSaveTags?: (tags: string[]) => void;
   savingTags?: boolean;
   tagsError?: string;
-  contextPacksEnabled?: boolean;
-  previewReviewEnabled?: boolean;
-  stripeBillingPackEnabled?: boolean;
+  workspaceMessage?: string;
+  workspaceError?: string;
 }
 function ProjectDetail({
   project,
   tasks,
   onClose,
+  onOpenWorkspace,
   onDelete,
   deleting = false,
   deleteError = '',
   onSaveTags,
   savingTags = false,
   tagsError = '',
-  contextPacksEnabled = true,
-  previewReviewEnabled = true,
-  stripeBillingPackEnabled = true,
+  workspaceMessage = '',
+  workspaceError = '',
 }: ProjectDetailProps) {
+  const highLevelLanes = useMemo(
+    () => (Array.isArray(project.high_level_tasks) ? project.high_level_tasks : []),
+    [project.high_level_tasks],
+  );
   const teamMembers = useMemo(() => {
     const ordered: string[] = [];
     const seen = new Set<string>();
@@ -1636,8 +1663,14 @@ function ProjectDetail({
       seen.add(assignee);
       ordered.push(assignee);
     }
+    for (const lane of highLevelLanes) {
+      const owner = String(lane?.owner || '').trim();
+      if (!owner || seen.has(owner)) continue;
+      seen.add(owner);
+      ordered.push(owner);
+    }
     return ordered;
-  }, [project.team, tasks]);
+  }, [highLevelLanes, project.team, tasks]);
 
   const tasksByAssignee = useMemo(() => {
     const grouped: Record<string, string[]> = {};
@@ -1651,6 +1684,19 @@ function ProjectDetail({
     return grouped;
   }, [tasks]);
 
+  const lanesByOwner = useMemo(() => {
+    const grouped: Record<string, Array<{ headline: string; status: string }>> = {};
+    for (const lane of highLevelLanes) {
+      const owner = String(lane.owner || '').trim();
+      const headline = String(lane.headline || '').trim();
+      const status = String(lane.status || '').trim();
+      if (!owner || !headline) continue;
+      if (!grouped[owner]) grouped[owner] = [];
+      grouped[owner].push({ headline, status });
+    }
+    return grouped;
+  }, [highLevelLanes]);
+
   const runCommands = useMemo(() => (
     String(project.run_instructions || '')
       .split('\n')
@@ -1659,48 +1705,10 @@ function ProjectDetail({
   ), [project.run_instructions]);
   const tagLabels = useMemo(() => normalizeTagList(project.tags ?? []), [project.tags]);
   const [tagDraft, setTagDraft] = useState(() => tagLabels.join(', '));
-  const [billingStatus, setBillingStatus] = useState<{
-    artifact_exists: boolean;
-    artifact_path: string;
-    stripe_configured: boolean;
-    stripe_verified: boolean;
-    stripe_last_error?: string;
-    detected_stack?: string;
-    last_applied_at?: string;
-  } | null>(null);
-  const [billingBusy, setBillingBusy] = useState(false);
-  const [billingMessage, setBillingMessage] = useState('');
-  const [showContextPacks, setShowContextPacks] = useState(false);
-  const [showPreviewReviews, setShowPreviewReviews] = useState(false);
-
-  const loadBillingStatus = useCallback(async () => {
-    if (!stripeBillingPackEnabled) {
-      setBillingStatus(null);
-      return;
-    }
-    const payload = await fetchStripeBillingStatus(project.id);
-    if (!payload || payload.status !== 'ok') {
-      setBillingStatus(null);
-      return;
-    }
-    setBillingStatus({
-      artifact_exists: Boolean(payload.artifact_exists),
-      artifact_path: String(payload.artifact_path || ''),
-      stripe_configured: Boolean(payload.stripe_configured),
-      stripe_verified: Boolean(payload.stripe_verified),
-      stripe_last_error: payload.stripe_last_error,
-      detected_stack: payload.detected_stack,
-      last_applied_at: payload.last_applied_at,
-    });
-  }, [project.id, stripeBillingPackEnabled]);
 
   useEffect(() => {
     setTagDraft(tagLabels.join(', '));
   }, [project.id, tagLabels]);
-
-  useEffect(() => {
-    void loadBillingStatus();
-  }, [loadBillingStatus]);
 
   return (
     <div
@@ -1846,6 +1854,7 @@ function ProjectDetail({
           ) : (
             <div className="space-y-2">
               {teamMembers.map((member, idx) => {
+                const memberLanes = (lanesByOwner[member] || []).slice(0, 3);
                 const memberTasks = (tasksByAssignee[member] || []).slice(0, 3);
                 return (
                   <div
@@ -1854,7 +1863,30 @@ function ProjectDetail({
                     style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}
                   >
                     <p className="text-xs font-semibold" style={{ color: 'var(--tf-text)' }}>{resolveTeamName(member)}</p>
-                    {memberTasks.length > 0 ? (
+                    {memberLanes.length > 0 ? (
+                      <ul className="mt-1 space-y-1">
+                        {memberLanes.map((lane, laneIdx) => (
+                          <li
+                            key={`${member}-${lane.headline}-${laneIdx}`}
+                            className="text-xs flex items-start gap-1.5"
+                            style={{ color: 'var(--tf-text-secondary)' }}
+                          >
+                            <span
+                              aria-hidden="true"
+                              style={{
+                                width: '7px',
+                                height: '7px',
+                                borderRadius: '999px',
+                                backgroundColor: laneStatusColor(lane.status),
+                                marginTop: '4px',
+                                flexShrink: 0,
+                              }}
+                            />
+                            <span>{lane.headline}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : memberTasks.length > 0 ? (
                       <ul className="mt-1 space-y-1">
                         {memberTasks.map((taskTitle) => (
                           <li key={`${member}-${taskTitle}`} className="text-xs" style={{ color: 'var(--tf-text-secondary)' }}>
@@ -1881,7 +1913,7 @@ function ProjectDetail({
           {project.workspace_path && (
             <button
               type="button"
-              onClick={() => openWorkspaceFolder(project.workspace_path || '')}
+              onClick={() => onOpenWorkspace?.(project)}
               className="text-xs px-2.5 py-1.5 rounded-md mb-2"
               style={{
                 border: '1px solid var(--tf-border)',
@@ -1936,106 +1968,15 @@ function ProjectDetail({
               ))}
             </div>
           )}
-
-          <div className="mt-3 flex items-center gap-2 flex-wrap">
-            {contextPacksEnabled && (
-              <button
-                type="button"
-                onClick={() => setShowContextPacks((prev) => !prev)}
-                className="text-xs px-2.5 py-1.5 rounded-md"
-                style={{
-                  border: '1px solid var(--tf-border)',
-                  backgroundColor: 'var(--tf-surface-raised)',
-                  color: 'var(--tf-text-secondary)',
-                  cursor: 'pointer',
-                }}
-              >
-                {showContextPacks ? 'Hide Context Packs' : 'Context Packs'}
-              </button>
-            )}
-            {stripeBillingPackEnabled && (
-              <button
-                type="button"
-                onClick={() => {
-                  setBillingBusy(true);
-                  setBillingMessage('Generating billing pack...');
-                  void applyStripeBillingPack(project.id, { scaffold_files: false, sync_vercel_env: false }).then((result) => {
-                    setBillingBusy(false);
-                    if (!result.ok) {
-                      setBillingMessage(result.detail || 'Failed to generate billing pack.');
-                      return;
-                    }
-                    setBillingMessage('Billing pack generated.');
-                    void loadBillingStatus();
-                  }).catch(() => {
-                    setBillingBusy(false);
-                    setBillingMessage('Failed to generate billing pack.');
-                  });
-                }}
-                disabled={billingBusy}
-                className="text-xs px-2.5 py-1.5 rounded-md"
-                style={{
-                  border: '1px solid var(--tf-border)',
-                  backgroundColor: billingBusy ? 'var(--tf-surface-raised)' : 'var(--tf-surface-raised)',
-                  color: 'var(--tf-text-secondary)',
-                  cursor: billingBusy ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {billingBusy ? 'Generating…' : 'Generate Billing Pack'}
-              </button>
-            )}
-            {previewReviewEnabled && (
-              <button
-                type="button"
-                onClick={() => setShowPreviewReviews((prev) => !prev)}
-                className="text-xs px-2.5 py-1.5 rounded-md"
-                style={{
-                  border: '1px solid var(--tf-border)',
-                  backgroundColor: 'var(--tf-surface-raised)',
-                  color: 'var(--tf-text-secondary)',
-                  cursor: 'pointer',
-                }}
-              >
-                {showPreviewReviews ? 'Hide Reviews' : 'Preview Reviews'}
-              </button>
-            )}
-          </div>
-          {stripeBillingPackEnabled && billingStatus && (
-            <div className="mt-2 rounded-lg px-3 py-2" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)' }}>
-              <p className="text-xs" style={{ color: 'var(--tf-text-secondary)', margin: 0 }}>
-                Stripe: {billingStatus.stripe_verified ? 'Verified' : billingStatus.stripe_configured ? 'Configured (not verified)' : 'Not configured'}
-              </p>
-              {billingStatus.detected_stack && (
-                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)', marginBottom: 0 }}>
-                  Stack: {billingStatus.detected_stack}
-                </p>
-              )}
-              {billingStatus.artifact_exists && billingStatus.artifact_path && (
-                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)', marginBottom: 0, overflowWrap: 'anywhere' }}>
-                  Artifact: {billingStatus.artifact_path}
-                </p>
-              )}
-              {!billingStatus.stripe_verified && billingStatus.stripe_last_error && (
-                <p className="text-xs mt-1" style={{ color: 'var(--tf-warning)', marginBottom: 0 }}>
-                  {billingStatus.stripe_last_error}
-                </p>
-              )}
-            </div>
-          )}
-          {stripeBillingPackEnabled && billingMessage && (
-            <p className="text-xs mt-2" style={{ color: 'var(--tf-text-muted)' }}>
-              {billingMessage}
+          {workspaceMessage && (
+            <p className="text-xs mt-2" style={{ color: 'var(--tf-success)' }}>
+              {workspaceMessage}
             </p>
           )}
-          {contextPacksEnabled && showContextPacks && (
-            <div className="mt-3">
-              <ContextPackPanel activeProjectId={project.id} defaultScope="project" />
-            </div>
-          )}
-          {previewReviewEnabled && showPreviewReviews && (
-            <div className="mt-3">
-              <PreviewReviewPanel projectId={project.id} />
-            </div>
+          {workspaceError && (
+            <p className="text-xs mt-2" style={{ color: 'var(--tf-warning)' }}>
+              {workspaceError}
+            </p>
           )}
         </section>
       </div>
@@ -2058,9 +1999,6 @@ export default function ProjectPanel({
   defaultGithubRepo = '',
   defaultGithubBranch = 'master',
   githubConfigured = false,
-  contextPacksEnabled = true,
-  previewReviewEnabled = true,
-  stripeBillingPackEnabled = true,
   onGitHubSetupRequired,
 }: ProjectPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2076,6 +2014,8 @@ export default function ProjectPanel({
   const [newProjectRepo, setNewProjectRepo] = useState(defaultGithubRepo);
   const [newProjectBranch, setNewProjectBranch] = useState(defaultGithubBranch || 'master');
   const [projectError, setProjectError] = useState('');
+  const [workspaceMessage, setWorkspaceMessage] = useState('');
+  const [workspaceError, setWorkspaceError] = useState('');
 
   const projectModeOptions = useMemo(() => ([
     {
@@ -2131,8 +2071,33 @@ export default function ProjectPanel({
     setSelectedId(next);
     setDeleteProjectError('');
     setTagsError('');
+    setWorkspaceMessage('');
+    setWorkspaceError('');
     onSelectProject?.(next || '');
   };
+
+  const handleOpenWorkspace = useCallback(async (project: Project) => {
+    if (!project || !project.id) return;
+    setWorkspaceMessage('');
+    setWorkspaceError('');
+
+    const result = await openProjectWorkspace(project.id);
+    const workspacePath = String(project.workspace_path || '').trim();
+    if (result.ok && result.data?.opened) {
+      setWorkspaceMessage(result.data.detail || 'Workspace folder opened.');
+      return;
+    }
+
+    const detail = result.detail
+      || result.data?.detail
+      || 'Unable to open workspace folder from this environment.';
+    if (workspacePath) {
+      void navigator.clipboard.writeText(workspacePath).catch(() => undefined);
+      setWorkspaceError(`${detail} Path copied to clipboard.`);
+      return;
+    }
+    setWorkspaceError(detail);
+  }, []);
 
   const handleDeleteProject = useCallback(async () => {
     if (!selectedProject || deletingProjectId) return;
@@ -2143,6 +2108,8 @@ export default function ProjectPanel({
     if (!confirmed) return;
 
     setDeleteProjectError('');
+    setWorkspaceMessage('');
+    setWorkspaceError('');
     setDeletingProjectId(selectedProject.id);
     const result = await deleteProjectApi(selectedProject.id);
     setDeletingProjectId(null);
@@ -2515,13 +2482,25 @@ export default function ProjectPanel({
             </div>
           )}
         </div>
+        {(workspaceMessage || workspaceError) && (
+          <div
+            className="rounded-lg px-3 py-2 text-xs"
+            style={{
+              border: '1px solid var(--tf-border)',
+              backgroundColor: 'var(--tf-surface-raised)',
+              color: workspaceError ? 'var(--tf-warning)' : 'var(--tf-success)',
+            }}
+          >
+            {workspaceError || workspaceMessage}
+          </div>
+        )}
         {projects.map((project) => (
           <ProjectListCard
             key={project.id}
             project={project}
-            tasks={tasksByProject[project.id] ?? []}
             selected={effectiveSelectedId === project.id}
             onSelect={() => handleSelect(project.id)}
+            onOpenWorkspace={handleOpenWorkspace}
           />
         ))}
       </div>
@@ -2535,18 +2514,20 @@ export default function ProjectPanel({
             onClose={() => {
               setDeleteProjectError('');
               setTagsError('');
+              setWorkspaceMessage('');
+              setWorkspaceError('');
               setSelectedId(null);
               onSelectProject?.('');
             }}
+            onOpenWorkspace={handleOpenWorkspace}
             onDelete={handleDeleteProject}
             deleting={deletingProjectId === selectedProject.id}
             deleteError={deleteProjectError}
             onSaveTags={handleSaveTags}
             savingTags={savingTags}
             tagsError={tagsError}
-            contextPacksEnabled={contextPacksEnabled}
-            previewReviewEnabled={previewReviewEnabled}
-            stripeBillingPackEnabled={stripeBillingPackEnabled}
+            workspaceMessage={workspaceMessage}
+            workspaceError={workspaceError}
           />
         </div>
       )}

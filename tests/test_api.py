@@ -201,6 +201,30 @@ class TestListProjectsEndpoint:
         assert persisted is not None
         assert persisted.get("run_instructions") == "npm ci\nnpm run dev"
 
+    def test_list_includes_high_level_tasks(self, client):
+        import src.web.api as api_module
+
+        pid = _create_project(client, name="Lane Project")
+        task_id = api_module.task_board.create_task(
+            pid,
+            "Vinod execution stream",
+            "Contribute specialist implementation output. Request focus: Build a modern dashboard shell and auth flow.",
+            "vinod",
+            "p1",
+        )
+        api_module.task_board.update_status(pid, task_id, "in_progress")
+
+        data = client.get("/api/projects").json()
+        project = next((p for p in data if p.get("id") == pid), None)
+        assert project is not None
+        lanes = project.get("high_level_tasks")
+        assert isinstance(lanes, list)
+        assert len(lanes) == 1
+        lane = lanes[0]
+        assert lane["owner"] == "vinod"
+        assert lane["status"] == "in_progress"
+        assert "dashboard shell and auth flow" in lane["headline"].lower()
+
 
 class TestCreateProjectEndpoint:
     def test_creates_project_and_returns_metadata(self, client):
@@ -318,6 +342,55 @@ class TestPatchProjectEndpoint:
         assert persisted.get("tags") == ["frontend", "urgent"]
 
 
+class TestOpenWorkspaceEndpoint:
+    def test_open_workspace_success(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        pid = _create_project(client, name="Workspace Open Project")
+        launched: list[list[str]] = []
+
+        class _FakeProcess:
+            def __init__(self, cmd: list[str]) -> None:
+                launched.append(cmd)
+
+        def _fake_popen(cmd, **_kwargs):
+            return _FakeProcess(list(cmd))
+
+        monkeypatch.setattr(api_module.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(api_module.shutil, "which", lambda _name: "/usr/bin/xdg-open")
+
+        response = client.post(f"/api/projects/{pid}/workspace/open")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["opened"] is True
+        assert payload["launcher"] in {"open", "explorer", "xdg-open"}
+        assert payload["path"]
+        assert payload["correlation_id"]
+        assert len(launched) == 1
+
+    def test_open_workspace_returns_guided_error_for_unsafe_path(self, client):
+        import src.web.api as api_module
+
+        pid = _create_project(client, name="Unsafe Workspace Open")
+        outside_root = os.path.abspath(os.path.join(api_module.DATA_DIR, f"outside-open-{pid}"))
+        os.makedirs(outside_root, exist_ok=True)
+        api_module.state_manager.update_project(pid, {"workspace_path": outside_root})
+
+        response = client.post(f"/api/projects/{pid}/workspace/open")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "error"
+        assert payload["opened"] is False
+        assert payload["launcher"] == "none"
+        assert payload["actions"]
+        assert payload["correlation_id"]
+
+    def test_open_workspace_missing_project_returns_404(self, client):
+        response = client.post("/api/projects/nonexistent1/workspace/open")
+        assert response.status_code == 404
+
+
 class TestApproveProjectPlanEndpoint:
     def test_approve_releases_active_planning_runs(self, client, monkeypatch, temp_data_dir):
         import src.web.api as api_module
@@ -386,6 +459,23 @@ class TestGetProjectEndpoint:
         data = client.get(f"/api/projects/{pid}").json()
         assert "tasks" in data
         assert isinstance(data["tasks"], list)
+
+    def test_response_contains_high_level_tasks(self, client):
+        import src.web.api as api_module
+
+        pid = _create_project(client)
+        api_module.task_board.create_task(
+            pid,
+            "Kickoff scope and acceptance criteria",
+            "Capture goals and acceptance criteria for launch.",
+            "ceo",
+            "p1",
+        )
+        data = client.get(f"/api/projects/{pid}").json()
+        lanes = data.get("high_level_tasks")
+        assert isinstance(lanes, list)
+        assert lanes[0]["owner"] == "ceo"
+        assert "kickoff scope and acceptance criteria" in lanes[0]["headline"].lower()
 
     def test_returns_404_for_missing_project(self, client):
         response = client.get("/api/projects/nonexistent1")

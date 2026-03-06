@@ -6,7 +6,6 @@ import AgentPanel from './components/AgentPanel';
 import ProjectPanel from './components/ProjectPanel';
 import RunDrawer from './components/RunDrawer';
 import RunStatusChip from './components/RunStatusChip';
-const ActivityPanel = lazy(() => import('./components/ActivityPanel'));
 const EventLogPanel = lazy(() => import('./components/MetricsPanel'));
 const ChatPanel = lazy(() => import('./components/ChatPanel'));
 const SettingsPanel = lazy(() => import('./components/SettingsPanel'));
@@ -235,6 +234,12 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
 
+  useEffect(() => {
+    if (activeTab === 'activity') {
+      setActiveTab('events');
+    }
+  }, [activeTab]);
+
   // Config / setup state
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(true);
@@ -349,6 +354,8 @@ export default function App() {
   const [activityStreamHealth, setActivityStreamHealth] = useState<ActivityStreamHealth>('live');
   const [activityStreamSource, setActivityStreamSource] = useState<ActivityStreamSource>('SSE');
   const [activityTotalEstimate, setActivityTotalEstimate] = useState(0);
+  const [activityNextCursor, setActivityNextCursor] = useState('');
+  const [loadingOlderEvents, setLoadingOlderEvents] = useState(false);
   const [workforceLive, setWorkforceLive] = useState<WorkforceLiveSnapshot>(() => emptyWorkforceLiveSnapshot(''));
 
   // Loading states
@@ -705,6 +712,7 @@ export default function App() {
     incoming: ActivityEvent[],
     source: ActivityStreamSource,
     totalEstimate?: number,
+    placement: 'append' | 'prepend' = 'append',
   ) => {
     if (!Array.isArray(incoming) || incoming.length === 0) {
       if (Number.isFinite(totalEstimate) && (totalEstimate ?? 0) > 0) {
@@ -728,12 +736,12 @@ export default function App() {
         return seeded;
       }
       let added = 0;
-      const next = [...prev];
+      const additions: ActivityEvent[] = [];
       for (const event of incoming) {
         const key = eventKey(event);
         if (seen.has(key)) continue;
         seen.add(key);
-        next.push(event);
+        additions.push(event);
         added += 1;
       }
       if (added <= 0) {
@@ -742,6 +750,9 @@ export default function App() {
         }
         return prev;
       }
+      const next = placement === 'prepend'
+        ? [...additions, ...prev]
+        : [...prev, ...additions];
       const sliced = next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
       setLiveEventsCount((count) => count + added);
       setActivityStreamSource(source);
@@ -767,6 +778,7 @@ export default function App() {
         'Poll',
         Number.isFinite(paged.total_estimate) ? paged.total_estimate : undefined,
       );
+      setActivityNextCursor(String(paged.next_cursor || ''));
       setActivityStreamHealth('fallback_polling');
     }
   }, [appendActivityEvents]);
@@ -781,6 +793,26 @@ export default function App() {
       void refreshActivityFallback();
     }, activityFallbackMs);
   }, [activityFallbackEnabled, activityFallbackMs, refreshActivityFallback]);
+
+  const loadOlderActivityEvents = useCallback(async () => {
+    const cursor = String(activityNextCursor || '').trim();
+    if (!cursor || loadingOlderEvents) return;
+    setLoadingOlderEvents(true);
+    try {
+      const paged = await fetchRecentActivityPagedV1(200, cursor);
+      if (paged.status === 'ok' && Array.isArray(paged.events)) {
+        appendActivityEvents(
+          paged.events,
+          'Poll',
+          Number.isFinite(paged.total_estimate) ? paged.total_estimate : undefined,
+          'prepend',
+        );
+        setActivityNextCursor(String(paged.next_cursor || ''));
+      }
+    } finally {
+      setLoadingOlderEvents(false);
+    }
+  }, [activityNextCursor, appendActivityEvents, loadingOlderEvents]);
 
   // ---- Initial load ----
   useEffect(() => {
@@ -799,6 +831,7 @@ export default function App() {
           'Poll',
           Number.isFinite(paged.total_estimate) ? paged.total_estimate : undefined,
         );
+        setActivityNextCursor(String(paged.next_cursor || ''));
         return;
       }
       throw new Error('v1 activity endpoint unavailable');
@@ -807,8 +840,10 @@ export default function App() {
         if (Array.isArray(fetched) && fetched.length > 0) {
           appendActivityEvents(fetched, 'Poll');
         }
+        setActivityNextCursor('');
       }).catch(() => {
         // activity endpoint unavailable
+        setActivityNextCursor('');
       });
     });
 
@@ -821,7 +856,7 @@ export default function App() {
     const shouldRefreshAgents = activeTab === 'overview' || activeTab === 'agents';
     const shouldRefreshMetrics = false; // metrics polling removed
     const shouldRefreshProjectSummaries =
-      chatOpen || activeTab === 'overview' || activeTab === 'activity';
+      chatOpen || activeTab === 'overview' || activeTab === 'events';
     const shouldRefreshWorkforce = true;
 
     const interval = setInterval(() => {
@@ -843,7 +878,7 @@ export default function App() {
       if (activeTab === 'overview' || activeTab === 'agents') {
         loadAgents();
       }
-      if (chatOpen || activeTab === 'overview' || activeTab === 'activity') {
+      if (chatOpen || activeTab === 'overview' || activeTab === 'events') {
         loadProjects(false);
       }
       loadWorkforce(true);
@@ -1064,9 +1099,8 @@ export default function App() {
     '1': () => setActiveTab('overview'),
     '2': () => setActiveTab('agents'),
     '3': () => setActiveTab('projects'),
-    '4': () => setActiveTab('activity'),
-    '5': () => setActiveTab('events'),
-    '6': () => setActiveTab('settings'),
+    '4': () => setActiveTab('events'),
+    '5': () => setActiveTab('settings'),
     'c': () => setChatOpen((prev) => {
       const next = !prev;
       if (next) setChatHasUnread(false);
@@ -1324,35 +1358,12 @@ export default function App() {
               defaultGithubRepo={config?.integrations?.github_repo || ''}
               defaultGithubBranch={config?.integrations?.github_default_branch || 'master'}
               githubConfigured={githubConfigured}
-              contextPacksEnabled={contextPacksEnabled}
-              previewReviewEnabled={previewReviewEnabled}
-              stripeBillingPackEnabled={stripeBillingPackEnabled}
               onProjectCreated={(projectId) => {
                 setActiveProjectId(projectId);
                 setPendingProjectId(projectId);
                 loadProjects(true);
               }}
               onGitHubSetupRequired={() => openConnectorSetup('github')}
-            />
-          );
-
-        case 'activity':
-          if (normalizedSearch && filteredActivityEvents.length === 0) {
-            return (
-              <div className="rounded-xl p-6" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
-                <p className="text-sm font-semibold" style={{ color: 'var(--tf-text)' }}>No matching activity</p>
-                <p className="text-xs mt-1" style={{ color: 'var(--tf-text-muted)' }}>
-                  No activity entry matches "{globalSearchQuery}".
-                </p>
-              </div>
-            );
-          }
-          return (
-            <ActivityPanel
-              events={filteredActivityEvents}
-              streamHealth={activityStreamHealth}
-              streamSource={activityStreamSource}
-              totalEstimate={Math.max(activityTotalEstimate, liveEventsCount)}
             />
           );
 
@@ -1363,6 +1374,9 @@ export default function App() {
               streamHealth={activityStreamHealth}
               streamSource={activityStreamSource}
               totalEstimate={Math.max(activityTotalEstimate, liveEventsCount)}
+              onLoadOlder={loadOlderActivityEvents}
+              hasOlder={Boolean(activityNextCursor)}
+              loadingOlder={loadingOlderEvents}
             />
           );
 

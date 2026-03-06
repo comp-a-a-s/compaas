@@ -43,6 +43,11 @@ const projectsPayload = [
     tags: ['frontend', 'urgent'],
     workspace_path: '/Users/idan/compaas/projects/smoke_project',
     run_instructions: 'npm install\nnpm run dev',
+    high_level_tasks: [
+      { owner: 'ceo', headline: 'Finalize scope and acceptance criteria', status: 'in_progress' },
+      { owner: 'lead-frontend', headline: 'Build task board UI and interactions', status: 'todo' },
+      { owner: 'qa-lead', headline: 'Prepare launch validation checklist', status: 'review' },
+    ],
     task_counts: { todo: 1, in_progress: 0, done: 0, blocked: 0 },
     total_tasks: 1,
     plan_packet: { ready: false, missing_items: [], summary: '' },
@@ -260,8 +265,32 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({ json: projectDetailPayload });
   });
 
+  await page.route('**/api/projects/*/workspace/open', async (route) => {
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        opened: true,
+        path: '/Users/idan/compaas/projects/smoke_project',
+        launcher: 'open',
+        detail: 'Workspace folder opened.',
+        correlation_id: 'corr-smoke-open-workspace',
+      },
+    });
+  });
+
   await page.route('**/api/activity/recent*', async (route) => {
     await route.fulfill({ json: [] });
+  });
+
+  await page.route('**/api/v1/activity/recent*', async (route) => {
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        events: [],
+        next_cursor: '',
+        total_estimate: 0,
+      },
+    });
   });
 
   await page.route('**/api/activity/stream', async (route) => {
@@ -361,6 +390,8 @@ test('dashboard navigation and connector validation @smoke', async ({ page }) =>
   await expect(page.getByRole('button', { name: 'Projects', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Projects', exact: true }).click();
   await expect(page.getByRole('button', { name: /Smoke Project Synthetic/i })).toBeVisible();
+  await expect(page.getByText('Team Lanes').first()).toBeVisible();
+  await expect(page.getByText(/CEO: Finalize scope/i)).toBeVisible();
   await expect(page.getByText('#frontend').first()).toBeVisible();
   await expect(page.getByText('npm install').first()).toBeVisible();
   if (!(await page.getByText('Project Description').isVisible())) {
@@ -370,6 +401,12 @@ test('dashboard navigation and connector validation @smoke', async ({ page }) =>
   await expect(page.getByText('Team + High-Level Tasks')).toBeVisible();
   await expect(page.getByText('Final Run Commands')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open Workspace Folder' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open Workspace Folder' }).click();
+  await expect(page.getByText('Workspace folder opened.').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Context Packs' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Generate Billing Pack' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Preview Reviews' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Activity', exact: true })).toHaveCount(0);
   await expect(page.getByRole('tab', { name: 'Overview' })).toHaveCount(0);
   await expect(page.getByRole('tab', { name: 'Tasks' })).toHaveCount(0);
   await expect(page.getByRole('tab', { name: 'Plan' })).toHaveCount(0);

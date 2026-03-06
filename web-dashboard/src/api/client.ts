@@ -15,6 +15,7 @@ import type {
   UpdateApplyResponse,
   UpdateStatusResponse,
   PagedActivityResponse,
+  OpenWorkspaceResult,
   PrQualityProfileResponse,
   ContextPack,
   ReviewComment,
@@ -249,6 +250,12 @@ export async function deleteProject(projectId: string): Promise<{
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export async function openProjectWorkspace(projectId: string): Promise<ApiResult<OpenWorkspaceResult>> {
+  return safeFetchResult<OpenWorkspaceResult>(`${BASE}/projects/${encodeURIComponent(projectId)}/workspace/open`, {
+    method: 'POST',
+  });
 }
 
 export async function updateProjectTags(projectId: string, tags: string[]): Promise<{
