@@ -248,6 +248,172 @@ textarea:focus-visible {
 }
 .org-node-active {
   animation: org-node-glow 2.5s ease-in-out infinite;
+  opacity: var(--org-glow-opacity, 0.9);
+}
+
+.org-chart-shell {
+  --org-flow-duration: 1.45s;
+  --org-glow-opacity: 0.86;
+  --org-pulse-scale: 1.06;
+}
+
+.org-node-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  border-radius: 14px;
+  padding: 10px 10px 8px;
+  min-width: 96px;
+  max-width: 150px;
+  animation: org-node-enter 0.28s ease-out both;
+}
+
+.org-node-card:hover {
+  transform: translateY(-1px);
+}
+
+.org-node--executive {
+  min-width: 124px;
+  max-width: 170px;
+  border-width: 1.8px;
+}
+
+.org-node--lead {
+  min-width: 108px;
+  max-width: 156px;
+}
+
+.org-node--specialist {
+  min-width: 94px;
+  max-width: 142px;
+}
+
+.org-node-muted {
+  opacity: 0.45;
+}
+
+.org-node-quiet {
+  transition-duration: 0.35s;
+}
+
+.org-node-name {
+  font-size: 12px;
+  font-weight: 650;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.org-node-role {
+  font-size: 10px;
+  text-align: center;
+  line-height: 1.25;
+}
+
+.org-node-team-badge {
+  font-size: 9px;
+  line-height: 1.2;
+  color: var(--tf-accent-blue);
+  border: 1px solid color-mix(in srgb, var(--tf-accent-blue) 42%, transparent);
+  background: color-mix(in srgb, var(--tf-accent-blue) 12%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+  max-width: 96%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.org-node-task,
+.org-node-meta,
+.org-node-stale {
+  font-size: 10px;
+  text-align: center;
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.org-node-task {
+  font-weight: 600;
+}
+
+.org-node-meta {
+  color: var(--tf-text-muted);
+}
+
+.org-node-stale {
+  color: var(--tf-warning);
+}
+
+.org-node-state-chip {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border: 1px solid var(--tf-border);
+  background: color-mix(in srgb, var(--tf-surface) 86%, transparent);
+  color: var(--tf-text-muted);
+}
+
+.org-node-state-chip--working {
+  color: var(--tf-success);
+  border-color: color-mix(in srgb, var(--tf-success) 48%, transparent);
+  background: color-mix(in srgb, var(--tf-success) 12%, transparent);
+}
+
+.org-node-state-chip--assigned {
+  color: var(--tf-warning);
+  border-color: color-mix(in srgb, var(--tf-warning) 44%, transparent);
+  background: color-mix(in srgb, var(--tf-warning) 12%, transparent);
+}
+
+.org-node-state-chip--reporting {
+  color: var(--tf-accent-blue);
+  border-color: color-mix(in srgb, var(--tf-accent-blue) 46%, transparent);
+  background: color-mix(in srgb, var(--tf-accent-blue) 12%, transparent);
+}
+
+.org-node-state-chip--blocked {
+  color: var(--tf-error);
+  border-color: color-mix(in srgb, var(--tf-error) 46%, transparent);
+  background: color-mix(in srgb, var(--tf-error) 12%, transparent);
+}
+
+.org-node-state-chip--idle {
+  color: var(--tf-text-muted);
+}
+
+@keyframes org-node-enter {
+  0% { opacity: 0; transform: translateY(8px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.org-node-state--reporting .org-node-state-chip {
+  animation: org-reporting-tick 0.9s ease-out 1;
+}
+
+.org-node-state--blocked .org-node-state-chip {
+  animation: org-blocked-flash 1.05s ease-in-out 2;
+}
+
+@keyframes org-reporting-tick {
+  0% { transform: translateY(2px); opacity: 0.5; }
+  60% { transform: translateY(-1px); opacity: 1; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes org-blocked-flash {
+  0%, 100% { box-shadow: 0 0 0 transparent; }
+  50% { box-shadow: 0 0 8px rgba(240,170,74,0.45); }
 }
 
 @keyframes team-pulse-in {
@@ -328,19 +494,87 @@ textarea:focus-visible {
 }
 
 .anim-flow-down {
-  animation: flow-down 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: flow-down var(--org-flow-duration, 1.4s) cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 .anim-flow-right {
-  animation: flow-right 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: flow-right var(--org-flow-duration, 1.4s) cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 .anim-flow-up {
-  animation: flow-up 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: flow-up var(--org-flow-duration, 1.4s) cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 .anim-flow-left {
-  animation: flow-left 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: flow-left var(--org-flow-duration, 1.4s) cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.org-connector {
+  position: relative;
+}
+
+.org-connector-flow {
+  opacity: 0.92;
+}
+
+.org-connector-blocked-dot {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tf-warning);
+  box-shadow: 0 0 8px rgba(240,170,74,0.52);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+.org-legend {
+  margin: 0 auto 10px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.org-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--tf-border);
+  background: color-mix(in srgb, var(--tf-surface) 84%, transparent);
+  color: var(--tf-text-muted);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.org-legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.org-legend-dot--working {
+  background: var(--tf-success);
+}
+
+.org-legend-dot--reporting {
+  background: var(--tf-accent-blue);
+}
+
+.org-legend-dot--blocked {
+  background: var(--tf-warning);
+}
+
+.org-motion-quiet .org-node-active {
+  animation-duration: 3.2s;
+}
+
+.org-motion-intense .org-node-active {
+  animation-duration: 1.9s;
 }
 
 /* ---- Project approval card entrance ---- */

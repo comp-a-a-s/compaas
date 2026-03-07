@@ -129,6 +129,17 @@ export interface ActivityEvent {
 
 export type WorkforceState = 'assigned' | 'working' | 'reporting' | 'blocked';
 
+export type OrgVisualTier = 'executive' | 'lead' | 'specialist';
+export type OrgMotionMode = 'quiet' | 'active' | 'intense';
+export type OrgNodeState = WorkforceState | 'idle';
+
+export interface OrgNodeDecor {
+  tier: OrgVisualTier;
+  state: OrgNodeState;
+  workloadScore: number;
+  stalenessScore: number;
+}
+
 export interface WorkforceWorker {
   work_item_id?: string;
   agent_id: string;

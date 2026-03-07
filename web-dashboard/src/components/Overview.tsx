@@ -1,5 +1,17 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import type { Agent, Project, Task, ActivityEvent, WorkforceLiveSnapshot, WorkforceState, WorkforceWorker } from '../types';
+import type {
+  Agent,
+  Project,
+  Task,
+  ActivityEvent,
+  WorkforceLiveSnapshot,
+  WorkforceState,
+  WorkforceWorker,
+  OrgMotionMode,
+  OrgNodeDecor,
+  OrgNodeState,
+  OrgVisualTier,
+} from '../types';
 import Tooltip from './Tooltip';
 
 interface OverviewProps {
@@ -139,44 +151,123 @@ function liveWhyTitle(row: WorkforceWorker): string {
   return bits.join('\n');
 }
 
-// ---- Animated connector line ----
-// Shows a flowing green signal when the connected child (or its subtree) is active.
+const ORG_EXECUTIVE_IDS = new Set(['ceo']);
+const ORG_LEAD_IDS = new Set([
+  'cto',
+  'cfo',
+  'ciso',
+  'vp-product',
+  'vp-engineering',
+  'chief-researcher',
+  'lead-backend',
+  'lead-frontend',
+  'qa-lead',
+  'devops',
+  'lead-designer',
+]);
 
-interface ConnectorProps {
-  vertical?: boolean;
-  active?: boolean;
-  flowDirection?: 'down' | 'up' | null;
-  size: number; // px: height for vertical, width for horizontal
+function toVisualTier(agent: Agent): OrgVisualTier {
+  const id = agent.id.toLowerCase();
+  if (ORG_EXECUTIVE_IDS.has(id)) return 'executive';
+  if (ORG_LEAD_IDS.has(id)) return 'lead';
+  const role = String(agent.role || '');
+  if (/\bchief\b|\bvp\b|\blead\b/i.test(role)) return 'lead';
+  return 'specialist';
 }
 
-function Connector({ vertical = true, active = false, flowDirection = 'down', size }: ConnectorProps) {
-  const baseColor = active ? 'rgba(63,185,80,0.35)' : 'var(--tf-border)';
+function toWorkloadScore(count: number, maxCount: number): number {
+  if (maxCount <= 0) return 0;
+  const ratio = Math.max(0, Math.min(1, count / maxCount));
+  return Math.round(ratio * 100);
+}
+
+function toStalenessScore(updatedAt?: string): number {
+  if (!updatedAt) return 0;
+  const ts = new Date(updatedAt).getTime();
+  if (!Number.isFinite(ts) || ts <= 0) return 0;
+  const ageMs = Math.max(0, Date.now() - ts);
+  const ratio = Math.max(0, Math.min(1, ageMs / (3 * 60_000)));
+  return Math.round(ratio * 100);
+}
+
+function toMotionMode(
+  activeCount: number,
+  workingCount: number,
+  blockedCount: number,
+  stale: boolean,
+): OrgMotionMode {
+  if (activeCount === 0 && workingCount === 0) return 'quiet';
+  if (stale) return 'quiet';
+  if (workingCount >= 3 || blockedCount > 0) return 'intense';
+  return 'active';
+}
+
+type FlowDirection = 'down' | 'up' | null;
+
+// ---- Animated connector line ----
+// Shows directional flow + blocked signal for active branches.
+interface OrgConnectorProps {
+  vertical?: boolean;
+  active?: boolean;
+  blocked?: boolean;
+  flowDirection?: 'down' | 'up' | null;
+  size: number | string; // height for vertical, width for horizontal
+  motionMode?: OrgMotionMode;
+}
+
+function OrgConnector({
+  vertical = true,
+  active = false,
+  blocked = false,
+  flowDirection = 'down',
+  size,
+  motionMode = 'quiet',
+}: OrgConnectorProps) {
+  const baseColor = blocked
+    ? 'rgba(240,170,74,0.45)'
+    : active
+      ? flowDirection === 'up'
+        ? 'rgba(59,142,255,0.4)'
+        : 'rgba(63,185,80,0.42)'
+      : 'var(--tf-border)';
   const flowClass = vertical
-    ? flowDirection === 'up' ? 'anim-flow-up' : 'anim-flow-down'
-    : flowDirection === 'up' ? 'anim-flow-left' : 'anim-flow-right';
+    ? flowDirection === 'up'
+      ? 'anim-flow-up'
+      : 'anim-flow-down'
+    : flowDirection === 'up'
+      ? 'anim-flow-left'
+      : 'anim-flow-right';
+  const flowColor = blocked
+    ? 'var(--tf-warning)'
+    : flowDirection === 'up'
+      ? 'var(--tf-accent-blue)'
+      : 'var(--tf-success)';
+  const length = typeof size === 'number' ? `${size}px` : size;
   const gradient = vertical
     ? flowDirection === 'up'
-      ? 'linear-gradient(to top, transparent, var(--tf-success), transparent)'
-      : 'linear-gradient(to bottom, transparent, var(--tf-success), transparent)'
+      ? `linear-gradient(to top, transparent, ${flowColor}, transparent)`
+      : `linear-gradient(to bottom, transparent, ${flowColor}, transparent)`
     : flowDirection === 'up'
-      ? 'linear-gradient(to left, transparent, var(--tf-success), transparent)'
-      : 'linear-gradient(to right, transparent, var(--tf-success), transparent)';
+      ? `linear-gradient(to left, transparent, ${flowColor}, transparent)`
+      : `linear-gradient(to right, transparent, ${flowColor}, transparent)`;
   return (
     <div
+      className={`org-connector ${active ? 'org-connector--active' : ''} ${blocked ? 'org-connector--blocked' : ''}`}
       style={{
         position: 'relative',
         overflow: 'hidden',
         ...(vertical
-          ? { width: '2px', height: `${size}px` }
-          : { height: '2px', width: `${size}px` }),
+          ? { width: '3px', height: length }
+          : { height: '3px', width: length }),
         backgroundColor: baseColor,
         transition: 'background-color 0.4s',
-        borderRadius: '1px',
+        borderRadius: '999px',
+        ['--org-connector-duration' as any]: motionMode === 'intense' ? '1.05s' : motionMode === 'active' ? '1.45s' : '2.1s',
       }}
     >
       {active && (
         <div
-          className={flowClass}
+          className={`org-connector-flow ${flowClass}`}
           style={{
             position: 'absolute',
             ...(vertical
@@ -186,76 +277,91 @@ function Connector({ vertical = true, active = false, flowDirection = 'down', si
           }}
         />
       )}
+      {blocked && <span className="org-connector-blocked-dot" />}
     </div>
   );
 }
 
 // ---- Org hierarchy node ----
-interface OrgNodeProps {
+interface OrgNodeCardProps {
   agent: Agent;
+  decor: OrgNodeDecor;
+  motionMode: OrgMotionMode;
   displayRole?: string;
   onAgentClick?: (agent: Agent) => void;
   muted?: boolean;
   blocked?: boolean;
+  showHeatOverlay?: boolean;
   liveState?: WorkforceState;
   liveWorker?: WorkforceWorker;
 }
-function OrgNode({
+function OrgNodeCard({
   agent,
+  decor,
+  motionMode,
   displayRole,
   onAgentClick,
   muted = false,
   blocked = false,
+  showHeatOverlay = false,
   liveState,
   liveWorker,
-}: OrgNodeProps) {
+}: OrgNodeCardProps) {
   const color = modelColor(effectiveModel(agent));
   const initial = agent.name.charAt(0).toUpperCase();
   const effectiveState: WorkforceState | null = !muted
     ? (liveState || (blocked ? 'blocked' : null))
     : null;
   const visual = liveStateVisual(effectiveState || undefined);
-  const isActive = Boolean(effectiveState);
-
-  // Determine what label to show under the card
+  const isActive = decor.state !== 'idle' && !muted;
   const activityLabel = liveWorker?.task && !muted
     ? liveWorker.task
     : !muted && isActive
       ? liveStateLabel(effectiveState || 'working')
-        : null;
+      : null;
   const liveMetaLabel = liveWorker
     ? `${liveWorker.run_id ? `${liveWorker.run_id.slice(0, 10)} ` : ''}${liveWorker.source || 'real'} · ${formatElapsedSeconds(liveWorker.elapsed_seconds)}`
     : '';
+  const staleVisible = !muted && liveWorker && decor.stalenessScore >= 62;
+  const roleLabel = displayRole ?? agent.role;
+  const stateLabel = decor.state === 'idle' ? 'Idle' : liveStateLabel(decor.state as WorkforceState);
+  const tooltipBits = [
+    roleLabel,
+    runtimeLabel(agent),
+    `State ${stateLabel}`,
+    liveWorker?.task ? `Task ${liveWorker.task}` : '',
+    liveWorker?.run_id ? `Run ${liveWorker.run_id}` : '',
+    liveWorker?.source ? `Source ${liveWorker.source}` : '',
+    liveWorker?.updated_at ? `Updated ${formatFreshness(liveWorker.updated_at)}` : '',
+    liveWorker ? `Elapsed ${formatElapsedSeconds(liveWorker.elapsed_seconds)}` : '',
+  ].filter(Boolean);
+  const heatIntensity = showHeatOverlay && !muted
+    ? Math.max(0.08, Math.min(0.44, decor.workloadScore / 170))
+    : 0;
 
   return (
     <div
-      className={`flex flex-col items-center gap-1 px-3 py-2 rounded-xl${effectiveState === 'working' ? ' org-node-active' : ''}`}
+      data-org-node-id={agent.id}
+      className={`org-node-card org-node--${decor.tier} org-node-state--${decor.state}${isActive ? ' org-node-active' : ''}${muted ? ' org-node-muted' : ''}${motionMode === 'quiet' ? ' org-node-quiet' : ''}`}
       style={{
         backgroundColor: muted
           ? 'color-mix(in srgb, var(--tf-surface-raised) 84%, var(--tf-bg))'
-          : isActive ? visual.bg : 'var(--tf-surface-raised)',
+          : isActive
+            ? `color-mix(in srgb, ${visual.bg} 88%, var(--tf-surface-raised))`
+            : 'var(--tf-surface-raised)',
         border: `1.5px solid ${isActive ? visual.color : 'var(--tf-border)'}`,
-        minWidth: '88px',
-        maxWidth: '128px',
         cursor: onAgentClick ? 'pointer' : 'default',
-        transition: 'border-color 0.3s, background-color 0.3s, box-shadow 0.3s',
+        transition: 'border-color 0.26s, background-color 0.26s, box-shadow 0.26s, transform 0.22s',
         boxShadow: isActive
-          ? `0 0 12px color-mix(in srgb, ${visual.color} 38%, transparent), 0 0 4px color-mix(in srgb, ${visual.color} 28%, transparent)`
-          : 'none',
+          ? `0 0 16px color-mix(in srgb, ${visual.color} 34%, transparent), 0 0 4px color-mix(in srgb, ${visual.color} 22%, transparent), inset 0 1px 0 rgba(255,255,255,0.08)`
+          : 'inset 0 1px 0 rgba(255,255,255,0.04)',
         opacity: muted ? 0.46 : 1,
         filter: muted ? 'grayscale(38%)' : 'none',
+        backgroundImage: heatIntensity > 0
+          ? `radial-gradient(circle at 12% 14%, color-mix(in srgb, ${visual.color} ${Math.round(heatIntensity * 100)}%, transparent), transparent 62%)`
+          : undefined,
       }}
       onClick={() => onAgentClick?.(agent)}
-      onMouseEnter={(e) => {
-        if (onAgentClick) {
-          (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--tf-accent)';
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (onAgentClick) {
-          (e.currentTarget as HTMLDivElement).style.borderColor = isActive ? visual.color : 'var(--tf-border)';
-        }
-      }}
       role={onAgentClick ? 'button' : undefined}
       tabIndex={onAgentClick ? 0 : undefined}
       onKeyDown={(e) => {
@@ -265,8 +371,12 @@ function OrgNode({
         }
       }}
     >
+      <div className={`org-node-state-chip org-node-state-chip--${decor.state}`}>
+        {stateLabel}
+      </div>
+
       {/* Avatar with pulse ring when active */}
-      <div style={{ position: 'relative' }}>
+      <div style={{ position: 'relative', marginTop: '2px' }}>
         {isActive && visual.pulse && (
           <div style={{
             position: 'absolute',
@@ -312,23 +422,24 @@ function OrgNode({
           }} />
         )}
       </div>
-      <p className="text-xs font-medium text-center leading-tight" style={{ color: isActive ? visual.color : 'var(--tf-text)' }}>
+      <p className="org-node-name" style={{ color: isActive ? visual.color : 'var(--tf-text)' }}>
         {agent.name}
       </p>
-      <p className="text-xs text-center leading-tight" style={{ color: 'var(--tf-text-muted)' }}>
-        {displayRole ?? agent.role}
+      <p className="org-node-role" style={{ color: 'var(--tf-text-muted)' }}>
+        {roleLabel}
       </p>
+      {decor.tier === 'lead' && (
+        <p className="org-node-team-badge">
+          {agent.team || 'Team lead'}
+        </p>
+      )}
+
       {/* Show live activity label when working */}
       {activityLabel && !muted ? (
         <p
-          className={`text-xs text-center leading-tight${visual.pulse ? ' animate-pulse-dot' : ''}`}
+          className={`org-node-task${visual.pulse ? ' animate-pulse-dot' : ''}`}
           style={{
             color: isActive ? visual.color : blocked ? 'var(--tf-error)' : 'var(--tf-success)',
-            maxWidth: '96px',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontWeight: 500,
           }}
           title={activityLabel}
         >
@@ -337,17 +448,18 @@ function OrgNode({
       ) : null}
       {liveWorker && !muted && (
         <p
-          className="text-xs text-center leading-tight"
+          className="org-node-meta"
           style={{
             color: 'var(--tf-text-muted)',
-            maxWidth: '102px',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
           }}
-          title={liveWhyTitle(liveWorker)}
+          title={tooltipBits.join(' • ')}
         >
           {liveMetaLabel}
+        </p>
+      )}
+      {staleVisible && (
+        <p className="org-node-stale" title={tooltipBits.join(' • ')}>
+          Last update {formatFreshness(liveWorker?.updated_at)}
         </p>
       )}
     </div>
@@ -525,7 +637,15 @@ function subtreeHasActive(node: OrgTreeNode, activeIds: Set<string>): boolean {
   return (node.children ?? []).some((c) => subtreeHasActive(c, activeIds));
 }
 
-type FlowDirection = 'down' | 'up' | null;
+function subtreeHasBlocked(node: OrgTreeNode, blockedIds: Set<string>): boolean {
+  if (blockedIds.has(node.id)) return true;
+  return (node.children ?? []).some((c) => subtreeHasBlocked(c, blockedIds));
+}
+
+function subtreeHasAny(node: OrgTreeNode, ids: Set<string>): boolean {
+  if (ids.has(node.id)) return true;
+  return (node.children ?? []).some((c) => subtreeHasAny(c, ids));
+}
 
 function orgEdgeKey(parentId: string, childId: string): string {
   return `${parentId}>${childId}`;
@@ -546,12 +666,17 @@ interface TreeNodeProps {
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
   activeIds: Set<string>;
+  focusedAgentIds: Set<string>;
+  focusActiveChain: boolean;
   mutedAgentIds: Set<string>;
   flowEdgeDirections: Map<string, FlowDirection>;
-  activeTaskByAgent: Map<string, string>;
   blockedAgentIds: Set<string>;
   liveStateByAgent: Map<string, WorkforceState>;
   liveWorkerByAgent: Map<string, WorkforceWorker>;
+  workloadScoreByAgent: Map<string, number>;
+  stalenessScoreByAgent: Map<string, number>;
+  showHeatOverlay: boolean;
+  motionMode: OrgMotionMode;
 }
 
 function TreeNode({
@@ -559,12 +684,17 @@ function TreeNode({
   agentMap,
   onAgentClick,
   activeIds,
+  focusedAgentIds,
+  focusActiveChain,
   mutedAgentIds,
   flowEdgeDirections,
-  activeTaskByAgent,
   blockedAgentIds,
   liveStateByAgent,
   liveWorkerByAgent,
+  workloadScoreByAgent,
+  stalenessScoreByAgent,
+  showHeatOverlay,
+  motionMode,
 }: TreeNodeProps) {
   const agent = agentMap.get(node.id);
   const children = node.children ?? [];
@@ -572,29 +702,41 @@ function TreeNode({
   if (!agent) return null;
 
   const hasChildren = children.length > 0;
-  const muted = mutedAgentIds.has(node.id);
+  const focusMuted = focusActiveChain && focusedAgentIds.size > 0 && !focusedAgentIds.has(node.id);
+  const muted = mutedAgentIds.has(node.id) || focusMuted;
   const liveState = liveStateByAgent.get(node.id);
   const liveWorker = liveWorkerByAgent.get(node.id);
   const blocked = blockedAgentIds.has(node.id) || liveState === 'blocked';
+  const decorState: OrgNodeState = muted ? 'idle' : (liveState || (blocked ? 'blocked' : 'idle'));
+  const decor: OrgNodeDecor = {
+    tier: toVisualTier(agent),
+    state: decorState,
+    workloadScore: workloadScoreByAgent.get(node.id) || 0,
+    stalenessScore: stalenessScoreByAgent.get(node.id) || 0,
+  };
   const childSubtreeActive = children.some((c) => subtreeHasActive(c, activeIds))
     || children.some((c) => flowEdgeDirections.has(orgEdgeKey(node.id, c.id)));
+  const childBlocked = children.some((c) => subtreeHasBlocked(c, blockedAgentIds));
   const firstFlowEdge = children.find((c) => flowEdgeDirections.has(orgEdgeKey(node.id, c.id)));
   const stemDirection: FlowDirection = firstFlowEdge
     ? (flowEdgeDirections.get(orgEdgeKey(node.id, firstFlowEdge.id)) || 'down')
     : 'down';
   const tooltipContent = liveWorker
-    ? `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)}\n${liveWhyTitle(liveWorker)}`
+    ? `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)} · ${liveWhyTitle(liveWorker).replace(/\n/g, ' • ')}`
     : `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)}`;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
       <Tooltip content={tooltipContent} position="top">
-        <OrgNode
+        <OrgNodeCard
           agent={agent}
+          decor={decor}
+          motionMode={motionMode}
           displayRole={node.displayRole}
           onAgentClick={onAgentClick}
           muted={muted}
           blocked={blocked}
+          showHeatOverlay={showHeatOverlay}
           liveState={liveState}
           liveWorker={liveWorker}
         />
@@ -603,18 +745,30 @@ function TreeNode({
       {hasChildren && (
         <>
           {/* Vertical stem: animated if any child's subtree is active */}
-          <Connector vertical size={24} active={childSubtreeActive} flowDirection={stemDirection} />
+          <OrgConnector
+            vertical
+            size={24}
+            active={childSubtreeActive}
+            blocked={childBlocked}
+            flowDirection={stemDirection}
+            motionMode={motionMode}
+          />
           <ChildrenGroup
             node={node}
             agentMap={agentMap}
             onAgentClick={onAgentClick}
             activeIds={activeIds}
+            focusedAgentIds={focusedAgentIds}
+            focusActiveChain={focusActiveChain}
             mutedAgentIds={mutedAgentIds}
             flowEdgeDirections={flowEdgeDirections}
-            activeTaskByAgent={activeTaskByAgent}
             blockedAgentIds={blockedAgentIds}
             liveStateByAgent={liveStateByAgent}
             liveWorkerByAgent={liveWorkerByAgent}
+            workloadScoreByAgent={workloadScoreByAgent}
+            stalenessScoreByAgent={stalenessScoreByAgent}
+            showHeatOverlay={showHeatOverlay}
+            motionMode={motionMode}
           />
         </>
       )}
@@ -627,12 +781,17 @@ interface ChildrenGroupProps {
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
   activeIds: Set<string>;
+  focusedAgentIds: Set<string>;
+  focusActiveChain: boolean;
   mutedAgentIds: Set<string>;
   flowEdgeDirections: Map<string, FlowDirection>;
-  activeTaskByAgent: Map<string, string>;
   blockedAgentIds: Set<string>;
   liveStateByAgent: Map<string, WorkforceState>;
   liveWorkerByAgent: Map<string, WorkforceWorker>;
+  workloadScoreByAgent: Map<string, number>;
+  stalenessScoreByAgent: Map<string, number>;
+  showHeatOverlay: boolean;
+  motionMode: OrgMotionMode;
 }
 
 function ChildrenGroup({
@@ -640,12 +799,17 @@ function ChildrenGroup({
   agentMap,
   onAgentClick,
   activeIds,
+  focusedAgentIds,
+  focusActiveChain,
   mutedAgentIds,
   flowEdgeDirections,
-  activeTaskByAgent,
   blockedAgentIds,
   liveStateByAgent,
   liveWorkerByAgent,
+  workloadScoreByAgent,
+  stalenessScoreByAgent,
+  showHeatOverlay,
+  motionMode,
 }: ChildrenGroupProps) {
   const children = node.children ?? [];
   const visibleChildren = children.filter((c) => agentMap.has(c.id));
@@ -655,22 +819,36 @@ function ChildrenGroup({
   if (visibleChildren.length === 1) {
     const edgeKey = orgEdgeKey(node.id, visibleChildren[0].id);
     const edgeInFlow = flowEdgeDirections.has(edgeKey);
+    const inFocusScope = !focusActiveChain || focusedAgentIds.size === 0 || subtreeHasAny(visibleChildren[0], focusedAgentIds);
     const childActive = edgeInFlow || subtreeHasActive(visibleChildren[0], activeIds);
+    const childBlocked = subtreeHasBlocked(visibleChildren[0], blockedAgentIds);
     const edgeDirection = flowEdgeDirections.get(edgeKey) || 'down';
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <Connector vertical size={20} active={childActive} flowDirection={edgeDirection} />
+        <OrgConnector
+          vertical
+          size={20}
+          active={inFocusScope && childActive}
+          blocked={inFocusScope && childBlocked}
+          flowDirection={edgeDirection}
+          motionMode={motionMode}
+        />
         <TreeNode
           node={visibleChildren[0]}
           agentMap={agentMap}
           onAgentClick={onAgentClick}
           activeIds={activeIds}
+          focusedAgentIds={focusedAgentIds}
+          focusActiveChain={focusActiveChain}
           mutedAgentIds={mutedAgentIds}
           flowEdgeDirections={flowEdgeDirections}
-          activeTaskByAgent={activeTaskByAgent}
           blockedAgentIds={blockedAgentIds}
           liveStateByAgent={liveStateByAgent}
           liveWorkerByAgent={liveWorkerByAgent}
+          workloadScoreByAgent={workloadScoreByAgent}
+          stalenessScoreByAgent={stalenessScoreByAgent}
+          showHeatOverlay={showHeatOverlay}
+          motionMode={motionMode}
         />
       </div>
     );
@@ -683,7 +861,9 @@ function ChildrenGroup({
         const isLast = idx === visibleChildren.length - 1;
         const edgeKey = orgEdgeKey(node.id, child.id);
         const edgeInFlow = flowEdgeDirections.has(edgeKey);
+        const inFocusScope = !focusActiveChain || focusedAgentIds.size === 0 || subtreeHasAny(child, focusedAgentIds);
         const childActive = edgeInFlow || subtreeHasActive(child, activeIds);
+        const childBlocked = subtreeHasBlocked(child, blockedAgentIds);
         const edgeDirection: FlowDirection = flowEdgeDirections.get(edgeKey) || 'down';
 
         return (
@@ -697,40 +877,43 @@ function ChildrenGroup({
               top: 0,
               left: isFirst ? '50%' : 0,
               right: isLast ? '50%' : 0,
-              height: '2px',
-              overflow: 'hidden',
-              backgroundColor: childActive ? 'rgba(63,185,80,0.35)' : 'var(--tf-border)',
-              transition: 'background-color 0.4s',
+              height: '3px',
             }}>
-              {childActive && (
-                <div
-                  className={edgeDirection === 'up' ? 'anim-flow-left' : 'anim-flow-right'}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    bottom: 0,
-                    width: '50%',
-                    background: edgeDirection === 'up'
-                      ? 'linear-gradient(to left, transparent, var(--tf-success), transparent)'
-                      : 'linear-gradient(to right, transparent, var(--tf-success), transparent)',
-                  }}
-                />
-              )}
+              <OrgConnector
+                vertical={false}
+                size="100%"
+                active={inFocusScope && childActive}
+                blocked={inFocusScope && childBlocked}
+                flowDirection={edgeDirection}
+                motionMode={motionMode}
+              />
             </div>
 
             {/* Vertical stub to child */}
-            <Connector vertical size={20} active={childActive} flowDirection={edgeDirection} />
+            <OrgConnector
+              vertical
+              size={20}
+              active={inFocusScope && childActive}
+              blocked={inFocusScope && childBlocked}
+              flowDirection={edgeDirection}
+              motionMode={motionMode}
+            />
             <TreeNode
               node={child}
               agentMap={agentMap}
               onAgentClick={onAgentClick}
               activeIds={activeIds}
+              focusedAgentIds={focusedAgentIds}
+              focusActiveChain={focusActiveChain}
               mutedAgentIds={mutedAgentIds}
               flowEdgeDirections={flowEdgeDirections}
-              activeTaskByAgent={activeTaskByAgent}
               blockedAgentIds={blockedAgentIds}
               liveStateByAgent={liveStateByAgent}
               liveWorkerByAgent={liveWorkerByAgent}
+              workloadScoreByAgent={workloadScoreByAgent}
+              stalenessScoreByAgent={stalenessScoreByAgent}
+              showHeatOverlay={showHeatOverlay}
+              motionMode={motionMode}
             />
           </div>
         );
@@ -748,6 +931,25 @@ interface OrgChartProps {
   workforceLive?: WorkforceLiveSnapshot;
 }
 
+interface OrgLegendProps {
+  motionMode: OrgMotionMode;
+  focusActiveChain: boolean;
+  showHeatOverlay: boolean;
+}
+
+function OrgLegend({ motionMode, focusActiveChain, showHeatOverlay }: OrgLegendProps) {
+  return (
+    <div className="org-legend">
+      <span className="org-legend-item"><span className="org-legend-dot org-legend-dot--working" /> Working</span>
+      <span className="org-legend-item"><span className="org-legend-dot org-legend-dot--reporting" /> Reporting</span>
+      <span className="org-legend-item"><span className="org-legend-dot org-legend-dot--blocked" /> Blocked</span>
+      <span className="org-legend-item">Motion: {motionMode}</span>
+      <span className="org-legend-item">{focusActiveChain ? 'Focus chain on' : 'Focus chain off'}</span>
+      <span className="org-legend-item">{showHeatOverlay ? 'Heat overlay on' : 'Heat overlay off'}</span>
+    </div>
+  );
+}
+
 function OrgChart({ agents, loading, events, activeProjectId = '', microProjectMode = false, workforceLive }: OrgChartProps) {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [showTruthDrawer, setShowTruthDrawer] = useState(false);
@@ -757,6 +959,13 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   const [layoutMode, setLayoutMode] = useState<'hierarchy' | 'cluster' | 'timeline'>('hierarchy');
   const [hierarchyScale, setHierarchyScale] = useState(1);
   const [hierarchyHeight, setHierarchyHeight] = useState<number | null>(null);
+  const [focusActiveChain, setFocusActiveChain] = useState(true);
+  const [showHeatOverlay, setShowHeatOverlay] = useState(false);
+  const [documentVisible, setDocumentVisible] = useState(() => {
+    if (typeof document === 'undefined') return true;
+    return document.visibilityState !== 'hidden';
+  });
+  const lastAutoCenteredNodeRef = useRef('');
 
   const agentMap = useMemo(() => {
     const map = new Map<string, Agent>();
@@ -893,11 +1102,9 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
 
   const latestFlow = useMemo((): {
     edgeDirections: Map<string, FlowDirection>;
-    activeTaskByAgent: Map<string, string>;
     blockedAgentIds: Set<string>;
   } => {
     const edgeDirections = new Map<string, FlowDirection>();
-    const activeTaskByAgent = new Map<string, string>();
     const blockedAgentIds = new Set<string>();
 
     const addFlowToAgent = (agentId: string, direction: FlowDirection) => {
@@ -917,22 +1124,10 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
       }
       const direction: FlowDirection = row.state === 'reporting' ? 'up' : 'down';
       addFlowToAgent(agentId, direction);
-      if (row.task) {
-        activeTaskByAgent.set(agentId, String(row.task).slice(0, 70));
-      }
     }
 
-    return { edgeDirections, activeTaskByAgent, blockedAgentIds };
+    return { edgeDirections, blockedAgentIds };
   }, [workforceByAgent, microProjectMode]);
-
-  const mutedAgentIds = useMemo(() => {
-    if (!microProjectMode) return new Set<string>();
-    const s = new Set<string>();
-    for (const agent of agents) {
-      if (agent.id !== 'ceo') s.add(agent.id);
-    }
-    return s;
-  }, [agents, microProjectMode]);
 
   const handleAgentClick = (agent: Agent) => {
     setSelectedAgent(prev => prev?.id === agent.id ? null : agent);
@@ -947,6 +1142,71 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     }
     return out;
   }, [scopedEvents]);
+
+  const workloadByAgent = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const agent of agents) {
+      const keyByName = agent.name.toLowerCase();
+      const keyById = agent.id.toLowerCase();
+      const count = workloadMap.get(keyByName) || workloadMap.get(keyById) || 0;
+      out.set(agent.id, count);
+    }
+    return out;
+  }, [agents, workloadMap]);
+
+  const maxWorkload = useMemo(() => {
+    let max = 0;
+    for (const value of workloadByAgent.values()) {
+      if (value > max) max = value;
+    }
+    return max;
+  }, [workloadByAgent]);
+
+  const workloadScoreByAgent = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const [agentId, count] of workloadByAgent.entries()) {
+      out.set(agentId, toWorkloadScore(count, maxWorkload));
+    }
+    return out;
+  }, [maxWorkload, workloadByAgent]);
+
+  const stalenessScoreByAgent = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const agent of agents) {
+      const row = workforceByAgent.get(agent.id);
+      out.set(agent.id, toStalenessScore(row?.updated_at));
+    }
+    return out;
+  }, [agents, workforceByAgent]);
+
+  const focusedAgentIds = useMemo(() => {
+    const set = new Set<string>();
+    if (!focusActiveChain) return set;
+    const sources = recentActiveIds.size > 0 ? recentActiveIds : activeIds;
+    if (sources.size === 0) return set;
+    set.add('ceo');
+    for (const id of sources) {
+      const path = findPathToNode(ORG_TREE, id);
+      if (!path) continue;
+      for (const segment of path) set.add(segment);
+    }
+    return set;
+  }, [activeIds, focusActiveChain, recentActiveIds]);
+
+  const mutedAgentIds = useMemo(() => {
+    const s = new Set<string>();
+    if (microProjectMode) {
+      for (const agent of agents) {
+        if (agent.id !== 'ceo') s.add(agent.id);
+      }
+    }
+    if (focusActiveChain && focusedAgentIds.size > 0) {
+      for (const agent of agents) {
+        if (!focusedAgentIds.has(agent.id)) s.add(agent.id);
+      }
+    }
+    return s;
+  }, [agents, microProjectMode, focusActiveChain, focusedAgentIds]);
 
   const handoffPairs = useMemo(() => {
     if (microProjectMode) return [] as Array<[string, number]>;
@@ -1006,6 +1266,15 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   }, [scopedEvents]);
 
   useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const onVisibility = () => setDocumentVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
     if (layoutMode !== 'hierarchy') return;
     const viewport = hierarchyViewportRef.current;
     const content = hierarchyContentRef.current;
@@ -1034,6 +1303,27 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
       window.removeEventListener('resize', measure);
     };
   }, [layoutMode, agents.length, scopedEvents.length]);
+
+  useEffect(() => {
+    if (layoutMode !== 'hierarchy') return;
+    if (!focusActiveChain) return;
+    const sources = recentActiveIds.size > 0 ? Array.from(recentActiveIds) : Array.from(activeIds);
+    if (sources.length === 0) return;
+    const targetId = sources[0];
+    if (!targetId) return;
+    const signature = `${activeProjectId || 'global'}:${targetId}`;
+    if (lastAutoCenteredNodeRef.current === signature) return;
+    const viewport = hierarchyViewportRef.current;
+    if (!viewport) return;
+    const node = viewport.querySelector<HTMLElement>(`[data-org-node-id="${targetId}"]`);
+    if (!node) return;
+    lastAutoCenteredNodeRef.current = signature;
+    try {
+      node.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    } catch {
+      // Ignore scroll compatibility differences.
+    }
+  }, [activeIds, activeProjectId, focusActiveChain, layoutMode, recentActiveIds]);
 
   // Build a short list of active agent names for the status badge.
   // Use recentActiveIds (not broader activeIds) so the header matches the glowing nodes.
@@ -1077,9 +1367,20 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   const reportingAgentCount = workforceCounts.reporting;
   const blockedAgentCount = workforceCounts.blocked;
   const syncFreshness = formatFreshness(workforceLive?.client_meta?.last_success_at);
+  const baseMotionMode = toMotionMode(activeIds.size, workingAgentCount, blockedAgentCount, workforceStale);
+  const motionMode: OrgMotionMode = documentVisible ? baseMotionMode : 'quiet';
+  const motionVars = {
+    ['--org-flow-duration' as any]: motionMode === 'intense' ? '1.05s' : motionMode === 'active' ? '1.45s' : '2.1s',
+    ['--org-glow-opacity' as any]: motionMode === 'intense' ? 1 : motionMode === 'active' ? 0.86 : 0.6,
+    ['--org-pulse-scale' as any]: motionMode === 'intense' ? 1.12 : motionMode === 'active' ? 1.06 : 1.02,
+  };
 
   return (
-    <div ref={chartContainerRef} style={{ maxWidth: '100%', overflow: 'hidden' }}>
+    <div
+      ref={chartContainerRef}
+      className={`org-chart-shell org-motion-${motionMode}`}
+      style={{ maxWidth: '100%', overflow: 'hidden', ...motionVars }}
+    >
       {/* Chart label with active agent count */}
       <div
         style={{
@@ -1249,7 +1550,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
         </p>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '14px' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
         {(['hierarchy', 'cluster', 'timeline'] as const).map((mode) => (
           <button
             key={mode}
@@ -1269,7 +1570,38 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
             {mode}
           </button>
         ))}
+        <button
+          onClick={() => setFocusActiveChain((v) => !v)}
+          style={{
+            borderRadius: '999px',
+            border: `1px solid ${focusActiveChain ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+            backgroundColor: focusActiveChain ? 'rgba(63,185,80,0.12)' : 'var(--tf-surface)',
+            color: focusActiveChain ? 'var(--tf-success)' : 'var(--tf-text-muted)',
+            fontSize: '11px',
+            fontWeight: 600,
+            padding: '4px 10px',
+            cursor: 'pointer',
+          }}
+        >
+          {focusActiveChain ? 'Focus Chain: On' : 'Focus Chain: Off'}
+        </button>
+        <button
+          onClick={() => setShowHeatOverlay((v) => !v)}
+          style={{
+            borderRadius: '999px',
+            border: `1px solid ${showHeatOverlay ? 'var(--tf-warning)' : 'var(--tf-border)'}`,
+            backgroundColor: showHeatOverlay ? 'rgba(240,170,74,0.12)' : 'var(--tf-surface)',
+            color: showHeatOverlay ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
+            fontSize: '11px',
+            fontWeight: 600,
+            padding: '4px 10px',
+            cursor: 'pointer',
+          }}
+        >
+          {showHeatOverlay ? 'Heat Overlay: On' : 'Heat Overlay: Off'}
+        </button>
       </div>
+      <OrgLegend motionMode={motionMode} focusActiveChain={focusActiveChain} showHeatOverlay={showHeatOverlay} />
 
       {showTruthDrawer && (
         <div
@@ -1369,9 +1701,17 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
             >
               <Tooltip content={`${ceoAgent.role} · ${runtimeLabel(ceoAgent)}`} position="top">
                 <div style={{ transform: 'scale(1.04)', transformOrigin: 'center top' }}>
-                  <OrgNode
+                  <OrgNodeCard
                     agent={ceoAgent}
+                    decor={{
+                      tier: toVisualTier(ceoAgent),
+                      state: workforceStateByAgent.get(ceoAgent.id) || 'idle',
+                      workloadScore: workloadScoreByAgent.get(ceoAgent.id) || 0,
+                      stalenessScore: stalenessScoreByAgent.get(ceoAgent.id) || 0,
+                    }}
+                    motionMode={motionMode}
                     onAgentClick={handleAgentClick}
+                    showHeatOverlay={showHeatOverlay}
                     liveState={workforceStateByAgent.get(ceoAgent.id)}
                     liveWorker={workforceByAgent.get(ceoAgent.id)}
                   />
@@ -1420,8 +1760,9 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
                       const liveState = workforceStateByAgent.get(agent.id);
                       const nodeVisual = liveStateVisual(liveState);
                       const active = activeIds.has(agent.id);
-                      const workload = workloadMap.get(agent.name.toLowerCase()) || workloadMap.get(agent.id.toLowerCase()) || 0;
-                      const mutedInMicro = microProjectMode && agent.id !== 'ceo';
+                      const workload = workloadByAgent.get(agent.id) || 0;
+                      const mutedInMicro = (microProjectMode && agent.id !== 'ceo')
+                        || (focusActiveChain && focusedAgentIds.size > 0 && !focusedAgentIds.has(agent.id));
                       const showActive = active && !mutedInMicro;
                       const showWorkingPulse = showActive && liveState === 'working';
                       return (
@@ -1499,12 +1840,17 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
                 agentMap={agentMap}
                 onAgentClick={handleAgentClick}
                 activeIds={activeIds}
+                focusedAgentIds={focusedAgentIds}
+                focusActiveChain={focusActiveChain}
                 mutedAgentIds={mutedAgentIds}
                 flowEdgeDirections={latestFlow.edgeDirections}
-                activeTaskByAgent={latestFlow.activeTaskByAgent}
                 blockedAgentIds={latestFlow.blockedAgentIds}
                 liveStateByAgent={workforceStateByAgent}
                 liveWorkerByAgent={workforceByAgent}
+                workloadScoreByAgent={workloadScoreByAgent}
+                stalenessScoreByAgent={stalenessScoreByAgent}
+                showHeatOverlay={showHeatOverlay}
+                motionMode={motionMode}
               />
             </div>
           </div>
