@@ -316,6 +316,7 @@ export interface OpenWorkspaceResult {
 
 export type GuidanceActionKind =
   | 'retry'
+  | 'retry_with_higher_budget'
   | 'open_settings'
   | 'open_project'
   | 'copy'

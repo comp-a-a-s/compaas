@@ -1253,6 +1253,25 @@ def test_build_terminal_guidance_includes_recovery_actions_for_failed_run():
     assert "copy_diag" in action_ids
 
 
+def test_build_terminal_guidance_offers_high_budget_retry_for_guardrail_failures():
+    guidance = api._build_terminal_guidance(
+        terminal_state="failed",
+        error_reason="Execution hit the tool safety budget (commands 41/40, files 12/80). The run stopped before completion.",
+        project_id="project-123",
+        run_id="run-guardrail-1",
+        correlation_id="corr-guardrail",
+    )
+
+    actions = guidance.get("actions", [])
+    high_budget = next((row for row in actions if str(row.get("id", "")) == "retry_with_higher_budget"), None)
+    assert high_budget is not None
+    assert high_budget.get("kind") == "retry_with_higher_budget"
+    payload = high_budget.get("payload", {})
+    assert isinstance(payload, dict)
+    assert payload.get("sandbox_profile") == "full"
+    assert payload.get("run_id") == "run-guardrail-1"
+
+
 def test_sync_project_completion_snapshot_updates_description_team_and_run_commands(monkeypatch):
     project = {
         "id": "abcd1234",

@@ -2756,6 +2756,24 @@ def _build_terminal_guidance(
 
     if normalized_state in {"failed", "cancelled"}:
         actions.append(_guidance_action(action_id="retry", label="Retry now", kind="retry"))
+        if (
+            "budget" in reason_lower
+            or "runtime safety limit" in reason_lower
+            or "tool safety budget" in reason_lower
+            or "runtime budget" in reason_lower
+        ):
+            actions.append(
+                _guidance_action(
+                    action_id="retry_with_higher_budget",
+                    label="Retry with higher budget",
+                    kind="retry_with_higher_budget",
+                    payload={
+                        "sandbox_profile": "full",
+                        "run_id": normalized_run,
+                        "max_retries": 1,
+                    },
+                )
+            )
         if normalized_run:
             actions.append(
                 _guidance_action(

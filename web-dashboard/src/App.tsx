@@ -30,6 +30,7 @@ import {
   fetchRunLive,
   listRuns,
   controlRun,
+  fetchSystemReadiness,
 } from './api/client';
 
 import type {
@@ -44,6 +45,7 @@ import type {
   RunLiveSnapshot,
   RunStatusEvent,
   WorkforceLiveSnapshot,
+  SystemReadiness,
 } from './types';
 
 const MAX_EVENTS = 5000;
@@ -59,6 +61,7 @@ const WORKFORCE_STALE_MIN_MS = 15000;
 const WORKFORCE_MAX_BACKOFF_MS = 60000;
 const MICRO_PROJECT_MODE_KEY = 'compaas_micro_project_mode';
 const ONBOARDING_TOUR_DONE_KEY = 'compaas_onboarding_tour_done';
+const BOOTSTRAP_DIAGNOSTICS_SEEN_KEY = 'compaas_bootstrap_diagnostics_seen_v1';
 const TELEGRAM_KEYS = {
   token: 'compaas_telegram_token',
   chatId: 'compaas_telegram_chatid',
@@ -230,6 +233,7 @@ function parseActivityLine(line: string): ActivityEvent | null {
 
 export default function App() {
   useThemeInit();
+  const isAutomationRuntime = typeof navigator !== 'undefined' && Boolean((navigator as Navigator & { webdriver?: boolean }).webdriver);
 
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
@@ -244,6 +248,10 @@ export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(true);
   const [showWizard, setShowWizard] = useState(false);
+  const [showBootstrapDiagnostics, setShowBootstrapDiagnostics] = useState(false);
+  const [bootstrapDiagnosticsLoading, setBootstrapDiagnosticsLoading] = useState(false);
+  const [bootstrapDiagnostics, setBootstrapDiagnostics] = useState<SystemReadiness | null>(null);
+  const [bootstrapDiagnosticsError, setBootstrapDiagnosticsError] = useState('');
 
   // Floating chat state
   const [chatOpen, setChatOpen] = useState(false);
@@ -407,12 +415,47 @@ export default function App() {
     setTourOpen(true);
   }, [config?.feature_flags?.onboarding_tours, configLoading, showWizard]);
 
+  useEffect(() => {
+    if (configLoading || showWizard) return;
+    if (isAutomationRuntime) return;
+    try {
+      if (localStorage.getItem(BOOTSTRAP_DIAGNOSTICS_SEEN_KEY) === '1') return;
+    } catch {
+      // ignore storage failures
+    }
+    setShowBootstrapDiagnostics(true);
+    setBootstrapDiagnosticsLoading(true);
+    setBootstrapDiagnosticsError('');
+    void fetchSystemReadiness().then((result) => {
+      if (!result.ok || !result.data) {
+        setBootstrapDiagnostics(null);
+        setBootstrapDiagnosticsError(result.detail || 'Unable to fetch startup diagnostics.');
+        return;
+      }
+      setBootstrapDiagnostics(result.data);
+    }).catch(() => {
+      setBootstrapDiagnostics(null);
+      setBootstrapDiagnosticsError('Unable to fetch startup diagnostics.');
+    }).finally(() => {
+      setBootstrapDiagnosticsLoading(false);
+    });
+  }, [configLoading, isAutomationRuntime, showWizard]);
+
   const handleSetupComplete = useCallback(() => {
     setShowWizard(false);
     // Reload config
     fetchConfig().then((cfg) => {
       if (cfg) setConfig(cfg);
     });
+  }, []);
+
+  const closeBootstrapDiagnostics = useCallback(() => {
+    try {
+      localStorage.setItem(BOOTSTRAP_DIAGNOSTICS_SEEN_KEY, '1');
+    } catch {
+      // ignore storage failures
+    }
+    setShowBootstrapDiagnostics(false);
   }, []);
 
   const pollIntervalMs = useMemo(() => {
@@ -1767,6 +1810,99 @@ export default function App() {
                 }}
               >
                 Create New Project
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showBootstrapDiagnostics && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 220,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backgroundColor: 'rgba(0,0,0,0.56)',
+          }}
+          onClick={closeBootstrapDiagnostics}
+        >
+          <div
+            style={{
+              width: 'min(540px, 94vw)',
+              borderRadius: '14px',
+              border: '1px solid var(--tf-border)',
+              backgroundColor: 'var(--tf-surface)',
+              boxShadow: '0 24px 52px rgba(0,0,0,0.45)',
+              padding: '20px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--tf-text)', marginBottom: '8px' }}>
+              Startup Diagnostics
+            </h3>
+            <p style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', lineHeight: 1.5, marginBottom: '14px' }}>
+              Quick readiness check after bootstrap/install so you can fix issues before your first run.
+            </p>
+            {bootstrapDiagnosticsLoading ? (
+              <p style={{ fontSize: '12px', color: 'var(--tf-text-muted)' }}>Checking readiness…</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ border: '1px solid var(--tf-border)', borderRadius: '10px', padding: '10px' }}>
+                  <p style={{ fontSize: '12px', fontWeight: 600, color: 'var(--tf-text)' }}>Provider</p>
+                  <p style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', marginTop: '4px' }}>
+                    {bootstrapDiagnostics?.provider?.ready
+                      ? `${bootstrapDiagnostics?.provider?.name || 'Provider'} is ready (${bootstrapDiagnostics?.provider?.model || 'model not set'}).`
+                      : `Not ready: ${bootstrapDiagnostics?.provider?.reason || bootstrapDiagnosticsError || 'Provider configuration is incomplete.'}`}
+                  </p>
+                </div>
+                <div style={{ border: '1px solid var(--tf-border)', borderRadius: '10px', padding: '10px' }}>
+                  <p style={{ fontSize: '12px', fontWeight: 600, color: 'var(--tf-text)' }}>Workspace</p>
+                  <p style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', marginTop: '4px' }}>
+                    {bootstrapDiagnostics?.workspace?.writable
+                      ? `Writable workspace detected at ${bootstrapDiagnostics?.workspace?.root || '(default)'}.`
+                      : `Workspace is not writable or missing at ${bootstrapDiagnostics?.workspace?.root || '(unknown)'}.`}
+                  </p>
+                </div>
+                <div style={{ border: '1px solid var(--tf-border)', borderRadius: '10px', padding: '10px' }}>
+                  <p style={{ fontSize: '12px', fontWeight: 600, color: 'var(--tf-text)' }}>CLI Tools</p>
+                  <p style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', marginTop: '4px' }}>
+                    {Object.entries(bootstrapDiagnostics?.tools || {})
+                      .map(([key, row]) => {
+                        const tool = row as { available?: boolean } | undefined;
+                        return `${key}: ${tool?.available ? 'OK' : 'Missing'}`;
+                      })
+                      .slice(0, 4)
+                      .join(' • ') || 'No tool details available.'}
+                  </p>
+                </div>
+                {bootstrapDiagnosticsError && (
+                  <p style={{ fontSize: '12px', color: 'var(--tf-warning)' }}>
+                    {bootstrapDiagnosticsError}
+                  </p>
+                )}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '14px' }}>
+              <button
+                onClick={() => {
+                  setActiveTab('settings');
+                  closeBootstrapDiagnostics();
+                }}
+                style={{
+                  padding: '7px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer',
+                  border: '1px solid var(--tf-border)', backgroundColor: 'transparent',
+                  color: 'var(--tf-text-secondary)',
+                }}
+              >
+                Open Settings
+              </button>
+              <button
+                onClick={closeBootstrapDiagnostics}
+                style={{
+                  padding: '7px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer',
+                  border: '1px solid var(--tf-accent)', backgroundColor: 'var(--tf-accent)',
+                  color: 'var(--tf-bg)', fontWeight: 600,
+                }}
+              >
+                Continue
               </button>
             </div>
           </div>

@@ -9,7 +9,16 @@ from fastapi.responses import JSONResponse
 
 
 PROBLEM_JSON = "application/problem+json"
-PROBLEM_ACTION_KINDS = {"retry", "open_settings", "open_project", "copy", "link", "view_events", "run_control"}
+PROBLEM_ACTION_KINDS = {
+    "retry",
+    "retry_with_higher_budget",
+    "open_settings",
+    "open_project",
+    "copy",
+    "link",
+    "view_events",
+    "run_control",
+}
 
 
 def problem_action(

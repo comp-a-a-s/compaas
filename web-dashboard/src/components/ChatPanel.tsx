@@ -281,6 +281,7 @@ const PROMPT_EXAMPLES_CATEGORY_KEY = 'compaas_prompt_examples_category';
 const PROMPT_EXAMPLES_RECENT_KEY = 'compaas_prompt_examples_recent';
 const PROMPT_EXAMPLES_SEEN_BY_PROJECT_KEY = 'compaas_prompt_examples_seen_by_project';
 const PROMPT_EXAMPLES_RECENT_LIMIT = 5;
+const HIGH_BUDGET_RETRY_LIMIT = 1;
 
 function looksExecutionRequest(input: string): boolean {
   const lower = input.trim().toLowerCase();
@@ -1798,6 +1799,7 @@ export default function ChatPanel({
   const waitStartedAtRef = useRef<number | null>(null);
   const celebrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenCelebrationRunsRef = useRef<Set<string>>(new Set());
+  const highBudgetRetryCountByRunRef = useRef<Record<string, number>>({});
   const activePromptProjectKey = activeProjectId || '__global__';
 
   const markPromptExamplesSeen = useCallback((projectKey: string) => {
@@ -2742,6 +2744,7 @@ export default function ChatPanel({
     forceMicroMode?: boolean;
     forceMicroOverride?: boolean;
     planningApproved?: boolean;
+    sandboxProfile?: 'safe' | 'standard' | 'full';
   }) => {
     const text = (opts?.textOverride ?? input).trim();
     if (!text || isWaiting) return;
@@ -2790,13 +2793,15 @@ export default function ChatPanel({
     setDeployOffer(null);
     lastOutboundMessageRef.current = text;
     const idempotencyKey = `chat-${activeProjectId || 'global'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const resolvedSandboxProfile = opts?.sandboxProfile
+      || (effectiveMicroMode ? 'safe' : 'standard');
     const payload = JSON.stringify({
       message: text,
       micro_project_mode: effectiveMicroMode,
       micro_project_override: microOverride,
       planning_approved: Boolean(opts?.planningApproved),
       structured_response: true,
-      sandbox_profile: effectiveMicroMode ? 'safe' : 'standard',
+      sandbox_profile: resolvedSandboxProfile,
       idempotency_key: idempotencyKey,
       project_id: activeProjectId,
     });
@@ -2808,6 +2813,30 @@ export default function ChatPanel({
     }
     ws.send(payload);
   }, [activeProjectId, activePromptProjectKey, connectWebSocket, focusInput, input, isWaiting, markPromptExamplesSeen, microProjectMode, safeMirrorTelegram, stopTypingAnimation, userName]);
+
+  const handleHighBudgetRetry = useCallback(() => {
+    const retryText = String(lastOutboundMessageRef.current || '').trim();
+    if (!retryText) {
+      toast('No previous user request available to retry.', 'warning');
+      return;
+    }
+    const runId = String(liveRunStatus?.run_id || latestRunId || '').trim();
+    if (runId) {
+      const retries = Number(highBudgetRetryCountByRunRef.current[runId] || 0);
+      if (retries >= HIGH_BUDGET_RETRY_LIMIT) {
+        toast('Higher-budget retry was already used for this run.', 'warning');
+        return;
+      }
+      highBudgetRetryCountByRunRef.current[runId] = retries + 1;
+    }
+    sendMessage({
+      textOverride: retryText,
+      forceMicroMode: false,
+      forceMicroOverride: true,
+      sandboxProfile: 'full',
+    });
+    toast('Retrying with full runtime and tool budget.', 'success');
+  }, [latestRunId, liveRunStatus?.run_id, sendMessage, toast]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -2825,6 +2854,30 @@ export default function ChatPanel({
         return;
       }
       sendMessage({ textOverride: retryText });
+      return;
+    }
+    if (kind === 'retry_with_higher_budget') {
+      const retryText = String(lastOutboundMessageRef.current || '').trim();
+      if (!retryText) {
+        toast('No previous user request available to retry.', 'warning');
+        return;
+      }
+      const runId = String(payload.run_id || latestRunId || '').trim();
+      if (runId) {
+        const retries = Number(highBudgetRetryCountByRunRef.current[runId] || 0);
+        if (retries >= HIGH_BUDGET_RETRY_LIMIT) {
+          toast('Higher-budget retry was already used for this run.', 'warning');
+          return;
+        }
+        highBudgetRetryCountByRunRef.current[runId] = retries + 1;
+      }
+      sendMessage({
+        textOverride: retryText,
+        forceMicroMode: false,
+        forceMicroOverride: true,
+        sandboxProfile: 'full',
+      });
+      toast('Retrying with full runtime and tool budget.', 'success');
       return;
     }
     if (kind === 'run_control') {
@@ -2882,7 +2935,7 @@ export default function ChatPanel({
       return;
     }
     toast(`Unsupported action: ${action.label}`, 'warning');
-  }, [onNavigateToProject, onOpenEventLog, onOpenSettings, onRunControl, sendMessage, toast]);
+  }, [latestRunId, onNavigateToProject, onOpenEventLog, onOpenSettings, onRunControl, sendMessage, toast]);
 
   const handleClear = useCallback(async () => {
     stopTypingAnimation();
@@ -3712,6 +3765,14 @@ export default function ChatPanel({
                     <p className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
                       {liveRunIncident.reason.replace(/_/g, ' ')} • inactive {Math.max(0, Math.floor(liveRunIncident.inactive_seconds || 0))}s
                     </p>
+                    {(
+                      String(liveRunIncident.reason || '').toLowerCase() === 'guardrail_risk'
+                      || Boolean(liveRunStatus?.guardrails?.over_budget)
+                    ) && (
+                      <p className="text-[11px] mt-1" style={{ color: 'var(--tf-warning)' }}>
+                        Safety budget was reached. You can retry once with a higher execution budget.
+                      </p>
+                    )}
                     <div className="mt-2 flex flex-wrap gap-2">
                       {(['status', 'retry_step', 'continue', 'cancel'] as const).map((action) => (
                         <button
@@ -3739,6 +3800,26 @@ export default function ChatPanel({
                                   : 'Get Status'}
                         </button>
                       ))}
+                      {(
+                        String(liveRunIncident.reason || '').toLowerCase() === 'guardrail_risk'
+                        || Boolean(liveRunStatus?.guardrails?.over_budget)
+                      ) && (
+                        <button
+                          type="button"
+                          onClick={handleHighBudgetRetry}
+                          disabled={isWaiting || Boolean(runControlBusyAction)}
+                          className="text-[11px] px-2 py-1 rounded-lg"
+                          style={{
+                            border: '1px solid var(--tf-accent)',
+                            backgroundColor: 'color-mix(in srgb, var(--tf-accent) 14%, transparent)',
+                            color: 'var(--tf-accent)',
+                            cursor: isWaiting || Boolean(runControlBusyAction) ? 'default' : 'pointer',
+                            opacity: isWaiting || Boolean(runControlBusyAction) ? 0.75 : 1,
+                          }}
+                        >
+                          Retry High Budget
+                        </button>
+                      )}
                     </div>
                     {runControlMessage && (
                       <p className="text-[11px] mt-2" style={{ color: 'var(--tf-text-muted)' }}>
