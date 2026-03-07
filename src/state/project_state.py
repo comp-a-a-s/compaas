@@ -279,6 +279,8 @@ class ProjectStateManager:
                     "github_repo": data.get("github_repo", ""),
                     "github_branch": data.get("github_branch", "master"),
                     "run_instructions": data.get("run_instructions", ""),
+                    "quality_latest": data.get("quality_latest", {}),
+                    "quality_updated_at": data.get("quality_updated_at", ""),
                 })
             except (yaml.YAMLError, KeyError, OSError):
                 continue

@@ -44,6 +44,36 @@ export interface Project {
     status: string;
   }>;
   high_level_tasks_updated_at?: string;
+  quality_latest?: ProjectQualitySnapshot;
+  quality_updated_at?: string;
+}
+
+export interface QualityReport {
+  code_quality: number;
+  ux_quality: number;
+  visual_distinctiveness: number;
+  validation_passed: boolean;
+  failed_gates: string[];
+}
+
+export interface DeliveryGates {
+  required: string[];
+  passed: string[];
+  blocked: string[];
+}
+
+export interface RefinementPayload {
+  attempted: boolean;
+  pass_index: number;
+  max_passes: number;
+  reason?: string;
+}
+
+export interface ProjectQualitySnapshot {
+  quality_report?: QualityReport;
+  delivery_gates?: DeliveryGates;
+  refinement?: RefinementPayload;
+  updated_at?: string;
 }
 
 export interface PlanningPacketStatus {
@@ -223,6 +253,9 @@ export interface ChatMessage {
   guidance?: GuidancePayload;
   completion_celebration?: CompletionCelebrationPayload;
   run_replay?: string;
+  quality_report?: QualityReport;
+  delivery_gates?: DeliveryGates;
+  refinement?: RefinementPayload;
 }
 
 export interface StructuredDeliverable {
@@ -321,6 +354,29 @@ export interface PrQualityProfileResponse {
   status: 'ok' | 'error';
   profile: 'strict' | 'balanced' | 'fast';
   options?: Array<'strict' | 'balanced' | 'fast'>;
+}
+
+export interface QualityProfile {
+  mode: string;
+  auto_refinement_enabled: boolean;
+  auto_refinement_max_passes: number;
+  validation_required_for_done: boolean;
+  visual_distinctiveness_min: number;
+  ux_quality_min: number;
+  code_quality_min: number;
+}
+
+export interface QualityProfileResponse {
+  status: 'ok' | 'error';
+  profile: QualityProfile;
+}
+
+export interface ProjectQualityLatestResponse {
+  status: 'ok' | 'error';
+  project_id: string;
+  quality_latest?: ProjectQualitySnapshot;
+  failed_gates?: string[];
+  updated_at?: string;
 }
 
 export interface UpdateStatusResponse {
@@ -569,6 +625,18 @@ export interface AppConfig {
     memory_scope?: 'global' | 'project' | 'session-only';
     retention_days?: number;
     auto_summary_every_messages?: number;
+    delegation_strategy?: 'executive_first' | 'balanced' | 'direct';
+    delegation_max_agents?: number;
+    delegation_include_qa_docs_early?: boolean;
+  };
+  quality?: {
+    mode?: string;
+    auto_refinement_enabled?: boolean;
+    auto_refinement_max_passes?: number;
+    validation_required_for_done?: boolean;
+    visual_distinctiveness_min?: number;
+    ux_quality_min?: number;
+    code_quality_min?: number;
   };
   feature_flags?: FeatureFlags;
   routing_models?: Record<string, string>;

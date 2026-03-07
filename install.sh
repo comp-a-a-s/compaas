@@ -900,12 +900,14 @@ else
     log_ok "Virtual environment already exists"
 fi
 source .venv/bin/activate
+VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+VENV_PIP="$SCRIPT_DIR/.venv/bin/pip"
 finish_step
 
 # 5. Install Python dependencies
 start_step 5 "Python dependencies"
 start_spinner
-pip3 install -e ".[dev,local-models]" --quiet >/dev/null 2>&1
+"$VENV_PIP" install -e ".[dev,local-models]" --quiet >/dev/null 2>&1
 stop_spinner
 log_ok "Python dependencies installed"
 finish_step
@@ -969,7 +971,7 @@ TEST_WORKSPACE_DIR="$TEST_SANDBOX_DIR/projects"
 TEST_LOG="$(mktemp "${TMPDIR:-/tmp}/compaas-test-log-XXXXXX")"
 mkdir -p "$TEST_DATA_DIR" "$TEST_WORKSPACE_DIR"
 start_spinner
-if COMPAAS_DATA_DIR="$TEST_DATA_DIR" COMPAAS_WORKSPACE_ROOT="$TEST_WORKSPACE_DIR" "$PYTHON_BIN" -m pytest tests/ -q >"$TEST_LOG" 2>&1; then
+if COMPAAS_DATA_DIR="$TEST_DATA_DIR" COMPAAS_WORKSPACE_ROOT="$TEST_WORKSPACE_DIR" "$VENV_PYTHON" -m pytest tests/ -q >"$TEST_LOG" 2>&1; then
     stop_spinner
     log_ok "All tests passed"
 else

@@ -337,6 +337,7 @@ export default function EventLogPanel({
   const [actionFilter, setActionFilter] = useState('ALL');
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(1);
+  const [qualityPreset, setQualityPreset] = useState<'all' | 'gates' | 'refinement'>('all');
 
   const streamHealthLabel = streamHealth === 'fallback_polling'
     ? 'Fallback polling'
@@ -414,6 +415,22 @@ export default function EventLogPanel({
   useEffect(() => {
     setPage(1);
   }, [search, agentFilter, actionFilter, pageSize]);
+
+  const applyQualityPreset = useCallback((preset: 'all' | 'gates' | 'refinement') => {
+    setQualityPreset(preset);
+    if (preset === 'all') {
+      setSearch('');
+      setActionFilter('ALL');
+      return;
+    }
+    if (preset === 'gates') {
+      setSearch('quality gate');
+      setActionFilter('FAILED');
+      return;
+    }
+    setSearch('refinement');
+    setActionFilter('UPDATED');
+  }, []);
 
   const handleExport = useCallback(() => {
     exportToCSV(filteredEvents);
@@ -673,6 +690,60 @@ export default function EventLogPanel({
                 </button>
               );
             })}
+          </div>
+
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => applyQualityPreset('all')}
+              aria-pressed={qualityPreset === 'all'}
+              style={{
+                fontSize: '10px',
+                padding: '3px 9px',
+                borderRadius: '99px',
+                border: qualityPreset === 'all' ? '1px solid var(--tf-accent)' : '1px solid var(--tf-border)',
+                backgroundColor: qualityPreset === 'all' ? 'color-mix(in srgb, var(--tf-accent) 16%, transparent)' : 'var(--tf-bg)',
+                color: qualityPreset === 'all' ? 'var(--tf-accent)' : 'var(--tf-text-muted)',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              All activity
+            </button>
+            <button
+              type="button"
+              onClick={() => applyQualityPreset('gates')}
+              aria-pressed={qualityPreset === 'gates'}
+              style={{
+                fontSize: '10px',
+                padding: '3px 9px',
+                borderRadius: '99px',
+                border: qualityPreset === 'gates' ? '1px solid var(--tf-warning)' : '1px solid var(--tf-border)',
+                backgroundColor: qualityPreset === 'gates' ? 'color-mix(in srgb, var(--tf-warning) 16%, transparent)' : 'var(--tf-bg)',
+                color: qualityPreset === 'gates' ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Quality gates
+            </button>
+            <button
+              type="button"
+              onClick={() => applyQualityPreset('refinement')}
+              aria-pressed={qualityPreset === 'refinement'}
+              style={{
+                fontSize: '10px',
+                padding: '3px 9px',
+                borderRadius: '99px',
+                border: qualityPreset === 'refinement' ? '1px solid var(--tf-accent-blue)' : '1px solid var(--tf-border)',
+                backgroundColor: qualityPreset === 'refinement' ? 'color-mix(in srgb, var(--tf-accent-blue) 16%, transparent)' : 'var(--tf-bg)',
+                color: qualityPreset === 'refinement' ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Refinement
+            </button>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>

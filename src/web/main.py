@@ -13,25 +13,101 @@ import uvicorn
 from src.web.template_rendering import render_agent_templates
 
 
+def _safe_mtime(path: str) -> float:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def _latest_tree_mtime(root: str) -> float:
+    if not os.path.isdir(root):
+        return 0.0
+    latest = 0.0
+    for current_root, _dirs, files in os.walk(root):
+        for filename in files:
+            latest = max(latest, _safe_mtime(os.path.join(current_root, filename)))
+    return latest
+
+
+def _git_head_revision(project_root: str) -> str:
+    try:
+        output = subprocess.check_output(
+            ["git", "-C", project_root, "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        return output.strip()
+    except Exception:
+        return ""
+
+
+def _frontend_build_required(project_root: str, web_dir: str, dist_assets: str) -> tuple[bool, str]:
+    """Detect whether the dashboard build is missing or stale."""
+    dist_dir = os.path.join(web_dir, "dist")
+    dist_index = os.path.join(dist_dir, "index.html")
+    if not os.path.isdir(dist_assets) or not os.listdir(dist_assets):
+        return True, "dist assets are missing"
+    if not os.path.exists(dist_index):
+        return True, "dist index is missing"
+
+    build_stamp_path = os.path.join(dist_dir, ".compaas-build-rev")
+    current_rev = _git_head_revision(project_root)
+    if current_rev:
+        try:
+            with open(build_stamp_path, "r", encoding="utf-8") as handle:
+                stamped_rev = handle.read().strip()
+        except OSError:
+            stamped_rev = ""
+        if stamped_rev != current_rev:
+            return True, "frontend build revision is stale"
+
+    source_candidates = [
+        os.path.join(web_dir, "src"),
+        os.path.join(web_dir, "public"),
+        os.path.join(web_dir, "package.json"),
+        os.path.join(web_dir, "package-lock.json"),
+        os.path.join(web_dir, "vite.config.ts"),
+        os.path.join(web_dir, "tsconfig.app.json"),
+        os.path.join(web_dir, "index.html"),
+    ]
+    latest_source = 0.0
+    for candidate in source_candidates:
+        if os.path.isdir(candidate):
+            latest_source = max(latest_source, _latest_tree_mtime(candidate))
+        else:
+            latest_source = max(latest_source, _safe_mtime(candidate))
+
+    latest_dist = max(_latest_tree_mtime(dist_dir), _safe_mtime(dist_index))
+    if latest_source > latest_dist + 1.0:
+        return True, "frontend source changed after last build"
+    return False, ""
+
+
 def _ensure_frontend_built() -> None:
-    """Build the React frontend if the dist/assets directory is missing."""
+    """Build the React frontend if assets are missing or stale."""
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     dist_assets = os.path.join(project_root, "web-dashboard", "dist", "assets")
-    if os.path.isdir(dist_assets) and os.listdir(dist_assets):
-        return  # Already built
-
     web_dir = os.path.join(project_root, "web-dashboard")
     if not os.path.isdir(web_dir):
         return  # No frontend source
+    should_build, reason = _frontend_build_required(project_root, web_dir, dist_assets)
+    if not should_build:
+        return
 
     node_modules = os.path.join(web_dir, "node_modules")
+    build_stamp_path = os.path.join(web_dir, "dist", ".compaas-build-rev")
+    current_rev = _git_head_revision(project_root)
     try:
         if not os.path.isdir(node_modules):
             print("[COMPaaS] Installing frontend dependencies...")
             subprocess.run(["npm", "install"], cwd=web_dir, check=True)
 
-        print("[COMPaaS] Building frontend...")
+        print(f"[COMPaaS] Building frontend ({reason})...")
         subprocess.run(["npm", "run", "build"], cwd=web_dir, check=True)
+        os.makedirs(os.path.dirname(build_stamp_path), exist_ok=True)
+        with open(build_stamp_path, "w", encoding="utf-8") as handle:
+            handle.write(current_rev or str(time.time()))
         print("[COMPaaS] Frontend built successfully.")
     except FileNotFoundError:
         print("[COMPaaS] Warning: npm not found. Install Node.js to build the frontend.", file=sys.stderr)

@@ -207,8 +207,8 @@ def test_infer_support_agents_execution_uses_delivery_defaults_on_active_stage()
     )
     assert "lead-frontend" in agents
     assert "lead-backend" in agents
-    assert "qa-lead" not in agents
-    assert "tech-writer" not in agents
+    assert "qa-lead" in agents
+    assert "tech-writer" in agents
 
 
 def test_infer_support_agents_execution_adds_qa_docs_for_validation_stage():
@@ -1066,6 +1066,71 @@ def test_structured_response_payload_requires_run_commands_for_build_complete():
     assert payload["completion_kind"] == "general"
 
 
+def test_structured_response_payload_requires_validation_for_build_complete():
+    payload = api._structured_response_payload(
+        """
+        ## Outcome
+        Build complete.
+
+        ## Deliverables
+        - [Workspace](/Users/idan/compaas/projects/demo)
+
+        ## Run Commands
+        - npm run dev
+        """
+    )
+    assert payload["completion_kind"] == "general"
+
+
+def test_quality_report_payload_flags_missing_delivery_gates():
+    profile = api._quality_profile({
+        "quality": {
+            "validation_required_for_done": True,
+            "code_quality_min": 80,
+            "ux_quality_min": 75,
+            "visual_distinctiveness_min": 70,
+        }
+    })
+    report, gates = api._quality_report_payload(
+        {
+            "summary": "Build complete",
+            "run_commands": ["npm run dev"],
+            "open_links": [],
+            "deliverables": [],
+            "validation": [],
+            "next_actions": [],
+        },
+        response_text="Build complete.",
+        profile=profile,
+    )
+    assert "open_targets" in gates["blocked"]
+    assert "validation" in gates["blocked"]
+    assert "missing_open_targets" in report["failed_gates"]
+    assert "missing_validation" in report["failed_gates"]
+
+
+def test_apply_quality_refinement_pass_uses_project_run_instructions_and_workspace_path():
+    refined = api._apply_quality_refinement_pass(
+        {
+            "summary": "Build complete.",
+            "run_commands": [],
+            "open_links": [],
+            "deliverables": [],
+            "validation": [],
+            "next_actions": [],
+            "completion_kind": "build_complete",
+        },
+        project={
+            "workspace_path": "/Users/idan/compaas/projects/demo-refine",
+            "run_instructions": "npm ci\nnpm run dev\nOpen http://localhost:5173",
+        },
+        response_text="Validation: npm run dev passed.",
+    )
+    assert "npm run dev" in refined["run_commands"]
+    assert any(item.get("target") == "/Users/idan/compaas/projects/demo-refine" for item in refined["open_links"])
+    assert any("pass" in str(row).lower() for row in refined["validation"])
+
+
 def test_structured_response_payload_is_backward_compatible_for_empty_text():
     payload = api._structured_response_payload("")
     assert payload["summary"] == ""
@@ -1084,7 +1149,7 @@ def test_merge_structured_completion_with_project_includes_run_hints():
         {
             "summary": "Build complete.",
             "deliverables": [],
-            "validation": [],
+            "validation": ["npm run build passed."],
             "next_actions": [],
             "run_commands": ["npm run build"],
             "open_links": [{"label": "Preview", "target": "https://app.example.com", "kind": "url"}],
@@ -1234,6 +1299,48 @@ def test_sync_project_completion_snapshot_updates_description_team_and_run_comma
     assert "Marcus" in captured_updates["team"]
     assert "Priya" in captured_updates["team"]
     assert "lead-backend" in captured_updates["team"]
+
+
+def test_sync_project_quality_snapshot_persists_quality_payload(monkeypatch):
+    project = {
+        "id": "abcd1234",
+        "quality_latest": {},
+    }
+    captured_updates: dict = {}
+
+    def _fake_update_project(project_id: str, updates: dict) -> bool:
+        assert project_id == "abcd1234"
+        captured_updates.update(updates)
+        project.update(updates)
+        return True
+
+    monkeypatch.setattr(api.state_manager, "update_project", _fake_update_project)
+    monkeypatch.setattr(api.state_manager, "get_project", lambda _project_id: project)
+    monkeypatch.setattr(api, "_emit_chat_activity", lambda *args, **kwargs: None)
+
+    synced = api._sync_project_quality_snapshot(
+        "abcd1234",
+        project=project,
+        quality_report={
+            "code_quality": 84,
+            "ux_quality": 82,
+            "visual_distinctiveness": 78,
+            "validation_passed": True,
+            "failed_gates": [],
+        },
+        delivery_gates={
+            "required": ["run_commands", "open_targets", "deliverables", "validation"],
+            "passed": ["run_commands", "open_targets", "deliverables", "validation"],
+            "blocked": [],
+        },
+        refinement={"attempted": False, "pass_index": 0, "max_passes": 1},
+    )
+
+    assert synced is not None
+    assert "quality_latest" in captured_updates
+    assert captured_updates["quality_latest"]["quality_report"]["code_quality"] == 84
+    assert captured_updates["quality_latest"]["delivery_gates"]["blocked"] == []
+    assert "quality_updated_at" in captured_updates
 
 
 def test_attempt_local_project_autostart_runs_safe_command(monkeypatch, tmp_path):

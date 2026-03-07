@@ -1487,6 +1487,64 @@ class TestV1IntegrationAndReleaseNotes:
         assert get_updated.status_code == 200
         assert get_updated.json()["profile"] == "strict"
 
+    def test_v1_quality_profile_roundtrip(self, client):
+        get_default = client.get("/api/v1/quality/profile")
+        assert get_default.status_code == 200
+        payload = get_default.json()
+        assert payload["status"] == "ok"
+        assert payload["profile"]["mode"]
+        assert isinstance(payload["profile"]["code_quality_min"], int)
+
+        update_response = client.patch(
+            "/api/v1/quality/profile",
+            json={
+                "mode": "aaa_quality_visual",
+                "auto_refinement_enabled": True,
+                "auto_refinement_max_passes": 1,
+                "validation_required_for_done": True,
+                "visual_distinctiveness_min": 72,
+                "ux_quality_min": 76,
+                "code_quality_min": 82,
+            },
+        )
+        assert update_response.status_code == 200
+        updated = update_response.json()["profile"]
+        assert updated["visual_distinctiveness_min"] == 72
+        assert updated["code_quality_min"] == 82
+
+    def test_v1_project_quality_latest_returns_project_snapshot(self, client):
+        import src.web.api as api_module
+
+        project_id = _create_project(client, name="Quality Snapshot Project")
+        now = datetime.now(timezone.utc).isoformat()
+        api_module.state_manager.update_project(project_id, {
+            "quality_latest": {
+                "quality_report": {
+                    "code_quality": 80,
+                    "ux_quality": 79,
+                    "visual_distinctiveness": 77,
+                    "validation_passed": True,
+                    "failed_gates": [],
+                },
+                "delivery_gates": {
+                    "required": ["run_commands", "open_targets"],
+                    "passed": ["run_commands", "open_targets"],
+                    "blocked": [],
+                },
+                "refinement": {"attempted": False, "pass_index": 0, "max_passes": 1},
+                "updated_at": now,
+            },
+            "quality_updated_at": now,
+        })
+
+        response = client.get(f"/api/v1/projects/{project_id}/quality/latest")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["project_id"] == project_id
+        assert payload["quality_latest"]["quality_report"]["code_quality"] == 80
+        assert payload["failed_gates"] == []
+
     def test_v1_project_release_notes(self, client, monkeypatch):
         import src.web.api as api_module
 

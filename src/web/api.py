@@ -1618,9 +1618,18 @@ DEFAULT_CONFIG: dict = {
         "memory_scope": "project",
         "retention_days": 30,
         "auto_summary_every_messages": runtime_settings.chat_auto_summary_interval,
-        "delegation_strategy": "executive_first",
-        "delegation_max_agents": 4,
-        "delegation_include_qa_docs_early": False,
+        "delegation_strategy": "balanced",
+        "delegation_max_agents": 6,
+        "delegation_include_qa_docs_early": True,
+    },
+    "quality": {
+        "mode": "aaa_quality_visual",
+        "auto_refinement_enabled": True,
+        "auto_refinement_max_passes": 1,
+        "validation_required_for_done": True,
+        "visual_distinctiveness_min": 70,
+        "ux_quality_min": 75,
+        "code_quality_min": 80,
     },
     "feature_flags": runtime_settings.feature_flags.model_dump(),
     "integrations": {
@@ -2650,10 +2659,11 @@ def _build_context_prompt(
         "For build requests, delegate to your specialist team via the Task tool and report their progress. "
         "If you announce that agents are working in parallel, continue orchestration in the same turn and do not end with passive waiting language. "
         "Never end an execution turn with standby-only phrasing such as 'I'll wait', 'standing by', or 'once they finish'. "
-        "For product and UI work, involve the designer by default and ensure design choices match user purpose, audience, and workflow (avoid generic boilerplate output). "
+        "For product and UI work, involve the designer by default and enforce a purpose-driven design contract: target audience, core workflow, visual direction, interaction tone, and anti-boilerplate constraints. "
+        "Do not ship generic templates; specify concrete typography, color system, hierarchy, and motion intent aligned to the app purpose. "
         "When implementation work is completed, structure the final update using short sections in this order: "
         "'Outcome', 'Deliverables', 'Validation', 'Run Commands', 'Open Links', and 'Next Steps'. "
-        "Include concrete commands and openable targets whenever available."
+        "Include concrete commands, validation evidence, and openable targets whenever available."
     )
     return "\n".join(parts)
 
@@ -3300,7 +3310,23 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
             risks.append(line)
         if lower.startswith(("next", "do ", "run ", "create ", "update ", "verify ")):
             next_actions.append(line)
-        if any(token in lower for token in ("passed", "pass", "validated", "verified", "success", "checks", "check ", "tests", "lint", "build")):
+        if any(
+            token in lower
+            for token in (
+                "passed",
+                "pass",
+                "validated",
+                "verified",
+                "success",
+                "checks",
+                "check ",
+                "tests",
+                "lint",
+                "build passed",
+                "build succeeded",
+                "build ok",
+            )
+        ):
             validation.append(line)
 
     section_risks = [_clean_bullet_prefix(line) for line in sections["risks"] if _clean_bullet_prefix(line)]
@@ -3368,9 +3394,10 @@ def _structured_response_payload(text: str) -> dict[str, Any]:
         "final handoff",
     )
     has_completion_phrase = any(marker in lower_raw for marker in completion_markers)
-    has_delivery_evidence = bool(run_commands) and bool(
-        deliverables or open_links or section_validation or validation or section_next
-    )
+    has_runnable_commands = bool(run_commands)
+    has_open_targets = bool(deliverables or open_links)
+    has_validation_evidence = bool(section_validation or validation)
+    has_delivery_evidence = has_runnable_commands and has_open_targets and has_validation_evidence
     if has_delivery_evidence and (has_completion_sections or has_completion_phrase):
         completion_kind = "build_complete"
 
@@ -3468,6 +3495,13 @@ def _merge_structured_completion_with_project(
             )
         payload["open_links"] = merged_links
 
+    if completion_kind == "build_complete":
+        has_commands = len(_normalize_string_list(payload.get("run_commands"))) > 0
+        has_open_targets = len(_normalize_links(payload.get("open_links"), limit=20)) > 0 or len(_normalize_links(payload.get("deliverables"), limit=20)) > 0
+        has_validation = len(_normalize_string_list(payload.get("validation"), limit=20)) > 0
+        if not (has_commands and has_open_targets and has_validation):
+            completion_kind = "general"
+
     payload["completion_kind"] = completion_kind
     return payload
 
@@ -3487,6 +3521,239 @@ def _normalize_unique_strings(values: Any, *, limit: int = 12) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def _quality_profile(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    quality_cfg = config.get("quality", {}) if isinstance(config, dict) and isinstance(config.get("quality"), dict) else {}
+    try:
+        max_passes = int(quality_cfg.get("auto_refinement_max_passes", 1) or 1)
+    except (TypeError, ValueError):
+        max_passes = 1
+    try:
+        code_quality_min = int(quality_cfg.get("code_quality_min", 80) or 80)
+    except (TypeError, ValueError):
+        code_quality_min = 80
+    try:
+        ux_quality_min = int(quality_cfg.get("ux_quality_min", 75) or 75)
+    except (TypeError, ValueError):
+        ux_quality_min = 75
+    try:
+        visual_quality_min = int(quality_cfg.get("visual_distinctiveness_min", 70) or 70)
+    except (TypeError, ValueError):
+        visual_quality_min = 70
+    return {
+        "mode": str(quality_cfg.get("mode", "aaa_quality_visual") or "aaa_quality_visual").strip() or "aaa_quality_visual",
+        "auto_refinement_enabled": bool(quality_cfg.get("auto_refinement_enabled", True)),
+        "auto_refinement_max_passes": max(0, min(2, max_passes)),
+        "validation_required_for_done": bool(quality_cfg.get("validation_required_for_done", True)),
+        "code_quality_min": max(40, min(100, code_quality_min)),
+        "ux_quality_min": max(40, min(100, ux_quality_min)),
+        "visual_distinctiveness_min": max(40, min(100, visual_quality_min)),
+    }
+
+
+def _delivery_gates_payload(
+    structured: dict[str, Any],
+    *,
+    validation_required: bool,
+) -> dict[str, list[str]]:
+    run_commands = _normalize_unique_strings(structured.get("run_commands"), limit=16)
+    open_links = structured.get("open_links", []) if isinstance(structured.get("open_links"), list) else []
+    deliverables = structured.get("deliverables", []) if isinstance(structured.get("deliverables"), list) else []
+    validation_rows = _normalize_unique_strings(structured.get("validation"), limit=16)
+
+    required = ["run_commands", "open_targets", "deliverables"]
+    if validation_required:
+        required.append("validation")
+
+    passed: list[str] = []
+    if run_commands:
+        passed.append("run_commands")
+    if open_links or deliverables:
+        passed.append("open_targets")
+    if deliverables:
+        passed.append("deliverables")
+    if not validation_required or validation_rows:
+        passed.append("validation")
+
+    blocked = [gate for gate in required if gate not in passed]
+    return {"required": required, "passed": passed, "blocked": blocked}
+
+
+def _quality_report_payload(
+    structured: dict[str, Any],
+    *,
+    response_text: str,
+    profile: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, list[str]]]:
+    run_commands = _normalize_unique_strings(structured.get("run_commands"), limit=16)
+    validation = _normalize_unique_strings(structured.get("validation"), limit=16)
+    deliverables = structured.get("deliverables", []) if isinstance(structured.get("deliverables"), list) else []
+    open_links = structured.get("open_links", []) if isinstance(structured.get("open_links"), list) else []
+    next_actions = _normalize_unique_strings(structured.get("next_actions"), limit=16)
+    summary = str(structured.get("summary", "") or "").strip()
+    text = str(response_text or "").lower()
+
+    gates = _delivery_gates_payload(
+        structured,
+        validation_required=bool(profile.get("validation_required_for_done", True)),
+    )
+
+    code_quality = 35
+    if run_commands:
+        code_quality += 28
+    if validation:
+        code_quality += 20
+    if deliverables or open_links:
+        code_quality += 10
+    if any(re.search(r"\b(test|lint|check|build|verify)\b", cmd.lower()) for cmd in run_commands):
+        code_quality += 10
+    if any("pass" in row.lower() or "valid" in row.lower() for row in validation):
+        code_quality += 7
+
+    ux_quality = 30
+    if summary:
+        ux_quality += 18
+    if next_actions:
+        ux_quality += 14
+    if deliverables or open_links:
+        ux_quality += 14
+    if any(token in text for token in ("audience", "workflow", "use case", "user flow", "onboarding", "persona")):
+        ux_quality += 16
+    if any(token in text for token in ("hierarchy", "navigation", "accessibility", "responsive")):
+        ux_quality += 10
+
+    visual_markers = (
+        "typography",
+        "font",
+        "color",
+        "palette",
+        "gradient",
+        "layout",
+        "visual hierarchy",
+        "motion",
+        "animation",
+        "contrast",
+        "theme",
+        "style guide",
+        "component",
+    )
+    visual_hits = sum(1 for marker in visual_markers if marker in text)
+    visual_distinctiveness = 28 + min(48, visual_hits * 8)
+    if any(token in text for token in ("purpose-driven", "audience", "brand")):
+        visual_distinctiveness += 10
+    if any(token in text for token in ("boring", "generic boilerplate", "template")):
+        visual_distinctiveness -= 8
+
+    code_quality = max(0, min(100, code_quality))
+    ux_quality = max(0, min(100, ux_quality))
+    visual_distinctiveness = max(0, min(100, visual_distinctiveness))
+
+    failed_gates: list[str] = [f"missing_{gate}" for gate in gates["blocked"]]
+    if code_quality < int(profile.get("code_quality_min", 80)):
+        failed_gates.append("code_quality_below_threshold")
+    if ux_quality < int(profile.get("ux_quality_min", 75)):
+        failed_gates.append("ux_quality_below_threshold")
+    if visual_distinctiveness < int(profile.get("visual_distinctiveness_min", 70)):
+        failed_gates.append("visual_distinctiveness_below_threshold")
+
+    report = {
+        "code_quality": code_quality,
+        "ux_quality": ux_quality,
+        "visual_distinctiveness": visual_distinctiveness,
+        "validation_passed": len(gates["blocked"]) == 0,
+        "failed_gates": _normalize_unique_strings(failed_gates, limit=16),
+    }
+    return report, gates
+
+
+def _apply_quality_refinement_pass(
+    structured: dict[str, Any],
+    *,
+    project: dict[str, Any] | None,
+    response_text: str,
+) -> dict[str, Any]:
+    refined = copy.deepcopy(structured or {})
+    run_commands = _normalize_unique_strings(refined.get("run_commands"), limit=16)
+    if not run_commands:
+        run_instructions = str((project or {}).get("run_instructions", "") or "").strip()
+        parsed = _structured_response_payload(run_instructions) if run_instructions else {}
+        run_commands = _normalize_unique_strings(parsed.get("run_commands"), limit=16)
+        if run_commands:
+            refined["run_commands"] = run_commands
+
+    open_links = refined.get("open_links", [])
+    deliverables = refined.get("deliverables", [])
+    if not isinstance(open_links, list):
+        open_links = []
+    if not isinstance(deliverables, list):
+        deliverables = []
+    if not open_links and isinstance(project, dict):
+        workspace_path = str(project.get("workspace_path", "") or "").strip()
+        if workspace_path:
+            open_links = [{"label": "Workspace Path", "target": workspace_path, "kind": "path"}]
+            refined["open_links"] = open_links
+    if not deliverables and open_links:
+        refined["deliverables"] = open_links[:6]
+
+    validation = _normalize_unique_strings(refined.get("validation"), limit=16)
+    if not validation:
+        inferred_validation: list[str] = []
+        for raw_line in str(response_text or "").splitlines():
+            line = raw_line.strip()
+            lowered = line.lower()
+            if any(token in lowered for token in ("pass", "passed", "validated", "verified", "lint", "test", "check", "build")):
+                inferred_validation.append(line)
+        validation = _normalize_unique_strings(inferred_validation, limit=6)
+        if validation:
+            refined["validation"] = validation
+
+    next_actions = _normalize_unique_strings(refined.get("next_actions"), limit=12)
+    if not next_actions and run_commands:
+        refined["next_actions"] = [
+            "Run the commands in order and verify the app boots locally.",
+            "Open the provided app link and confirm core user flows.",
+        ]
+    return refined
+
+
+def _sync_project_quality_snapshot(
+    project_id: str,
+    *,
+    project: dict[str, Any] | None,
+    quality_report: dict[str, Any],
+    delivery_gates: dict[str, Any],
+    refinement: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not project_id:
+        return project
+    current = project or state_manager.get_project(project_id)
+    if not isinstance(current, dict):
+        return project
+    snapshot = {
+        "quality_report": quality_report,
+        "delivery_gates": delivery_gates,
+        "refinement": refinement or {"attempted": False, "pass_index": 0, "max_passes": 0},
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    existing = current.get("quality_latest")
+    if isinstance(existing, dict) and existing == snapshot:
+        return current
+    updates = {"quality_latest": snapshot, "quality_updated_at": snapshot["updated_at"]}
+    updated = state_manager.update_project(project_id, updates)
+    if updated:
+        _emit_chat_activity(
+            "ceo",
+            "UPDATED",
+            "Project quality snapshot synchronized.",
+            project_id=project_id,
+            metadata={
+                "failed_gates": quality_report.get("failed_gates", []),
+                "validation_passed": bool(quality_report.get("validation_passed", False)),
+            },
+        )
+        return state_manager.get_project(project_id) or current
+    return current
 
 
 def _is_ui_execution_turn(message: str) -> bool:
@@ -4031,16 +4298,27 @@ def _format_tool_action(tool_name: str, tool_input: dict) -> str:
 def _guardrail_violation_message(guardrails: dict[str, Any] | None) -> str:
     """Return a user-facing guardrail violation message."""
     if not guardrails:
-        return "Execution budget exceeded; stopping run."
+        return "Execution safety budget was exceeded. The run stopped before completion."
     if bool(guardrails.get("runtime_exceeded")):
         elapsed = int(guardrails.get("elapsed_seconds", 0) or 0)
         max_runtime = int(guardrails.get("max_runtime_seconds", 0) or 0)
         if max_runtime > 0:
-            return f"Execution runtime budget exceeded ({elapsed}s/{max_runtime}s); stopping run."
-        return "Execution runtime budget exceeded; stopping run."
+            return (
+                f"Execution hit the runtime safety limit ({elapsed}s/{max_runtime}s). "
+                "The run stopped before completion."
+            )
+        return "Execution hit the runtime safety limit. The run stopped before completion."
     if bool(guardrails.get("command_exceeded")) or bool(guardrails.get("file_exceeded")):
-        return "Tool budget exceeded; stopping run."
-    return "Execution budget exceeded; stopping run."
+        command_count = int(guardrails.get("command_count", 0) or 0)
+        max_commands = int(guardrails.get("max_commands", 0) or 0)
+        files_touched = int(guardrails.get("files_touched", 0) or 0)
+        max_files = int(guardrails.get("max_files_touched", 0) or 0)
+        return (
+            "Execution hit the tool safety budget "
+            f"(commands {command_count}/{max_commands}, files {files_touched}/{max_files}). "
+            "The run stopped before completion."
+        )
+    return "Execution safety budget was exceeded. The run stopped before completion."
 
 
 def _normalize_chat_activity_metadata(
@@ -4416,15 +4694,29 @@ def _infer_support_agents(
         strategy = "executive_first"
     include_qa_docs_early = bool(chat_policy.get("delegation_include_qa_docs_early", False))
     try:
-        max_agents = int(chat_policy.get("delegation_max_agents", 4) or 4)
+        max_agents = int(chat_policy.get("delegation_max_agents", 6) or 6)
     except (TypeError, ValueError):
-        max_agents = 4
+        max_agents = 6
     max_agents = max(1, min(6, max_agents))
 
+    complexity_markers = (
+        "full",
+        "end-to-end",
+        "production",
+        "ship",
+        "launch",
+        "complete app",
+        "platform",
+        "dashboard",
+        "mvp",
+        "from scratch",
+    )
     keyword_inferred: list[str] = []
     for keywords, agent_id in _SUPPORT_AGENT_HINTS:
         if _contains_keyword(text, keywords):
             keyword_inferred.append(agent_id)
+    high_scope_turn = _contains_keyword(text, complexity_markers)
+    medium_scope_turn = high_scope_turn or (len(keyword_inferred) >= 3) or _is_ui_execution_turn(user_message)
 
     inferred: list[str] = []
 
@@ -4462,7 +4754,7 @@ def _infer_support_agents(
             # Delivery stage defaults: route through implementation leadership.
             if not any(agent in inferred for agent in ("lead-frontend", "lead-backend", "devops")):
                 inferred.append("vp-engineering")
-            if strategy == "balanced":
+            if strategy == "balanced" or medium_scope_turn:
                 inferred.append("qa-lead")
                 inferred.append("tech-writer")
         # Purpose-driven product builds should include design leadership by default,
@@ -4477,8 +4769,20 @@ def _infer_support_agents(
         for agent_id in _ordered_unique(inferred)
         if agent_id in AGENT_REGISTRY and agent_id != "ceo"
     ]
+    configured_cap = max_agents
+    dynamic_target = configured_cap
+    if intent_class == "planning":
+        dynamic_target = 4
+    elif intent_class == "execution":
+        if high_scope_turn:
+            dynamic_target = 6
+        elif medium_scope_turn:
+            dynamic_target = 5
+        else:
+            dynamic_target = 4
+    dynamic_cap = max(1, min(configured_cap, dynamic_target))
     # Cap concurrent delegation to reduce noise and over-orchestration.
-    return ordered[:max_agents]
+    return ordered[:dynamic_cap]
 
 
 def _build_delegation_reasoning(
@@ -7747,12 +8051,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 run_state = run_service.get_run(run_id)
                 if run_state and str(run_state.get("status", "")) in {"queued", "planning", "executing", "verifying"}:
                     _transition_run_state(run_id, state="failed", label="Provider returned no response")
-                await websocket.send_json(
-                    {
-                        "type": "warning",
-                        "content": "Run completed without assistant output. Marking turn as failed with actionable context.",
-                        "correlation_id": turn_correlation_id,
-                    }
+                _emit_chat_activity(
+                    "ceo",
+                    "WARNING",
+                    "Run ended without assistant output; publishing terminal guidance.",
+                    project_id=active_project_id,
+                    metadata={"run_id": run_id, "correlation_id": turn_correlation_id},
                 )
 
             final_run_state = run_service.get_run(run_id)
@@ -7820,6 +8124,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     correlation_id=turn_correlation_id,
                 )
             structured_payload: dict[str, Any] | None = None
+            quality_report: dict[str, Any] | None = None
+            delivery_gates: dict[str, Any] | None = None
+            refinement_payload: dict[str, Any] | None = None
             if structured_enabled:
                 base_structured = _structured_response_payload(full_response or "")
                 structured_payload = _merge_structured_completion_with_project(base_structured, active_project)
@@ -7835,6 +8142,155 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         active_project = synced_project
                         structured_payload = _merge_structured_completion_with_project(structured_payload, active_project)
                 done_payload["structured"] = structured_payload
+
+                if isinstance(structured_payload, dict):
+                    quality_profile = _quality_profile(config)
+                    quality_report, delivery_gates = _quality_report_payload(
+                        structured_payload,
+                        response_text=full_response or "",
+                        profile=quality_profile,
+                    )
+                    refinement_payload = {
+                        "attempted": False,
+                        "pass_index": 0,
+                        "max_passes": int(quality_profile.get("auto_refinement_max_passes", 1)),
+                    }
+                    completion_kind = str(structured_payload.get("completion_kind", "") or "").strip().lower()
+                    failed_gates = _normalize_unique_strings(quality_report.get("failed_gates"), limit=16)
+                    max_refinement_passes = int(quality_profile.get("auto_refinement_max_passes", 1) or 1)
+                    if (
+                        terminal_state == "done"
+                        and completion_kind == "build_complete"
+                        and failed_gates
+                        and bool(quality_profile.get("auto_refinement_enabled", True))
+                        and max_refinement_passes > 0
+                    ):
+                        refined_structured = _apply_quality_refinement_pass(
+                            structured_payload,
+                            project=active_project,
+                            response_text=full_response or "",
+                        )
+                        refined_structured = _merge_structured_completion_with_project(refined_structured, active_project)
+                        refined_quality_report, refined_delivery_gates = _quality_report_payload(
+                            refined_structured,
+                            response_text=full_response or "",
+                            profile=quality_profile,
+                        )
+                        refinement_payload = {
+                            "attempted": True,
+                            "pass_index": 1,
+                            "max_passes": max_refinement_passes,
+                            "reason": "Automatic quality refinement pass executed.",
+                        }
+                        _emit_chat_activity(
+                            "ceo",
+                            "UPDATED",
+                            "Automatic quality refinement pass executed.",
+                            project_id=active_project_id,
+                            metadata={"run_id": run_id, "failed_gates_before": failed_gates},
+                        )
+                        refined_failed = _normalize_unique_strings(refined_quality_report.get("failed_gates"), limit=16)
+                        if len(refined_failed) < len(failed_gates):
+                            structured_payload = refined_structured
+                            quality_report = refined_quality_report
+                            delivery_gates = refined_delivery_gates
+                            done_payload["structured"] = structured_payload
+                            failed_gates = refined_failed
+                            refinement_payload["reason"] = "Automatic quality refinement improved completion quality."
+                        else:
+                            refinement_payload["reason"] = "Automatic quality refinement did not clear all required gates."
+
+                    if terminal_state == "done" and completion_kind == "build_complete":
+                        failed_after_refinement = _normalize_unique_strings(quality_report.get("failed_gates"), limit=16)
+                        if failed_after_refinement:
+                            terminal_state = "failed"
+                            error_reason = (
+                                "Quality gates failed: "
+                                + ", ".join(gate.replace("_", " ") for gate in failed_after_refinement[:4])
+                                + "."
+                            )
+                            _transition_run_state(
+                                run_id,
+                                state="failed",
+                                label="Quality gates failed before delivery",
+                                metadata={
+                                    "failed_gates": failed_after_refinement,
+                                    "quality_report": quality_report,
+                                },
+                            )
+                            _emit_chat_activity(
+                                "ceo",
+                                "FAILED",
+                                "Delivery blocked by quality gates.",
+                                project_id=active_project_id,
+                                metadata={
+                                    "run_id": run_id,
+                                    "failed_gates": failed_after_refinement,
+                                },
+                            )
+                            done_payload["guidance"] = _runtime_guidance_payload(
+                                message="Delivery was blocked by quality gates. Review failed gates, then rerun with validation and stronger UI polish evidence.",
+                                code="quality_gates_failed",
+                                correlation_id=turn_correlation_id,
+                                actions=[
+                                    _guidance_action(
+                                        action_id="retry",
+                                        label="Retry now",
+                                        kind="retry",
+                                    ),
+                                    _guidance_action(
+                                        action_id="status",
+                                        label="Show run status",
+                                        kind="run_control",
+                                        payload={"action": "status", "run_id": run_id},
+                                    ),
+                                    _guidance_action(
+                                        action_id="view_events",
+                                        label="View Event Log",
+                                        kind="view_events",
+                                    ),
+                                ],
+                            )
+                        else:
+                            _emit_chat_activity(
+                                "ceo",
+                                "COMPLETED",
+                                "Quality gates passed for build completion.",
+                                project_id=active_project_id,
+                                metadata={"run_id": run_id, "quality_report": quality_report},
+                            )
+
+                    done_payload["quality_report"] = quality_report
+                    done_payload["delivery_gates"] = delivery_gates
+                    if refinement_payload:
+                        done_payload["refinement"] = refinement_payload
+                    if active_project_id and quality_report and delivery_gates:
+                        quality_project = _sync_project_quality_snapshot(
+                            active_project_id,
+                            project=active_project,
+                            quality_report=quality_report,
+                            delivery_gates=delivery_gates,
+                            refinement=refinement_payload,
+                        )
+                        if isinstance(quality_project, dict):
+                            active_project = quality_project
+
+                done_payload["terminal_state"] = terminal_state
+                if terminal_state != "done" and error_reason:
+                    done_payload["error_reason"] = error_reason
+                    if "guidance" not in done_payload:
+                        done_payload["guidance"] = _build_terminal_guidance(
+                            terminal_state=terminal_state,
+                            error_reason=error_reason,
+                            project_id=active_project_id,
+                            run_id=run_id,
+                            correlation_id=turn_correlation_id,
+                        )
+                else:
+                    done_payload.pop("error_reason", None)
+                    if done_payload.get("guidance") and str(done_payload.get("code", "") or "").startswith("run_"):
+                        done_payload.pop("guidance", None)
+
                 celebration = _completion_celebration_payload(
                     run_id=run_id,
                     project_id=active_project_id,
@@ -7851,7 +8307,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         project_id=active_project_id,
                         metadata={"run_id": run_id, "celebration_kind": celebration.get("kind", "")},
                     )
-                if active_project_id and structured_payload:
+                if active_project_id and structured_payload and terminal_state == "done":
                     auto_launch = _attempt_local_project_autostart(
                         project=active_project,
                         structured=structured_payload,

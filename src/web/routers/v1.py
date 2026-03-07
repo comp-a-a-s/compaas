@@ -139,6 +139,16 @@ class PrQualityProfileRequest(BaseModel):
     profile: str = Field(default="balanced")
 
 
+class QualityProfilePatchRequest(BaseModel):
+    mode: str = Field(default="", max_length=80)
+    auto_refinement_enabled: bool | None = None
+    auto_refinement_max_passes: int | None = Field(default=None, ge=0, le=2)
+    validation_required_for_done: bool | None = None
+    visual_distinctiveness_min: int | None = Field(default=None, ge=40, le=100)
+    ux_quality_min: int | None = Field(default=None, ge=40, le=100)
+    code_quality_min: int | None = Field(default=None, ge=40, le=100)
+
+
 class ReviewSessionCreateRequest(BaseModel):
     deployment_url: str = Field(min_length=1, max_length=500)
     run_id: str = Field(default="", max_length=120)
@@ -246,6 +256,35 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             return
         if str(result.get("code", "")).startswith("invalid_repo_path"):
             raise HTTPException(status_code=400, detail=str(result.get("message", "Invalid repo_path.")))
+
+    def _quality_profile_payload(config: dict[str, Any]) -> dict[str, Any]:
+        quality = config.get("quality", {}) if isinstance(config.get("quality"), dict) else {}
+        mode = str(quality.get("mode", "aaa_quality_visual") or "aaa_quality_visual").strip() or "aaa_quality_visual"
+        try:
+            max_passes = int(quality.get("auto_refinement_max_passes", 1) or 1)
+        except (TypeError, ValueError):
+            max_passes = 1
+        try:
+            visual_min = int(quality.get("visual_distinctiveness_min", 70) or 70)
+        except (TypeError, ValueError):
+            visual_min = 70
+        try:
+            ux_min = int(quality.get("ux_quality_min", 75) or 75)
+        except (TypeError, ValueError):
+            ux_min = 75
+        try:
+            code_min = int(quality.get("code_quality_min", 80) or 80)
+        except (TypeError, ValueError):
+            code_min = 80
+        return {
+            "mode": mode,
+            "auto_refinement_enabled": bool(quality.get("auto_refinement_enabled", True)),
+            "auto_refinement_max_passes": max(0, min(2, max_passes)),
+            "validation_required_for_done": bool(quality.get("validation_required_for_done", True)),
+            "visual_distinctiveness_min": max(40, min(100, visual_min)),
+            "ux_quality_min": max(40, min(100, ux_min)),
+            "code_quality_min": max(40, min(100, code_min)),
+        }
 
     def _system_readiness_payload() -> dict[str, Any]:
         cfg = ctx.load_config()
@@ -475,6 +514,81 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
                     "completion_kind": {"type": "string", "enum": ["build_complete", "general"]},
                 },
             },
+        }
+
+    @router.get("/quality/profile")
+    def v1_quality_profile() -> dict[str, Any]:
+        cfg = ctx.load_config()
+        return {"status": "ok", "profile": _quality_profile_payload(cfg)}
+
+    @router.patch("/quality/profile")
+    def v1_update_quality_profile(request: Request, body: QualityProfilePatchRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        cfg = ctx.load_config()
+        current = _quality_profile_payload(cfg)
+        quality = cfg.get("quality", {}) if isinstance(cfg.get("quality"), dict) else {}
+        mode = str(body.mode or "").strip()
+        if mode:
+            quality["mode"] = mode
+        if body.auto_refinement_enabled is not None:
+            quality["auto_refinement_enabled"] = bool(body.auto_refinement_enabled)
+        if body.auto_refinement_max_passes is not None:
+            quality["auto_refinement_max_passes"] = int(body.auto_refinement_max_passes)
+        if body.validation_required_for_done is not None:
+            quality["validation_required_for_done"] = bool(body.validation_required_for_done)
+        if body.visual_distinctiveness_min is not None:
+            quality["visual_distinctiveness_min"] = int(body.visual_distinctiveness_min)
+        if body.ux_quality_min is not None:
+            quality["ux_quality_min"] = int(body.ux_quality_min)
+        if body.code_quality_min is not None:
+            quality["code_quality_min"] = int(body.code_quality_min)
+        cfg["quality"] = quality
+        ctx.save_config(cfg)
+        updated = _quality_profile_payload(ctx.load_config())
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "UPDATED",
+            "Quality profile updated.",
+            metadata={"before": current, "after": updated},
+        )
+        return {"status": "ok", "profile": updated}
+
+    @router.get("/projects/{project_id}/quality/latest")
+    def v1_project_quality_latest(project_id: str) -> dict[str, Any]:
+        try:
+            validate_safe_id(project_id, "project_id")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid project ID format.")
+        project = ctx.project_service.state_manager.get_project(project_id)
+        if not isinstance(project, dict):
+            # Test harnesses and some runtime patch flows monkeypatch the module-level
+            # state manager after app boot. Fall back to that source if available.
+            try:
+                import src.web.api as api_module  # local import avoids circular import at module load
+
+                fallback_manager = getattr(api_module, "state_manager", None)
+                if fallback_manager is not None and hasattr(fallback_manager, "get_project"):
+                    project = fallback_manager.get_project(project_id)
+            except Exception:
+                project = None
+        if not isinstance(project, dict):
+            raise HTTPException(status_code=404, detail="Project not found.")
+        snapshot = project.get("quality_latest", {})
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        report = snapshot.get("quality_report", {})
+        failed_gates: list[str] = []
+        if isinstance(report, dict):
+            raw_failed = report.get("failed_gates", [])
+            if isinstance(raw_failed, list):
+                failed_gates = [str(item) for item in raw_failed if str(item).strip()]
+        return {
+            "status": "ok",
+            "project_id": project_id,
+            "quality_latest": snapshot,
+            "failed_gates": failed_gates,
+            "updated_at": str(project.get("quality_updated_at", "") or snapshot.get("updated_at", "")),
         }
 
     @router.get("/update/status")

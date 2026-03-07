@@ -5,10 +5,13 @@ import type {
   AutoLaunchStatus,
   ChatMessage,
   CompletionCelebrationPayload,
+  DeliveryGates,
   GuidanceAction,
   GuidancePayload,
   PromptExample,
   Project,
+  QualityReport,
+  RefinementPayload,
   RunDoneTerminalState,
   RunIncidentEvent,
   RunStatusEvent,
@@ -425,6 +428,45 @@ function hasStructuredContent(value?: StructuredChatResponse): boolean {
   );
 }
 
+function normalizeQualityReport(value: unknown): QualityReport | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const failedRaw = Array.isArray(raw.failed_gates) ? raw.failed_gates : [];
+  const failedGates = failedRaw.map((item) => String(item)).filter(Boolean);
+  return {
+    code_quality: Math.max(0, Math.min(100, Number(raw.code_quality || 0) || 0)),
+    ux_quality: Math.max(0, Math.min(100, Number(raw.ux_quality || 0) || 0)),
+    visual_distinctiveness: Math.max(0, Math.min(100, Number(raw.visual_distinctiveness || 0) || 0)),
+    validation_passed: Boolean(raw.validation_passed),
+    failed_gates: failedGates,
+  };
+}
+
+function normalizeDeliveryGates(value: unknown): DeliveryGates | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const required = Array.isArray(raw.required) ? raw.required.map((item) => String(item)).filter(Boolean) : [];
+  const passed = Array.isArray(raw.passed) ? raw.passed.map((item) => String(item)).filter(Boolean) : [];
+  const blocked = Array.isArray(raw.blocked) ? raw.blocked.map((item) => String(item)).filter(Boolean) : [];
+  if (required.length === 0 && passed.length === 0 && blocked.length === 0) return undefined;
+  return { required, passed, blocked };
+}
+
+function normalizeRefinementPayload(value: unknown): RefinementPayload | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const attempted = Boolean(raw.attempted);
+  const passIndex = Math.max(0, Math.floor(Number(raw.pass_index || 0) || 0));
+  const maxPasses = Math.max(passIndex, Math.floor(Number(raw.max_passes || 0) || 0));
+  const reason = String(raw.reason || '').trim();
+  return {
+    attempted,
+    pass_index: passIndex,
+    max_passes: maxPasses,
+    ...(reason ? { reason } : {}),
+  };
+}
+
 function normalizeRunStatusEvent(value: unknown): RunStatusEvent | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
@@ -538,6 +580,9 @@ function MarkdownBody({ content, onCopyPath }: { content: string; onCopyPath: (p
 
 interface StructuredCompletionCardProps {
   structured: StructuredChatResponse;
+  qualityReport?: QualityReport;
+  deliveryGates?: DeliveryGates;
+  refinement?: RefinementPayload;
   showFullResponse: boolean;
   onToggleFullResponse: () => void;
   onCopyPath: (path: string) => void;
@@ -546,6 +591,9 @@ interface StructuredCompletionCardProps {
 
 function StructuredCompletionCard({
   structured,
+  qualityReport,
+  deliveryGates,
+  refinement,
   showFullResponse,
   onToggleFullResponse,
   onCopyPath,
@@ -656,6 +704,46 @@ function StructuredCompletionCard({
           </ol>
         </div>
       )}
+
+      {(qualityReport || deliveryGates || refinement?.attempted) && (
+        <div className="chat-summary-block">
+          <p className="chat-summary-label">Quality Outcome</p>
+          {qualityReport && (
+            <div className="chat-quality-metrics">
+              <span className="chat-quality-chip">Code {qualityReport.code_quality}</span>
+              <span className="chat-quality-chip">UX {qualityReport.ux_quality}</span>
+              <span className="chat-quality-chip">Visual {qualityReport.visual_distinctiveness}</span>
+            </div>
+          )}
+          {deliveryGates && (
+            <div className="chat-quality-gates">
+              <p className="chat-summary-text">
+                Gates: {deliveryGates.passed.length}/{deliveryGates.required.length} passed
+              </p>
+              {deliveryGates.blocked.length > 0 && (
+                <ul className="chat-summary-list">
+                  {deliveryGates.blocked.map((gate) => (
+                    <li key={gate} className="chat-summary-list-item">{gate.replace(/_/g, ' ')}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {qualityReport && qualityReport.failed_gates.length > 0 && (
+            <ul className="chat-summary-list">
+              {qualityReport.failed_gates.map((gate) => (
+                <li key={gate} className="chat-summary-list-item">{gate.replace(/_/g, ' ')}</li>
+              ))}
+            </ul>
+          )}
+          {refinement?.attempted && (
+            <p className="chat-summary-text">
+              Refinement pass {refinement.pass_index}/{Math.max(refinement.pass_index, refinement.max_passes)} executed.
+              {refinement.reason ? ` ${refinement.reason}` : ''}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -750,6 +838,9 @@ function MessageBubble({
   billingActionsEnabled = true,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
+  const isSystem = message.role === 'system';
+  const speakerName = isUser ? userName : (isSystem ? 'System' : ceoName);
+  const speakerInitial = isSystem ? '!' : ceoName.charAt(0).toUpperCase();
   const [hovered, setHovered] = useState(false);
   const [showFullResponse, setShowFullResponse] = useState(false);
   const structuredRunCommands = message.structured?.run_commands || [];
@@ -760,19 +851,20 @@ function MessageBubble({
       || (message.structured?.validation?.length || 0) > 0
     );
   const showStructuredCard = !isUser
+    && !isSystem
     && !isStreaming
     && !searchQuery
     && message.structured?.completion_kind === 'build_complete'
     && structuredHasDeliverySignals
     && hasStructuredContent(message.structured);
-  const autoLaunch = !isUser && !isStreaming ? message.auto_launch : undefined;
-  const terminalState = !isUser && !isStreaming ? message.terminal_state : undefined;
-  const terminalReason = !isUser && !isStreaming ? String(message.error_reason || '').trim() : '';
-  const terminalGuidance = !isUser && !isStreaming ? message.guidance : undefined;
-  const supplementalGuidance = !isUser && !isStreaming && terminalState === 'done'
+  const autoLaunch = !isUser && !isSystem && !isStreaming ? message.auto_launch : undefined;
+  const terminalState = !isUser && !isSystem && !isStreaming ? message.terminal_state : undefined;
+  const terminalReason = !isUser && !isSystem && !isStreaming ? String(message.error_reason || '').trim() : '';
+  const terminalGuidance = !isUser && !isSystem && !isStreaming ? message.guidance : undefined;
+  const supplementalGuidance = !isUser && !isSystem && !isStreaming && terminalState === 'done'
     ? message.guidance
     : undefined;
-  const runReplay = !isUser && !isStreaming ? String(message.run_replay || '').trim() : '';
+  const runReplay = !isUser && !isSystem && !isStreaming ? String(message.run_replay || '').trim() : '';
   const normalizedAutoLaunchUrl = autoLaunch?.open_url
     ? trimLinkTarget(String(autoLaunch.open_url).replace(/^open app:\s*/i, '').replace(/\*+$/g, ''))
     : '';
@@ -792,8 +884,13 @@ function MessageBubble({
     >
       {!isUser && (
         <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mr-2 mt-1"
-          style={{ backgroundColor: 'var(--tf-accent)', color: 'var(--tf-bg)' }} title={ceoName}>
-          {ceoName.charAt(0).toUpperCase()}
+          style={{
+            backgroundColor: isSystem ? 'var(--tf-warning)' : 'var(--tf-accent)',
+            color: 'var(--tf-bg)',
+          }}
+          title={speakerName}
+        >
+          {speakerInitial}
         </div>
       )}
 
@@ -806,16 +903,22 @@ function MessageBubble({
         <div
           className={`rounded-2xl px-4 py-2.5 ${isStreaming ? 'streaming-bubble' : ''}`}
           style={{
-            backgroundColor: isUser ? 'var(--tf-user-bubble)' : 'var(--tf-surface-raised)',
+            backgroundColor: isUser ? 'var(--tf-user-bubble)' : (isSystem ? 'rgba(43, 65, 90, 0.9)' : 'var(--tf-surface-raised)'),
             borderBottomRightRadius: isUser ? '4px' : undefined,
             borderBottomLeftRadius: !isUser ? '4px' : undefined,
-            border: isStreaming ? '1px solid var(--tf-accent)' : pinned ? '1px solid rgba(255,180,0,0.4)' : '1px solid transparent',
+            border: isStreaming
+              ? '1px solid var(--tf-accent)'
+              : isSystem
+                ? '1px solid rgba(255,185,0,0.4)'
+                : pinned
+                  ? '1px solid rgba(255,180,0,0.4)'
+                  : '1px solid transparent',
             transition: 'border-color 0.3s',
           }}
         >
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-semibold" style={{ color: isUser ? 'var(--tf-accent-blue)' : 'var(--tf-accent)' }}>
-              {isUser ? userName : ceoName}
+            <span className="text-xs font-semibold" style={{ color: isUser ? 'var(--tf-accent-blue)' : (isSystem ? 'var(--tf-warning)' : 'var(--tf-accent)') }}>
+              {speakerName}
             </span>
             {message.timestamp && <span className="text-xs" style={{ color: 'var(--tf-border)' }}>{formatTime(message.timestamp)}</span>}
             {isStreaming && <span className="text-xs font-medium" style={{ color: 'var(--tf-accent)', opacity: 0.7 }}>typing…</span>}
@@ -831,6 +934,9 @@ function MessageBubble({
                   {showStructuredCard && (
                     <StructuredCompletionCard
                       structured={message.structured || {}}
+                      qualityReport={message.quality_report}
+                      deliveryGates={message.delivery_gates}
+                      refinement={message.refinement}
                       showFullResponse={showFullResponse}
                       onToggleFullResponse={() => setShowFullResponse((prev) => !prev)}
                       onCopyPath={onCopyPath}
@@ -937,7 +1043,7 @@ function MessageBubble({
         </div>
 
         {/* Pin/unpin button on hover */}
-        {onPin && hovered && !isStreaming && (
+        {onPin && hovered && !isStreaming && !isSystem && (
           <button
             onClick={onPin}
             title={pinned ? 'Unpin' : 'Pin message'}
@@ -1385,6 +1491,9 @@ interface WsMessage {
   guidance?: GuidancePayload;
   completion_celebration?: CompletionCelebrationPayload;
   run_replay?: string;
+  quality_report?: QualityReport;
+  delivery_gates?: DeliveryGates;
+  refinement?: RefinementPayload;
 }
 function isWsMessage(data: unknown): data is WsMessage {
   return typeof data === 'object' && data !== null && typeof (data as Record<string, unknown>).type === 'string';
@@ -2010,6 +2119,9 @@ export default function ChatPanel({
     guidance?: GuidancePayload,
     completionCelebration?: CompletionCelebrationPayload,
     runReplay?: string,
+    qualityReport?: QualityReport,
+    deliveryGates?: DeliveryGates,
+    refinement?: RefinementPayload,
   ) => {
     setMessages((prev) => [...prev, {
       role: 'ceo',
@@ -2023,6 +2135,9 @@ export default function ChatPanel({
       guidance,
       completion_celebration: completionCelebration,
       run_replay: runReplay,
+      quality_report: qualityReport,
+      delivery_gates: deliveryGates,
+      refinement,
     }]);
     void safeMirrorTelegram(ceoNameRef.current, content, projectId);
   }, [safeMirrorTelegram]);
@@ -2149,6 +2264,9 @@ export default function ChatPanel({
     guidance?: GuidancePayload,
     completionCelebration?: CompletionCelebrationPayload,
     runReplay?: string,
+    qualityReport?: QualityReport,
+    deliveryGates?: DeliveryGates,
+    refinement?: RefinementPayload,
   ) => {
     stopTypingAnimation();
     const tokens = content.split(/(\s+)/).filter((token) => token.length > 0);
@@ -2177,6 +2295,9 @@ export default function ChatPanel({
         guidance,
         completionCelebration,
         runReplay,
+        qualityReport,
+        deliveryGates,
+        refinement,
       );
       completeAssistantTurn();
     };
@@ -2413,6 +2534,9 @@ export default function ChatPanel({
               const guidance = normalizeGuidancePayload(data.guidance);
               const completionCelebration = data.completion_celebration;
               const runReplay = String(data.run_replay || '').trim();
+              const qualityReport = normalizeQualityReport(data.quality_report);
+              const deliveryGates = normalizeDeliveryGates(data.delivery_gates);
+              const refinement = normalizeRefinementPayload(data.refinement);
               streamingAccumRef.current = '';
               if (data.run_id) setLatestRunId(data.run_id);
               onRunIncidentRef.current?.(null);
@@ -2433,7 +2557,7 @@ export default function ChatPanel({
                 setDeployOffer(null);
               }
               triggerCompletionCelebration(completionCelebration);
-              if (!turnErroredRef.current && finalContent.trim()) {
+              if (finalContent.trim()) {
                 typewriteAndCommit(
                   finalContent,
                   projectId,
@@ -2444,11 +2568,14 @@ export default function ChatPanel({
                   guidance,
                   completionCelebration,
                   runReplay,
+                  qualityReport,
+                  deliveryGates,
+                  refinement,
                 );
                 onWorkforceRefreshRequestRef.current?.();
                 break;
               }
-              if (!turnErroredRef.current && terminalState !== 'done') {
+              if (terminalState !== 'done') {
                 const fallbackContent = `[${terminalState === 'cancelled' ? 'Cancelled' : 'Error'}] ${errorReason || 'Run ended before completion.'}`;
                 pushCeoMessage(
                   fallbackContent,
@@ -2460,6 +2587,9 @@ export default function ChatPanel({
                   guidance,
                   completionCelebration,
                   runReplay,
+                  qualityReport,
+                  deliveryGates,
+                  refinement,
                 );
               }
               completeAssistantTurn();
@@ -2473,8 +2603,8 @@ export default function ChatPanel({
               onRunIncidentRef.current?.(null);
               setLiveRunIncident(null);
               setMessages((prev) => [...prev, {
-                role: 'ceo',
-                content: `[Error] ${wsContentText(data.content, 'Unknown error')}`,
+                role: 'system',
+                content: `Runtime error: ${wsContentText(data.content, 'Unknown error')}`,
                 timestamp: new Date().toISOString(),
                 project_id: activeProjectIdRef.current,
                 guidance: normalizeGuidancePayload(data.guidance),
@@ -2490,8 +2620,8 @@ export default function ChatPanel({
               break;
             case 'warning':
               setMessages((prev) => [...prev, {
-                role: 'ceo',
-                content: `[Warning] ${typeof data.content === 'string' ? data.content : 'Warning received.'}`,
+                role: 'system',
+                content: `Runtime warning: ${typeof data.content === 'string' ? data.content : 'Warning received.'}`,
                 timestamp: new Date().toISOString(),
                 project_id: activeProjectIdRef.current,
                 guidance: normalizeGuidancePayload(data.guidance),
@@ -2535,8 +2665,8 @@ export default function ChatPanel({
         setConnectionStatus('disconnected');
         if (!turnErroredRef.current && isWaitingRef.current) {
           setMessages((prev) => [...prev, {
-            role: 'ceo',
-            content: '[Error] Connection lost while waiting for CEO response. Reconnecting automatically…',
+            role: 'system',
+            content: 'Connection lost while waiting for CEO response. Reconnecting automatically…',
             timestamp: new Date().toISOString(),
             project_id: activeProjectIdRef.current,
           }]);
@@ -2555,8 +2685,8 @@ export default function ChatPanel({
         setConnectionStatus('error');
         if (!turnErroredRef.current && isWaitingRef.current) {
           setMessages((prev) => [...prev, {
-            role: 'ceo',
-            content: '[Error] Chat connection error. Please retry once connection is restored.',
+            role: 'system',
+            content: 'Chat connection error. Please retry once connection is restored.',
             timestamp: new Date().toISOString(),
             project_id: activeProjectIdRef.current,
           }]);

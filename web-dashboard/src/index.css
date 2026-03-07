@@ -530,6 +530,26 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
+.chat-quality-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-quality-chip {
+  border: 1px solid var(--tf-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--tf-accent-blue);
+  background: color-mix(in srgb, var(--tf-accent-blue) 10%, transparent);
+}
+
+.chat-quality-gates {
+  margin-top: 6px;
+}
+
 .chat-empty-shell {
   display: grid;
   gap: 10px;

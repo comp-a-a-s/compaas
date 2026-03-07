@@ -1703,6 +1703,13 @@ function ProjectDetail({
       .map((line) => line.trim())
       .filter((line) => line.length > 0)
   ), [project.run_instructions]);
+  const qualitySnapshot = useMemo(() => {
+    const snapshot = project.quality_latest;
+    return snapshot && typeof snapshot === 'object' ? snapshot : undefined;
+  }, [project.quality_latest]);
+  const qualityReport = qualitySnapshot?.quality_report;
+  const deliveryGates = qualitySnapshot?.delivery_gates;
+  const refinement = qualitySnapshot?.refinement;
   const tagLabels = useMemo(() => normalizeTagList(project.tags ?? []), [project.tags]);
   const [tagDraft, setTagDraft] = useState(() => tagLabels.join(', '));
 
@@ -1977,6 +1984,51 @@ function ProjectDetail({
             <p className="text-xs mt-2" style={{ color: 'var(--tf-warning)' }}>
               {workspaceError}
             </p>
+          )}
+        </section>
+
+        <section>
+          <p className="text-xs uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--tf-text-muted)' }}>
+            Latest Quality Snapshot
+          </p>
+          {!qualitySnapshot || !qualityReport ? (
+            <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+              No quality snapshot yet. Complete a build to populate quality metrics.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs px-2 py-1 rounded-full" style={{ border: '1px solid var(--tf-border)', color: 'var(--tf-accent-blue)' }}>
+                  Code {qualityReport.code_quality}
+                </span>
+                <span className="text-xs px-2 py-1 rounded-full" style={{ border: '1px solid var(--tf-border)', color: 'var(--tf-accent-blue)' }}>
+                  UX {qualityReport.ux_quality}
+                </span>
+                <span className="text-xs px-2 py-1 rounded-full" style={{ border: '1px solid var(--tf-border)', color: 'var(--tf-accent-blue)' }}>
+                  Visual {qualityReport.visual_distinctiveness}
+                </span>
+              </div>
+              {deliveryGates && (
+                <p className="text-xs" style={{ color: 'var(--tf-text-secondary)' }}>
+                  Gates passed: {deliveryGates.passed.length}/{deliveryGates.required.length}
+                </p>
+              )}
+              {qualityReport.failed_gates.length > 0 && (
+                <ul className="space-y-1">
+                  {qualityReport.failed_gates.map((gate) => (
+                    <li key={gate} className="text-xs" style={{ color: 'var(--tf-warning)' }}>
+                      • {gate.replace(/_/g, ' ')}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {refinement?.attempted && (
+                <p className="text-xs" style={{ color: 'var(--tf-text-secondary)' }}>
+                  Refinement pass {refinement.pass_index}/{Math.max(refinement.pass_index, refinement.max_passes)} executed.
+                  {refinement.reason ? ` ${refinement.reason}` : ''}
+                </p>
+              )}
+            </div>
           )}
         </section>
       </div>

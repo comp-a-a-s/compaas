@@ -17,6 +17,8 @@ import type {
   PagedActivityResponse,
   OpenWorkspaceResult,
   PrQualityProfileResponse,
+  QualityProfileResponse,
+  ProjectQualityLatestResponse,
   ContextPack,
   ReviewComment,
   ReviewSession,
@@ -990,6 +992,55 @@ export async function updatePrQualityProfile(profile: 'strict' | 'balanced' | 'f
     `${V1}/github/pr-quality-profile`,
     'PATCH',
     { profile },
+  );
+}
+
+export async function fetchQualityProfile(): Promise<QualityProfileResponse> {
+  return safeFetch<QualityProfileResponse>(
+    `${V1}/quality/profile`,
+    {
+      status: 'error',
+      profile: {
+        mode: 'aaa_quality_visual',
+        auto_refinement_enabled: true,
+        auto_refinement_max_passes: 1,
+        validation_required_for_done: true,
+        visual_distinctiveness_min: 70,
+        ux_quality_min: 75,
+        code_quality_min: 80,
+      },
+    },
+  );
+}
+
+export async function updateQualityProfile(
+  updates: Partial<{
+    mode: string;
+    auto_refinement_enabled: boolean;
+    auto_refinement_max_passes: number;
+    validation_required_for_done: boolean;
+    visual_distinctiveness_min: number;
+    ux_quality_min: number;
+    code_quality_min: number;
+  }>,
+): Promise<ApiResult<QualityProfileResponse>> {
+  return safeMutateResult<QualityProfileResponse>(
+    `${V1}/quality/profile`,
+    'PATCH',
+    updates,
+  );
+}
+
+export async function fetchProjectQualityLatest(projectId: string): Promise<ProjectQualityLatestResponse> {
+  return safeFetch<ProjectQualityLatestResponse>(
+    `${V1}/projects/${encodeURIComponent(projectId)}/quality/latest`,
+    {
+      status: 'error',
+      project_id: projectId,
+      quality_latest: {},
+      failed_gates: [],
+      updated_at: '',
+    },
   );
 }
 
