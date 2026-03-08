@@ -224,32 +224,20 @@ function OrgConnector({
   motionMode = 'quiet',
 }: OrgConnectorProps) {
   const baseColor = blocked
-    ? 'rgba(240,170,74,0.45)'
+    ? 'rgba(240,170,74,0.62)'
     : active
       ? flowDirection === 'up'
-        ? 'rgba(59,142,255,0.4)'
-        : 'rgba(63,185,80,0.42)'
-      : 'var(--tf-border)';
-  const flowClass = vertical
-    ? flowDirection === 'up'
-      ? 'anim-flow-up'
-      : 'anim-flow-down'
-    : flowDirection === 'up'
-      ? 'anim-flow-left'
-      : 'anim-flow-right';
-  const flowColor = blocked
-    ? 'var(--tf-warning)'
-    : flowDirection === 'up'
-      ? 'var(--tf-accent-blue)'
-      : 'var(--tf-success)';
+        ? 'rgba(59,142,255,0.78)'
+        : 'rgba(63,185,80,0.76)'
+      : 'rgba(76,109,146,0.72)';
   const length = typeof size === 'number' ? `${size}px` : size;
-  const gradient = vertical
-    ? flowDirection === 'up'
-      ? `linear-gradient(to top, transparent, ${flowColor}, transparent)`
-      : `linear-gradient(to bottom, transparent, ${flowColor}, transparent)`
-    : flowDirection === 'up'
-      ? `linear-gradient(to left, transparent, ${flowColor}, transparent)`
-      : `linear-gradient(to right, transparent, ${flowColor}, transparent)`;
+  const activeGlow = blocked
+    ? '0 0 10px rgba(240,170,74,0.25)'
+    : active
+      ? flowDirection === 'up'
+        ? '0 0 10px rgba(59,142,255,0.24)'
+        : '0 0 10px rgba(63,185,80,0.22)'
+      : 'none';
   return (
     <div
       className={`org-connector ${active ? 'org-connector--active' : ''} ${blocked ? 'org-connector--blocked' : ''}`}
@@ -260,23 +248,12 @@ function OrgConnector({
           ? { width: '3px', height: length }
           : { height: '3px', width: length }),
         backgroundColor: baseColor,
-        transition: 'background-color 0.4s',
+        transition: 'background-color 0.24s ease, box-shadow 0.24s ease',
         borderRadius: '999px',
-        ['--org-connector-duration' as any]: motionMode === 'intense' ? '1.05s' : motionMode === 'active' ? '1.45s' : '2.1s',
+        boxShadow: activeGlow,
+        opacity: motionMode === 'quiet' && !active ? 0.8 : 1,
       }}
     >
-      {active && (
-        <div
-          className={`org-connector-flow ${flowClass}`}
-          style={{
-            position: 'absolute',
-            ...(vertical
-              ? { left: 0, right: 0, height: '50%' }
-              : { top: 0, bottom: 0, width: '50%' }),
-            background: gradient,
-          }}
-        />
-      )}
       {blocked && <span className="org-connector-blocked-dot" />}
     </div>
   );
@@ -849,7 +826,15 @@ function ChildrenGroup({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}>
+    <div
+      style={{
+        display: 'inline-flex',
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        width: 'fit-content',
+        maxWidth: '100%',
+      }}
+    >
       <div style={{ position: 'relative', height: '3px', margin: '0 10px' }}>
         <OrgConnector
           vertical={false}
@@ -867,7 +852,7 @@ function ChildrenGroup({
           motionMode={motionMode}
         />
       </div>
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start' }}>
+      <div style={{ display: 'inline-flex', flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center' }}>
       {visibleChildren.map((child) => {
         const edgeKey = orgEdgeKey(node.id, child.id);
         const edgeInFlow = flowEdgeDirections.has(edgeKey);
@@ -1353,6 +1338,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   const assignedAgentCount = workforceCounts.assigned;
   const reportingAgentCount = workforceCounts.reporting;
   const blockedAgentCount = workforceCounts.blocked;
+  const isProjectRunning = activeIds.size > 0 || workingAgentCount > 0 || assignedAgentCount > 0 || reportingAgentCount > 0;
   const syncFreshness = formatFreshness(workforceLive?.client_meta?.last_success_at);
   const baseMotionMode = toMotionMode(activeIds.size, workingAgentCount, blockedAgentCount, workforceStale);
   const motionMode: OrgMotionMode = documentVisible ? baseMotionMode : 'quiet';
@@ -1365,7 +1351,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   return (
     <div
       ref={chartContainerRef}
-      className={`org-chart-shell org-chart-soft-bg org-motion-${motionMode}`}
+      className={`org-chart-shell org-chart-soft-bg ${isProjectRunning ? 'org-chart-running' : ''} org-motion-${motionMode}`}
       style={{ maxWidth: '100%', overflow: 'hidden', ...motionVars }}
     >
       {/* Chart label with active agent count */}

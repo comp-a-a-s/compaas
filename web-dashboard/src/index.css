@@ -258,6 +258,12 @@ textarea:focus-visible {
   position: relative;
   border-radius: 18px;
   padding: 10px 8px;
+  isolation: isolate;
+}
+
+.org-chart-shell > * {
+  position: relative;
+  z-index: 1;
 }
 
 @keyframes org-bg-drift {
@@ -275,13 +281,84 @@ textarea:focus-visible {
   }
 }
 
+@keyframes org-bg-run-pattern-shift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1.02);
+    background-position:
+      0% 0%,
+      0% 0%,
+      0% 0%;
+  }
+  50% {
+    transform: translate3d(-10px, -8px, 0) scale(1.035);
+    background-position:
+      24% 16%,
+      18% 14%,
+      16% 12%;
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.02);
+    background-position:
+      0% 0%,
+      0% 0%,
+      0% 0%;
+  }
+}
+
+@keyframes org-bg-run-aura {
+  0%, 100% {
+    opacity: 0.2;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    opacity: 0.38;
+    transform: translate3d(0, -4px, 0) scale(1.03);
+  }
+}
+
 .org-chart-soft-bg {
   background:
     radial-gradient(900px 320px at 12% 6%, color-mix(in srgb, var(--tf-accent-blue) 10%, transparent), transparent 72%),
     radial-gradient(760px 300px at 88% 0%, color-mix(in srgb, var(--tf-success) 8%, transparent), transparent 76%),
     linear-gradient(180deg, color-mix(in srgb, var(--tf-surface) 90%, var(--tf-bg)) 0%, color-mix(in srgb, var(--tf-bg) 92%, var(--tf-surface)) 100%);
   background-size: 140% 140%, 140% 140%, 100% 100%;
-  animation: org-bg-drift 18s ease-in-out infinite;
+  animation: org-bg-drift 22s ease-in-out infinite;
+}
+
+.org-chart-soft-bg::before,
+.org-chart-soft-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.org-chart-soft-bg::before {
+  z-index: 0;
+  opacity: 0.18;
+  background-image:
+    radial-gradient(1200px 420px at 20% -10%, color-mix(in srgb, var(--tf-accent-blue) 22%, transparent), transparent 76%),
+    repeating-linear-gradient(120deg, color-mix(in srgb, var(--tf-accent-blue) 14%, transparent) 0px, color-mix(in srgb, var(--tf-accent-blue) 14%, transparent) 1px, transparent 1px, transparent 42px),
+    repeating-linear-gradient(60deg, color-mix(in srgb, var(--tf-success) 10%, transparent) 0px, color-mix(in srgb, var(--tf-success) 10%, transparent) 1px, transparent 1px, transparent 46px);
+}
+
+.org-chart-soft-bg::after {
+  z-index: 0;
+  opacity: 0.1;
+  background:
+    radial-gradient(540px 220px at 74% 16%, color-mix(in srgb, var(--tf-success) 16%, transparent), transparent 74%),
+    radial-gradient(460px 200px at 34% 84%, color-mix(in srgb, var(--tf-accent-blue) 14%, transparent), transparent 72%);
+}
+
+.org-chart-running::before {
+  opacity: 0.34;
+  animation: org-bg-run-pattern-shift 18s linear infinite;
+}
+
+.org-chart-running::after {
+  opacity: 0.28;
+  animation: org-bg-run-aura 7s ease-in-out infinite;
 }
 
 .org-node-card {
@@ -538,6 +615,7 @@ textarea:focus-visible {
 
 .org-connector {
   position: relative;
+  transform: translateZ(0);
 }
 
 .org-connector-flow {
@@ -1661,6 +1739,13 @@ body.compact-mode .h-10 { height: 32px !important; }
   }
 
   .org-chart-soft-bg {
+    animation: none !important;
+  }
+
+  .org-chart-soft-bg::before,
+  .org-chart-soft-bg::after,
+  .org-chart-running::before,
+  .org-chart-running::after {
     animation: none !important;
   }
 }
