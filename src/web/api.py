@@ -3880,6 +3880,21 @@ def _quality_report_payload(
     if any(token in text for token in ("hierarchy", "navigation", "accessibility", "responsive")):
         ux_quality += 10
 
+    deliverable_tokens: list[str] = []
+    for item in deliverables:
+        if isinstance(item, dict):
+            deliverable_tokens.append(str(item.get("label", "") or ""))
+            deliverable_tokens.append(str(item.get("target", "") or ""))
+        else:
+            deliverable_tokens.append(str(item or ""))
+    for item in open_links:
+        if isinstance(item, dict):
+            deliverable_tokens.append(str(item.get("label", "") or ""))
+            deliverable_tokens.append(str(item.get("target", "") or ""))
+        else:
+            deliverable_tokens.append(str(item or ""))
+    deliverable_text = " ".join(deliverable_tokens).lower()
+
     visual_markers = (
         "typography",
         "font",
@@ -3894,9 +3909,31 @@ def _quality_report_payload(
         "theme",
         "style guide",
         "component",
+        "ui",
+        "ux",
+        "responsive",
+        "dashboard",
+        "design",
     )
     visual_hits = sum(1 for marker in visual_markers if marker in text)
-    visual_distinctiveness = 28 + min(48, visual_hits * 8)
+    artifact_markers = (
+        ".html",
+        ".css",
+        ".scss",
+        ".sass",
+        ".tsx",
+        ".jsx",
+        "styles.css",
+        "index.html",
+        "component",
+        "ui",
+    )
+    artifact_hits = sum(1 for marker in artifact_markers if marker in deliverable_text)
+    visual_distinctiveness = 28 + min(48, visual_hits * 8) + min(24, artifact_hits * 4)
+    if ".html" in deliverable_text and ".css" in deliverable_text:
+        visual_distinctiveness += 10
+    if any(re.search(r"\b(vite|next|react|frontend|ui)\b", cmd.lower()) for cmd in run_commands):
+        visual_distinctiveness += 6
     if any(token in text for token in ("purpose-driven", "audience", "brand")):
         visual_distinctiveness += 10
     if any(token in text for token in ("boring", "generic boilerplate", "template")):
@@ -3922,6 +3959,14 @@ def _quality_report_payload(
         "failed_gates": _normalize_unique_strings(failed_gates, limit=16),
     }
     return report, gates
+
+
+def _blocking_failed_quality_gates(failed_gates: Any) -> list[str]:
+    normalized = _normalize_unique_strings(failed_gates, limit=16)
+    if not normalized:
+        return []
+    advisory_only = {"visual_distinctiveness_below_threshold"}
+    return [gate for gate in normalized if gate not in advisory_only]
 
 
 def _apply_quality_refinement_pass(
@@ -8491,11 +8536,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
                     if terminal_state == "done" and completion_kind == "build_complete":
                         failed_after_refinement = _normalize_unique_strings(quality_report.get("failed_gates"), limit=16)
-                        if failed_after_refinement:
+                        blocking_failed_after_refinement = _blocking_failed_quality_gates(failed_after_refinement)
+                        if blocking_failed_after_refinement:
                             terminal_state = "failed"
                             error_reason = (
                                 "Quality gates failed: "
-                                + ", ".join(gate.replace("_", " ") for gate in failed_after_refinement[:4])
+                                + ", ".join(gate.replace("_", " ") for gate in blocking_failed_after_refinement[:4])
                                 + "."
                             )
                             _transition_run_state(
@@ -8503,7 +8549,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                                 state="failed",
                                 label="Quality gates failed before delivery",
                                 metadata={
-                                    "failed_gates": failed_after_refinement,
+                                    "failed_gates": blocking_failed_after_refinement,
                                     "quality_report": quality_report,
                                 },
                             )
@@ -8514,7 +8560,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                                 project_id=active_project_id,
                                 metadata={
                                     "run_id": run_id,
-                                    "failed_gates": failed_after_refinement,
+                                    "failed_gates": blocking_failed_after_refinement,
                                 },
                             )
                             done_payload["guidance"] = _runtime_guidance_payload(
@@ -8539,6 +8585,18 @@ async def chat_websocket(websocket: WebSocket) -> None:
                                         kind="view_events",
                                     ),
                                 ],
+                            )
+                        elif failed_after_refinement:
+                            _emit_chat_activity(
+                                "ceo",
+                                "UPDATED",
+                                "Build delivered with advisory visual quality warning.",
+                                project_id=active_project_id,
+                                metadata={
+                                    "run_id": run_id,
+                                    "failed_gates": failed_after_refinement,
+                                    "blocking_failed_gates": [],
+                                },
                             )
                         else:
                             _emit_chat_activity(

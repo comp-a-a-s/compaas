@@ -73,3 +73,41 @@ def test_quality_report_fails_thresholds_when_visual_and_ux_are_generic():
     assert gates["blocked"] == []
     assert "ux_quality_below_threshold" in report["failed_gates"]
     assert "visual_distinctiveness_below_threshold" in report["failed_gates"]
+
+
+def test_quality_report_counts_frontend_artifacts_as_visual_evidence():
+    profile = api._quality_profile(
+        {
+            "quality": {
+                "code_quality_min": 70,
+                "ux_quality_min": 70,
+                "visual_distinctiveness_min": 70,
+                "validation_required_for_done": True,
+            }
+        }
+    )
+    report, gates = api._quality_report_payload(
+        {
+            "summary": "Build complete for a weekly planner app.",
+            "run_commands": ["npm run dev"],
+            "open_links": [{"label": "Open app", "target": "http://localhost:5173", "kind": "url"}],
+            "deliverables": [
+                {"label": "index.html", "target": "/Users/idan/compaas/projects/demo/index.html", "kind": "path"},
+                {"label": "styles.css", "target": "/Users/idan/compaas/projects/demo/styles.css", "kind": "path"},
+            ],
+            "validation": ["node --check app.js passed"],
+            "next_actions": ["Open app and verify key user flows"],
+        },
+        response_text="Build complete with responsive layout and polished UI.",
+        profile=profile,
+    )
+    assert gates["blocked"] == []
+    assert report["visual_distinctiveness"] >= 70
+    assert "visual_distinctiveness_below_threshold" not in report["failed_gates"]
+
+
+def test_blocking_failed_quality_gates_treats_visual_only_as_advisory():
+    assert api._blocking_failed_quality_gates(["visual_distinctiveness_below_threshold"]) == []
+    assert api._blocking_failed_quality_gates(
+        ["visual_distinctiveness_below_threshold", "missing_validation"]
+    ) == ["missing_validation"]
