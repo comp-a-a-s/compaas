@@ -1406,6 +1406,13 @@ export default function App() {
                 setPendingProjectId(projectId);
                 loadProjects(true);
               }}
+              onAskCEO={(projectId) => {
+                if (projectId) {
+                  setActiveProjectId(projectId);
+                }
+                setChatHasUnread(false);
+                setChatOpen(true);
+              }}
               onGitHubSetupRequired={() => openConnectorSetup('github')}
             />
           );

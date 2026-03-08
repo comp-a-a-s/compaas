@@ -225,6 +225,49 @@ class TestListProjectsEndpoint:
         assert lane["status"] == "in_progress"
         assert "dashboard shell and auth flow" in lane["headline"].lower()
 
+    def test_list_includes_launch_artifact_and_run_metadata(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        pid = _create_project(client, name="Launch Project")
+        api_module.state_manager.update_project(pid, {
+            "run_instructions": "## Open Links\n- [Preview App](https://example.com/app)\n",
+        })
+        monkeypatch.setattr(
+            api_module.project_service,
+            "get_metadata",
+            lambda _project_id: {
+                "artifacts": [
+                    {"file_path": "artifacts/02_activation_guide.md"},
+                    {"file_path": "artifacts/03_project_handoff.md"},
+                ],
+            },
+        )
+        monkeypatch.setattr(
+            api_module.run_service,
+            "list_runs",
+            lambda project_id="", limit=100: [{
+                "id": "run-123",
+                "project_id": project_id,
+                "status": "done",
+                "updated_at": "2026-03-08T12:00:00+00:00",
+            }],
+        )
+
+        data = client.get("/api/projects").json()
+        project = next((p for p in data if p.get("id") == pid), None)
+        assert project is not None
+        assert project["launch_links"] == [
+            {"label": "Preview App", "target": "https://example.com/app", "kind": "url"}
+        ]
+        assert project["artifacts_preview"] == [
+            {"path": "artifacts/03_project_handoff.md", "label": "03_project_handoff.md"},
+            {"path": "artifacts/02_activation_guide.md", "label": "02_activation_guide.md"},
+        ]
+        assert project["last_run"] == {
+            "state": "done",
+            "updated_at": "2026-03-08T12:00:00+00:00",
+        }
+
 
 class TestCreateProjectEndpoint:
     def test_creates_project_and_returns_metadata(self, client):
@@ -476,6 +519,46 @@ class TestGetProjectEndpoint:
         assert isinstance(lanes, list)
         assert lanes[0]["owner"] == "ceo"
         assert "kickoff scope and acceptance criteria" in lanes[0]["headline"].lower()
+
+    def test_response_contains_project_launch_metadata(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        pid = _create_project(client, name="Detail Launch Project")
+        api_module.state_manager.update_project(pid, {
+            "run_instructions": "## Open Links\n- [Local App](http://localhost:4173)\n",
+        })
+        monkeypatch.setattr(
+            api_module.project_service,
+            "get_metadata",
+            lambda _project_id: {
+                "artifacts": [
+                    {"file_path": "artifacts/02_activation_guide.md"},
+                ],
+            },
+        )
+        monkeypatch.setattr(
+            api_module.run_service,
+            "list_runs",
+            lambda project_id="", limit=100: [{
+                "id": "run-456",
+                "project_id": project_id,
+                "status": "executing",
+                "updated_at": "2026-03-08T13:00:00+00:00",
+            }],
+        )
+
+        data = client.get(f"/api/projects/{pid}").json()
+        assert data["launch_links"] == [
+            {"label": "Local App", "target": "http://localhost:4173", "kind": "url"}
+        ]
+        assert data["artifacts_preview"] == [
+            {"path": "artifacts/02_activation_guide.md", "label": "02_activation_guide.md"},
+        ]
+        assert data["last_run"] == {
+            "state": "executing",
+            "updated_at": "2026-03-08T13:00:00+00:00",
+        }
+        assert data["project"]["launch_links"] == data["launch_links"]
 
     def test_returns_404_for_missing_project(self, client):
         response = client.get("/api/projects/nonexistent1")

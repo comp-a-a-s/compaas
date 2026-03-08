@@ -2179,7 +2179,7 @@ export default function ChatPanel({
     const pid = String(projectId || '').trim();
     if (!pid) return;
     void fetchProjectReleaseNotes(pid).then((payload) => {
-      if (!payload || payload.status !== 'ok' || !payload.notes) {
+      if (!payload.ok || !payload.data?.notes) {
         setMessages((prev) => [...prev, {
           role: 'ceo',
           content: '[Warning] Release notes are not available yet for this project.',
@@ -2188,7 +2188,7 @@ export default function ChatPanel({
         }]);
         return;
       }
-      pushCeoMessage(payload.notes, pid);
+      pushCeoMessage(payload.data.notes, pid);
     }).catch(() => {
       setMessages((prev) => [...prev, {
         role: 'ceo',

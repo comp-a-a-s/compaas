@@ -24,6 +24,10 @@ import type {
   ReviewSession,
   GuidanceAction,
   SystemReadiness,
+  ProjectArtifactRecord,
+  ProjectArtifactPreview,
+  ProjectLaunchLink,
+  ProjectReleaseNotes,
 } from '../types';
 
 const BASE = '/api';
@@ -190,8 +194,23 @@ export async function fetchProjectDetail(
   id: string,
   options?: { signal?: AbortSignal },
 ): Promise<{ project: Project; tasks: Task[] }> {
-  const fallback = { project: { id, name: '', status: '' }, tasks: [] };
-  return safeFetch(`${BASE}/projects/${encodeURIComponent(id)}`, fallback, options);
+  const fallback = { project: { id, name: '', status: '' }, tasks: [] as Task[] };
+  const payload = await safeFetch<Record<string, unknown>>(`${BASE}/projects/${encodeURIComponent(id)}`, fallback as unknown as Record<string, unknown>, options);
+  const rawProject = payload.project && typeof payload.project === 'object'
+    ? payload.project as Project
+    : ({ id, name: '', status: '' } as Project);
+  const mergedProject: Project = {
+    ...rawProject,
+    ...(Array.isArray(payload.high_level_tasks) ? { high_level_tasks: payload.high_level_tasks as Project['high_level_tasks'] } : {}),
+    ...(typeof payload.high_level_tasks_updated_at === 'string' ? { high_level_tasks_updated_at: payload.high_level_tasks_updated_at } : {}),
+    ...(Array.isArray(payload.launch_links) ? { launch_links: payload.launch_links as ProjectLaunchLink[] } : {}),
+    ...(Array.isArray(payload.artifacts_preview) ? { artifacts_preview: payload.artifacts_preview as ProjectArtifactPreview[] } : {}),
+    ...(payload.last_run && typeof payload.last_run === 'object' ? { last_run: payload.last_run as Project['last_run'] } : {}),
+  };
+  return {
+    project: mergedProject,
+    tasks: Array.isArray(payload.tasks) ? payload.tasks as Task[] : fallback.tasks,
+  };
 }
 
 export async function deleteProject(projectId: string): Promise<{
@@ -258,6 +277,43 @@ export async function openProjectWorkspace(projectId: string): Promise<ApiResult
   return safeFetchResult<OpenWorkspaceResult>(`${BASE}/projects/${encodeURIComponent(projectId)}/workspace/open`, {
     method: 'POST',
   });
+}
+
+export async function fetchArchivedProjects(): Promise<Project[]> {
+  const result = await safeFetchResult<{ status?: string; projects?: Project[] }>(`${BASE}/v1/projects/archived`);
+  if (!result.ok || !result.data) return [];
+  return Array.isArray(result.data.projects) ? result.data.projects : [];
+}
+
+export async function cloneProject(projectId: string, name: string): Promise<ApiResult<{ status?: string; project?: Project }>> {
+  return safeFetchResult<{ status?: string; project?: Project }>(`${BASE}/v1/projects/${encodeURIComponent(projectId)}/clone`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function archiveProject(projectId: string): Promise<ApiResult<{ status?: string; metadata?: Record<string, unknown> }>> {
+  return safeFetchResult<{ status?: string; metadata?: Record<string, unknown> }>(`${BASE}/v1/projects/${encodeURIComponent(projectId)}/archive`, {
+    method: 'POST',
+  });
+}
+
+export async function restoreProject(projectId: string): Promise<ApiResult<{ status?: string; project?: Project }>> {
+  return safeFetchResult<{ status?: string; project?: Project }>(`${BASE}/v1/projects/${encodeURIComponent(projectId)}/restore`, {
+    method: 'POST',
+  });
+}
+
+export async function fetchProjectArtifacts(projectId: string): Promise<ApiResult<{ status?: string; artifacts?: ProjectArtifactRecord[] }>> {
+  return safeFetchResult<{ status?: string; artifacts?: ProjectArtifactRecord[] }>(`${BASE}/v1/projects/${encodeURIComponent(projectId)}/artifacts`);
+}
+
+export async function fetchProjectReleaseNotes(projectId: string, runId = ''): Promise<ApiResult<ProjectReleaseNotes>> {
+  const params = new URLSearchParams();
+  if (runId.trim()) params.set('run_id', runId.trim());
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return safeFetchResult<ProjectReleaseNotes>(`${BASE}/v1/projects/${encodeURIComponent(projectId)}/release-notes${suffix}`);
 }
 
 export async function updateProjectTags(projectId: string, tags: string[]): Promise<{
@@ -1299,25 +1355,4 @@ export async function deployProjectToVercel(projectId: string, target: 'preview'
   } finally {
     clearTimeout(timeoutId);
   }
-}
-
-export async function fetchProjectReleaseNotes(
-  projectId: string,
-  runId = '',
-): Promise<{
-  status: 'ok' | 'error';
-  notes?: string;
-  run_id?: string;
-  summary?: string;
-  timeline?: string[];
-  run_commands?: string[];
-}> {
-  if (!projectId.trim()) return { status: 'error' };
-  const params = new URLSearchParams();
-  if (runId.trim()) params.set('run_id', runId.trim());
-  const suffix = params.toString() ? `?${params.toString()}` : '';
-  return safeFetch(
-    `${V1}/projects/${encodeURIComponent(projectId)}/release-notes${suffix}`,
-    { status: 'error' },
-  );
 }

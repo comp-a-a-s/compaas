@@ -164,8 +164,12 @@ test.describe('guided reliability UX', () => {
     } else {
       await page.getByText('Projects', { exact: true }).first().click();
     }
-    await page.getByPlaceholder('Project name').first().fill('Failure Demo');
-    await page.getByRole('button', { name: 'Start Project' }).click();
+    await page.getByRole('button', { name: 'New Project' }).click();
+    await expect(page.getByRole('button', { name: 'Close New Project' })).toBeVisible();
+    await page.getByPlaceholder('CashTracker, Launch Desk, FounderOS...').fill('Failure Demo');
+    const createButton = page.getByRole('button', { name: 'Create Project' }).last();
+    await expect(createButton).toBeEnabled();
+    await createButton.click();
 
     await expect(page.getByText('Project creation blocked')).toBeVisible();
     await expect(page.getByText('Workspace path is not writable.')).toBeVisible();

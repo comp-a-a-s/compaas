@@ -17,6 +17,41 @@ export interface Agent {
   recent_activity?: ActivityEvent[];
 }
 
+export interface ProjectLaunchLink {
+  label: string;
+  target: string;
+  kind: 'url' | 'path';
+}
+
+export interface ProjectArtifactPreview {
+  path: string;
+  label?: string;
+}
+
+export interface ProjectRunSnapshot {
+  state: string;
+  updated_at?: string;
+}
+
+export interface ProjectArtifactRecord {
+  id?: string;
+  file_path: string;
+  action?: string;
+  timestamp?: string;
+  run_id?: string;
+  agent?: string;
+}
+
+export interface ProjectReleaseNotes {
+  project_id: string;
+  run_id?: string;
+  notes: string;
+  summary?: string;
+  timeline?: string[];
+  artifacts?: ProjectArtifactRecord[];
+  run_commands?: string[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -46,6 +81,9 @@ export interface Project {
   high_level_tasks_updated_at?: string;
   quality_latest?: ProjectQualitySnapshot;
   quality_updated_at?: string;
+  launch_links?: ProjectLaunchLink[];
+  artifacts_preview?: ProjectArtifactPreview[];
+  last_run?: ProjectRunSnapshot;
 }
 
 export interface QualityReport {

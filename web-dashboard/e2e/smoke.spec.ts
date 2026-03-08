@@ -43,6 +43,17 @@ const projectsPayload = [
     tags: ['frontend', 'urgent'],
     workspace_path: '/Users/idan/compaas/projects/smoke_project',
     run_instructions: 'npm install\nnpm run dev',
+    launch_links: [
+      { label: 'Preview App', target: 'https://smoke-project.example.com', kind: 'url' },
+    ],
+    artifacts_preview: [
+      { path: 'artifacts/02_activation_guide.md', label: '02_activation_guide.md' },
+      { path: 'artifacts/03_project_handoff.md', label: '03_project_handoff.md' },
+    ],
+    last_run: {
+      state: 'done',
+      updated_at: '2026-02-28T10:20:00.000Z',
+    },
     high_level_tasks: [
       { owner: 'ceo', headline: 'Finalize scope and acceptance criteria', status: 'in_progress' },
       { owner: 'lead-frontend', headline: 'Build task board UI and interactions', status: 'todo' },
@@ -190,11 +201,13 @@ const workforcePayload = {
 let projectsRequestCount = 0;
 let chatHistoryPayload: Array<Record<string, unknown>> = [];
 let projectsListPayload = projectsPayload;
+let archivedProjectsPayload: Array<Record<string, unknown>> = [];
 
 test.beforeEach(async ({ page }) => {
   projectsRequestCount = 0;
   chatHistoryPayload = [];
   projectsListPayload = projectsPayload;
+  archivedProjectsPayload = [];
 
   await page.route('**/api/config', async (route) => {
     if (route.request().method() === 'GET') {
@@ -263,6 +276,82 @@ test.beforeEach(async ({ page }) => {
       return;
     }
     await route.fulfill({ json: projectDetailPayload });
+  });
+
+  await page.route('**/api/v1/projects/archived', async (route) => {
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        projects: archivedProjectsPayload,
+      },
+    });
+  });
+
+  await page.route('**/api/v1/projects/*/clone', async (route) => {
+    const project = {
+      ...projectsPayload[0],
+      id: 'smoke_project_clone',
+      name: 'Smoke Project Copy',
+      status: 'planning',
+    };
+    projectsListPayload = [project, ...projectsListPayload];
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        project,
+      },
+    });
+  });
+
+  await page.route('**/api/v1/projects/*/archive', async (route) => {
+    const url = new URL(route.request().url());
+    const projectId = url.pathname.split('/').slice(-2)[0] || '';
+    const project = projectsListPayload.find((item) => item.id === projectId);
+    if (project) {
+      projectsListPayload = projectsListPayload.filter((item) => item.id !== projectId);
+      archivedProjectsPayload = [{ ...project, status: 'archived' }];
+    }
+    await route.fulfill({ json: { status: 'ok', metadata: { archived: true } } });
+  });
+
+  await page.route('**/api/v1/projects/*/restore', async (route) => {
+    const url = new URL(route.request().url());
+    const projectId = url.pathname.split('/').slice(-2)[0] || '';
+    const project = archivedProjectsPayload.find((item) => item.id === projectId);
+    if (project) {
+      archivedProjectsPayload = archivedProjectsPayload.filter((item) => item.id !== projectId);
+      projectsListPayload = [{ ...project, status: 'planning' }, ...projectsListPayload];
+    }
+    await route.fulfill({ json: { status: 'ok', project: project || null } });
+  });
+
+  await page.route('**/api/v1/projects/*/release-notes**', async (route) => {
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        project_id: 'smoke_project',
+        notes: '# Release Notes\n\n- Added launch pad actions.\n- Updated project lanes.',
+        summary: 'Projects hub release notes',
+        timeline: ['Planning complete', 'Launch pad added'],
+        run_commands: ['npm install', 'npm run dev'],
+      },
+    });
+  });
+
+  await page.route('**/api/v1/projects/*/artifacts', async (route) => {
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        artifacts: [
+          {
+            file_path: 'artifacts/02_activation_guide.md',
+            action: 'updated',
+            timestamp: '2026-02-28T10:20:00.000Z',
+            agent: 'Marcus',
+          },
+        ],
+      },
+    });
   });
 
   await page.route('**/api/projects/*/workspace/open', async (route) => {
@@ -389,20 +478,20 @@ test('dashboard navigation and connector validation @smoke', async ({ page }) =>
 
   await expect(page.getByRole('button', { name: 'Projects', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Projects', exact: true }).click();
-  await expect(page.getByRole('button', { name: /Smoke Project Synthetic/i })).toBeVisible();
+  await expect(page.getByText('Projects Hub')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New Project' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Smoke Project/i }).first()).toBeVisible();
   await expect(page.getByText('Team Lanes').first()).toBeVisible();
-  await expect(page.getByText(/CEO: Finalize scope/i)).toBeVisible();
+  await expect(page.getByText(/Finalize scope and acceptance criteria/i).last()).toBeVisible();
+  await expect(page.getByText(/Build task board UI and interactions/i).last()).toBeVisible();
   await expect(page.getByText('#frontend').first()).toBeVisible();
   await expect(page.getByText('npm install').first()).toBeVisible();
-  if (!(await page.getByText('Project Description').isVisible())) {
-    await page.getByRole('button', { name: /Smoke Project Synthetic/i }).click();
-  }
-  await expect(page.getByText('Project Description')).toBeVisible();
-  await expect(page.getByText('Team + High-Level Tasks')).toBeVisible();
-  await expect(page.getByText('Final Run Commands')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Open Workspace Folder' })).toBeVisible();
-  await page.getByRole('button', { name: 'Open Workspace Folder' }).click();
+  await expect(page.getByText('Project Brief')).toBeVisible();
+  await expect(page.getByText('Launch Pad')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Workspace' }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Open Workspace' }).first().click();
   await expect(page.getByText('Workspace folder opened.').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open App' }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Context Packs' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Generate Billing Pack' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Preview Reviews' })).toHaveCount(0);
@@ -457,7 +546,8 @@ test('project detail delete removes project from list and clears detail pane @sm
   await page.goto('/');
   await page.getByRole('button', { name: 'Projects' }).click();
   await page.getByRole('button', { name: /Smoke Project/i }).first().click();
-  await expect(page.getByText('Project Description')).toBeVisible();
+  await expect(page.getByText('Project Brief')).toBeVisible();
+  await page.getByRole('button', { name: 'More' }).click();
   await expect(page.getByRole('button', { name: 'Delete Project' })).toBeVisible();
   await expect(page.locator('code', { hasText: 'npm run dev' }).first()).toBeVisible();
 
@@ -466,8 +556,8 @@ test('project detail delete removes project from list and clears detail pane @sm
   });
   await page.getByRole('button', { name: 'Delete Project' }).click();
 
-  await expect(page.getByText('No projects found yet. Start one here or ask the CEO to initialize one from chat.')).toBeVisible();
-  await expect(page.getByText('Project Description')).toHaveCount(0);
+  await expect(page.locator('#main-content').getByText('No projects yet')).toBeVisible();
+  await expect(page.getByText('Project Brief')).toHaveCount(0);
 });
 
 test('ceo chat renders structured response with links, wrapping, focus, and icon maximize toggle @smoke', async ({ page }) => {

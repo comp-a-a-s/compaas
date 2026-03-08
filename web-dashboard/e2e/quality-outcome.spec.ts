@@ -158,10 +158,9 @@ test.describe('quality outcome surfacing', () => {
     }
 
     await page.getByText('Quality Project').first().click();
-    await expect(page.getByText('Latest Quality Snapshot')).toBeVisible();
-    await expect(page.getByText('Code 88')).toBeVisible();
-    await expect(page.getByText('UX 84')).toBeVisible();
-    await expect(page.getByText('Visual 79')).toBeVisible();
-    await expect(page.getByText('Refinement pass 1/1 executed.')).toBeVisible();
+    await expect(page.getByText('Project Brief')).toBeVisible();
+    await expect(page.getByText('Quality: code 88 · ux 84 · visual 79')).toBeVisible();
+    await expect(page.getByText('Launch Pad')).toBeVisible();
+    await expect(page.getByText(/Implement purpose-driven UX layout/i).last()).toBeVisible();
   });
 });

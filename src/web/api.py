@@ -974,6 +974,121 @@ def _compute_project_high_level_tasks(
     return ordered, latest_update
 
 
+def _project_launch_links(project: dict[str, Any]) -> list[dict[str, str]]:
+    run_instructions = str(project.get("run_instructions", "") or "").strip()
+    if not run_instructions:
+        return []
+    parsed = _structured_response_payload(run_instructions)
+    raw_links = parsed.get("open_links", [])
+    if not isinstance(raw_links, list):
+        return []
+    links: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in raw_links:
+        if not isinstance(raw, dict):
+            continue
+        target = str(raw.get("target", "") or "").strip()
+        if not target:
+            continue
+        if re.match(r"^/[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?:/|$)", target):
+            # Guard against malformed markdown-link parsing that strips the URL scheme
+            # and leaves a host-looking path such as "/example.com/app".
+            continue
+        key = target.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        label = str(raw.get("label", "") or "").strip() or target
+        kind = "url" if re.match(r"^https?://", target, flags=re.IGNORECASE) else "path"
+        links.append({"label": label, "target": target, "kind": kind})
+        if len(links) >= 8:
+            break
+    return links
+
+
+def _project_artifacts_preview(project_id: str) -> list[dict[str, str]]:
+    try:
+        metadata = project_service.get_metadata(project_id)
+    except ValueError:
+        return []
+    artifacts = metadata.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        return []
+    preview: list[dict[str, str]] = []
+    for raw in reversed(artifacts[-5:]):
+        if not isinstance(raw, dict):
+            continue
+        path = str(raw.get("file_path", "") or "").strip()
+        if not path:
+            continue
+        preview.append({
+            "path": path,
+            "label": os.path.basename(path) or path,
+        })
+    return preview
+
+
+def _project_last_run(project_id: str) -> dict[str, str]:
+    runs = run_service.list_runs(project_id=project_id, limit=1)
+    if not runs:
+        return {}
+    latest = runs[0] if isinstance(runs[0], dict) else {}
+    payload: dict[str, str] = {}
+    state = str(latest.get("status", "") or "").strip()
+    updated_at = str(latest.get("updated_at", "") or "").strip()
+    if state:
+        payload["state"] = state
+    if updated_at:
+        payload["updated_at"] = updated_at
+    return payload
+
+
+def _enrich_project_payload(project: dict[str, Any], tasks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    project_id = str(project.get("id", "") or "")
+    enriched = dict(project)
+    run_instructions = str(enriched.get("run_instructions", "") or "").strip()
+    if not run_instructions and project_id:
+        run_instructions = _backfill_project_run_instructions(project_id)
+        if run_instructions:
+            enriched["run_instructions"] = run_instructions
+    if tasks is None:
+        tasks = task_board.get_board(project_id)
+    high_level_tasks, high_level_tasks_updated_at = _compute_project_high_level_tasks(enriched, tasks)
+    status_counts: dict[str, int] = {}
+    for task in tasks:
+        status = str(task.get("status", "todo") or "todo")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    try:
+        plan_packet = project_service.plan_packet_status(project_id)
+    except ValueError:
+        plan_packet = {
+            "ready": False,
+            "missing_items": ["Project metadata unavailable."],
+            "summary": "Planning packet could not be evaluated.",
+        }
+    team = enriched.get("team") or []
+    if not team:
+        assignees = sorted({
+            t.get("assigned_to", "")
+            for t in tasks
+            if t.get("assigned_to")
+        })
+        if assignees:
+            team = assignees
+    return {
+        **enriched,
+        "team": team,
+        "task_counts": status_counts,
+        "total_tasks": len(tasks),
+        "high_level_tasks": high_level_tasks,
+        "high_level_tasks_updated_at": high_level_tasks_updated_at,
+        "plan_packet": plan_packet,
+        "launch_links": _project_launch_links(enriched),
+        "artifacts_preview": _project_artifacts_preview(project_id),
+        "last_run": _project_last_run(project_id),
+    }
+
+
 def _workspace_path_allowed(path_value: str) -> bool:
     manager_root = str(getattr(state_manager, "workspace_root", "") or "").strip()
     root = os.path.realpath(manager_root or WORKSPACE_ROOT)
@@ -991,44 +1106,8 @@ def list_projects() -> list[dict]:
     projects = state_manager.list_projects()
     result: list[dict] = []
     for proj in projects:
-        run_instructions = str(proj.get("run_instructions", "") or "").strip()
-        if not run_instructions:
-            run_instructions = _backfill_project_run_instructions(str(proj.get("id", "") or ""))
-            if run_instructions:
-                proj = {**proj, "run_instructions": run_instructions}
         tasks = task_board.get_board(proj["id"])
-        high_level_tasks, high_level_tasks_updated_at = _compute_project_high_level_tasks(proj, tasks)
-        status_counts: dict[str, int] = {}
-        for t in tasks:
-            s = t.get("status", "todo")
-            status_counts[s] = status_counts.get(s, 0) + 1
-        try:
-            plan_packet = project_service.plan_packet_status(str(proj["id"]))
-        except ValueError:
-            plan_packet = {
-                "ready": False,
-                "missing_items": ["Project metadata unavailable."],
-                "summary": "Planning packet could not be evaluated.",
-            }
-        # Auto-derive team from task assignees if project.team is empty
-        team = proj.get("team") or []
-        if not team:
-            assignees = sorted({
-                t.get("assigned_to", "")
-                for t in tasks
-                if t.get("assigned_to")
-            })
-            if assignees:
-                team = assignees
-        result.append({
-            **proj,
-            "team": team,
-            "task_counts": status_counts,
-            "total_tasks": len(tasks),
-            "high_level_tasks": high_level_tasks,
-            "high_level_tasks_updated_at": high_level_tasks_updated_at,
-            "plan_packet": plan_packet,
-        })
+        result.append(_enrich_project_payload(proj, tasks))
     return result
 
 
@@ -1118,22 +1197,11 @@ def get_project(project_id: str) -> dict:
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
     tasks = task_board.get_board(project_id)
-    high_level_tasks, high_level_tasks_updated_at = _compute_project_high_level_tasks(project, tasks)
-    try:
-        plan_packet = project_service.plan_packet_status(project_id)
-    except ValueError:
-        plan_packet = {
-            "ready": False,
-            "missing_items": ["Project metadata unavailable."],
-            "summary": "Planning packet could not be evaluated.",
-        }
+    enriched = _enrich_project_payload(project, tasks)
     return {
-        **project,
+        **enriched,
         "tasks": tasks,
-        "project": project,
-        "plan_packet": plan_packet,
-        "high_level_tasks": high_level_tasks,
-        "high_level_tasks_updated_at": high_level_tasks_updated_at,
+        "project": enriched,
     }
 
 
