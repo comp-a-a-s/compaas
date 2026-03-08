@@ -716,7 +716,7 @@ function AiProviderSection({
   llm: LlmConfig | undefined;
   onSaved: () => void;
 }) {
-  const [provider, setProvider]         = useState<LlmConfig['provider']>(llm?.provider ?? 'anthropic');
+  const [provider, setProvider]         = useState<LlmConfig['provider']>(llm?.provider ?? 'openai');
   const [anthropicMode, setAnthropicMode] = useState<'cli' | 'apikey'>(llm?.anthropic_mode ?? 'cli');
   const [openaiMode, setOpenaiMode]     = useState<'apikey' | 'codex'>(llm?.openai_mode ?? 'codex');
   const [baseUrl, setBaseUrl]           = useState(llm?.base_url ?? 'http://localhost:11434/v1');
@@ -821,7 +821,7 @@ function AiProviderSection({
   return (
     <div>
       {/* Provider radio cards */}
-      {(['anthropic', 'openai', 'openai_compat'] as LlmConfig['provider'][]).map((p) => {
+      {(['openai', 'anthropic', 'openai_compat'] as LlmConfig['provider'][]).map((p) => {
         const meta: Record<string, { icon: string; title: string; desc: string }> = {
           anthropic:    { icon: 'AN', title: 'Anthropic Cloud', desc: 'Claude Code CLI (recommended) or API key mode.' },
           openai:       { icon: 'OA', title: 'OpenAI',          desc: 'Codex CLI (recommended) or API key mode.' },

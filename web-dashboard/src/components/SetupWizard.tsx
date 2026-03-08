@@ -351,10 +351,11 @@ interface ProviderCardProps {
   description: string;
   selected: boolean;
   onClick: () => void;
+  order?: number;
   children?: React.ReactNode;
 }
 
-function ProviderCard({ icon, title, description, selected, onClick, children }: ProviderCardProps) {
+function ProviderCard({ icon, title, description, selected, onClick, order = 0, children }: ProviderCardProps) {
   return (
     <button
       role="radio"
@@ -367,7 +368,7 @@ function ProviderCard({ icon, title, description, selected, onClick, children }:
         backgroundColor: selected
           ? 'color-mix(in srgb, var(--tf-accent-blue) 24%, var(--tf-surface-raised))'
           : C.surfaceRaised,
-        transition: 'all 0.15s', marginBottom: '10px', outline: 'none',
+        transition: 'all 0.15s', marginBottom: '10px', outline: 'none', order,
       }}
       onFocus={(e) => { e.currentTarget.style.boxShadow = `0 0 0 2px ${C.accentDim}`; }}
       onBlur={(e) => { e.currentTarget.style.boxShadow = 'none'; }}
@@ -479,12 +480,14 @@ function StepAiProvider({
         Recommended for best orchestration reliability: Claude Code CLI or Codex CLI. Local self-hosted providers are supported but less recommended.
       </p>
 
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
       {/* ── Anthropic ── */}
       <ProviderCard
         icon={<MaterialIcon path={ICON_PATHS.anthropic} />} selected={llmProvider === 'anthropic'}
         title="Anthropic"
         description="Claude Opus 4 / Sonnet 4 / Haiku 4.5 — via Claude Code CLI (recommended) or direct API key."
         onClick={() => setLlmProvider('anthropic')}
+        order={2}
       >
         {/* Sub-mode tabs */}
         <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
@@ -616,6 +619,7 @@ function StepAiProvider({
           setLlmProvider('openai');
           setLlmApiKey('');
         }}
+        order={1}
       >
         {/* Sub-mode tabs */}
         <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
@@ -768,6 +772,7 @@ function StepAiProvider({
         title="Local / Self-Hosted"
         description="Ollama, LM Studio, llama.cpp, Jan, vLLM — supported for self-hosting, but generally less recommended for orchestration reliability."
         onClick={() => setLlmProvider('openai_compat')}
+        order={3}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {/* Preset tabs */}
@@ -961,6 +966,7 @@ function StepAiProvider({
           )}
         </div>
       </ProviderCard>
+      </div>
 
       {/* Phase 2 — proxy toggle (shown for all non-Anthropic providers) */}
       {llmProvider !== 'anthropic' && (
@@ -2003,7 +2009,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [step, setStep] = useState(1);
 
   // Step 2 — AI Provider
-  const [llmProvider, setLlmProvider] = useState<LlmProvider>('anthropic');
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>('openai');
   // Anthropic sub-options
   const [anthropicMode, setAnthropicMode] = useState<AnthropicMode>('cli');
   const [anthropicApiKey, setAnthropicApiKey] = useState('');

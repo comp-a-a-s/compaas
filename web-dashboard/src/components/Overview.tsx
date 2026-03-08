@@ -202,6 +202,19 @@ function toMotionMode(
   return 'active';
 }
 
+const ORG_DEPTH_ANIMATION_STEP_MS = 160;
+const ORG_SIBLING_STAGGER_MS = 42;
+
+function orgTierDelayMs(tier: OrgVisualTier): number {
+  if (tier === 'executive') return 0;
+  if (tier === 'lead') return 26;
+  return 54;
+}
+
+function orgActivationDelayMs(depth: number, tier: OrgVisualTier): number {
+  return Math.max(0, depth * ORG_DEPTH_ANIMATION_STEP_MS + orgTierDelayMs(tier));
+}
+
 type FlowDirection = 'down' | 'up' | null;
 
 // ---- Animated connector line ----
@@ -213,6 +226,7 @@ interface OrgConnectorProps {
   flowDirection?: 'down' | 'up' | null;
   size: number | string; // height for vertical, width for horizontal
   motionMode?: OrgMotionMode;
+  activationDelayMs?: number;
 }
 
 function OrgConnector({
@@ -222,6 +236,7 @@ function OrgConnector({
   flowDirection = 'down',
   size,
   motionMode = 'quiet',
+  activationDelayMs = 0,
 }: OrgConnectorProps) {
   const baseColor = blocked
     ? 'rgba(240,170,74,0.62)'
@@ -248,13 +263,14 @@ function OrgConnector({
           ? { width: '3px', height: length }
           : { height: '3px', width: length }),
         backgroundColor: baseColor,
-        transition: 'background-color 0.24s ease, box-shadow 0.24s ease',
+        transition: 'background-color 0.24s ease, box-shadow 0.24s ease, opacity 0.24s ease',
+        transitionDelay: active ? `${activationDelayMs}ms` : '0ms',
         borderRadius: '999px',
         boxShadow: activeGlow,
         opacity: motionMode === 'quiet' && !active ? 0.8 : 1,
       }}
     >
-      {blocked && <span className="org-connector-blocked-dot" />}
+      {blocked && <span className="org-connector-blocked-dot" style={{ animationDelay: `${activationDelayMs}ms` }} />}
     </div>
   );
 }
@@ -272,6 +288,7 @@ function connectorRailColor(active: boolean, blocked: boolean, flowDirection: Fl
 interface OrgNodeCardProps {
   agent: Agent;
   decor: OrgNodeDecor;
+  depth: number;
   motionMode: OrgMotionMode;
   displayRole?: string;
   onAgentClick?: (agent: Agent) => void;
@@ -284,6 +301,7 @@ interface OrgNodeCardProps {
 function OrgNodeCard({
   agent,
   decor,
+  depth,
   motionMode,
   displayRole,
   onAgentClick,
@@ -324,12 +342,14 @@ function OrgNodeCard({
   const heatIntensity = showHeatOverlay && !muted
     ? Math.max(0.08, Math.min(0.44, decor.workloadScore / 170))
     : 0;
+  const activeDelayMs = orgActivationDelayMs(depth, decor.tier);
 
   return (
     <div
       data-org-node-id={agent.id}
       className={`org-node-card org-node--${decor.tier} org-node-state--${decor.state}${isActive ? ' org-node-active' : ''}${muted ? ' org-node-muted' : ''}${motionMode === 'quiet' ? ' org-node-quiet' : ''}`}
       style={{
+        ['--org-active-delay' as any]: `${activeDelayMs}ms`,
         backgroundColor: muted
           ? 'color-mix(in srgb, var(--tf-surface-raised) 84%, var(--tf-bg))'
           : isActive
@@ -338,6 +358,7 @@ function OrgNodeCard({
         border: `1.5px solid ${isActive ? visual.color : 'var(--tf-border)'}`,
         cursor: onAgentClick ? 'pointer' : 'default',
         transition: 'border-color 0.26s, background-color 0.26s, box-shadow 0.26s, transform 0.22s',
+        transitionDelay: isActive ? `${Math.round(activeDelayMs * 0.55)}ms` : '0ms',
         boxShadow: isActive
           ? `0 0 16px color-mix(in srgb, ${visual.color} 34%, transparent), 0 0 4px color-mix(in srgb, ${visual.color} 22%, transparent), inset 0 1px 0 rgba(255,255,255,0.08)`
           : 'inset 0 1px 0 rgba(255,255,255,0.04)',
@@ -371,6 +392,7 @@ function OrgNodeCard({
             border: `2px solid ${visual.color}`,
             opacity: 0.8,
             animation: 'pulse-ring 1.8s ease-out infinite',
+            animationDelay: `${activeDelayMs}ms`,
           }} />
         )}
         {isActive && !visual.pulse && (
@@ -644,6 +666,7 @@ function findPathToNode(node: OrgTreeNode, targetId: string, path: string[] = []
 
 interface TreeNodeProps {
   node: OrgTreeNode;
+  depth: number;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
   activeIds: Set<string>;
@@ -662,6 +685,7 @@ interface TreeNodeProps {
 
 function TreeNode({
   node,
+  depth,
   agentMap,
   onAgentClick,
   activeIds,
@@ -702,6 +726,7 @@ function TreeNode({
   const stemDirection: FlowDirection = firstFlowEdge
     ? (flowEdgeDirections.get(orgEdgeKey(node.id, firstFlowEdge.id)) || 'down')
     : 'down';
+  const stemDelayMs = orgActivationDelayMs(depth + 1, 'lead');
   const tooltipContent = liveWorker
     ? `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)} · ${liveWhyTitle(liveWorker).replace(/\n/g, ' • ')}`
     : `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)}`;
@@ -712,6 +737,7 @@ function TreeNode({
         <OrgNodeCard
           agent={agent}
           decor={decor}
+          depth={depth}
           motionMode={motionMode}
           displayRole={node.displayRole}
           onAgentClick={onAgentClick}
@@ -733,9 +759,11 @@ function TreeNode({
             blocked={childBlocked}
             flowDirection={stemDirection}
             motionMode={motionMode}
+            activationDelayMs={stemDelayMs}
           />
           <ChildrenGroup
             node={node}
+            depth={depth}
             agentMap={agentMap}
             onAgentClick={onAgentClick}
             activeIds={activeIds}
@@ -759,6 +787,7 @@ function TreeNode({
 
 interface ChildrenGroupProps {
   node: OrgTreeNode;
+  depth: number;
   agentMap: Map<string, Agent>;
   onAgentClick: (agent: Agent) => void;
   activeIds: Set<string>;
@@ -777,6 +806,7 @@ interface ChildrenGroupProps {
 
 function ChildrenGroup({
   node,
+  depth,
   agentMap,
   onAgentClick,
   activeIds,
@@ -803,6 +833,7 @@ function ChildrenGroup({
     const childActive = edgeInFlow || subtreeHasActive(visibleChildren[0], activeIds);
     const childBlocked = subtreeHasBlocked(visibleChildren[0], blockedAgentIds);
     const edgeDirection = flowEdgeDirections.get(edgeKey) || 'down';
+    const childDelayMs = orgActivationDelayMs(depth + 1, 'lead');
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <OrgConnector
@@ -812,9 +843,11 @@ function ChildrenGroup({
           blocked={childBlocked}
           flowDirection={edgeDirection}
           motionMode={motionMode}
+          activationDelayMs={childDelayMs}
         />
         <TreeNode
           node={visibleChildren[0]}
+          depth={depth + 1}
           agentMap={agentMap}
           onAgentClick={onAgentClick}
           activeIds={activeIds}
@@ -858,6 +891,7 @@ function ChildrenGroup({
               ? '0 0 9px rgba(59,142,255,0.18)'
               : '0 0 9px rgba(63,185,80,0.16)'
             : 'none';
+        const childDelayMs = orgActivationDelayMs(depth + 1, 'lead') + idx * ORG_SIBLING_STAGGER_MS;
 
         return (
           <div
@@ -874,6 +908,8 @@ function ChildrenGroup({
                 borderRadius: '999px',
                 backgroundColor: railColor,
                 boxShadow: railGlow,
+                transition: 'background-color 0.24s ease, box-shadow 0.24s ease',
+                transitionDelay: childActive ? `${childDelayMs}ms` : '0ms',
               }}
             />
             {/* Vertical stub to child */}
@@ -884,9 +920,11 @@ function ChildrenGroup({
               blocked={childBlocked}
               flowDirection={edgeDirection}
               motionMode={motionMode}
+              activationDelayMs={childDelayMs}
             />
             <TreeNode
               node={child}
+              depth={depth + 1}
               agentMap={agentMap}
               onAgentClick={onAgentClick}
               activeIds={activeIds}
@@ -1692,6 +1730,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
                       workloadScore: workloadScoreByAgent.get(ceoAgent.id) || 0,
                       stalenessScore: stalenessScoreByAgent.get(ceoAgent.id) || 0,
                     }}
+                    depth={0}
                     motionMode={motionMode}
                     onAgentClick={handleAgentClick}
                     showHeatOverlay={showHeatOverlay}
@@ -1820,6 +1859,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
             >
               <TreeNode
                 node={ORG_TREE}
+                depth={0}
                 agentMap={agentMap}
                 onAgentClick={handleAgentClick}
                 activeIds={activeIds}

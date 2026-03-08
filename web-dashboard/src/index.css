@@ -248,6 +248,7 @@ textarea:focus-visible {
 }
 .org-node-active {
   animation: org-node-glow 2.5s ease-in-out infinite;
+  animation-delay: var(--org-active-delay, 0ms);
   opacity: var(--org-glow-opacity, 0.9);
 }
 
