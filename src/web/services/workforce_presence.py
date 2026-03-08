@@ -22,6 +22,11 @@ from src.web.services.run_service import RunService, TERMINAL_STATES
 
 LIVE_STATES = {"assigned", "working", "reporting", "blocked"}
 TERMINAL_WORK_STATES = {"completed", "failed"}
+ACTIVE_RUN_STATES = {"queued", "planning", "executing", "verifying"}
+ASSIGNED_STALE_SECONDS = 90
+WORKING_STALE_SECONDS = 240
+REPORTING_STALE_SECONDS = 90
+BLOCKED_STALE_SECONDS = 600
 
 
 def _utcnow_iso() -> str:
@@ -37,6 +42,16 @@ def _safe_iso(value: str) -> str:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
     except ValueError:
         return _utcnow_iso()
+
+
+def _parse_iso(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _agent_slug(value: str) -> str:
@@ -229,6 +244,17 @@ class WorkforcePresenceService:
         if not isinstance(run, dict):
             return False
         return str(run.get("status", "") or "").strip().lower() in TERMINAL_STATES
+
+    def _run_is_active(self, run_id: str) -> bool:
+        if not run_id or self.run_service is None:
+            return False
+        try:
+            run = self.run_service.get_run(run_id)
+        except Exception:
+            return False
+        if not isinstance(run, dict):
+            return False
+        return str(run.get("status", "") or "").strip().lower() in ACTIVE_RUN_STATES
 
     def _is_execution_phase_run(self, run_id: str) -> bool:
         if not run_id or self.run_service is None:
@@ -425,6 +451,49 @@ class WorkforcePresenceService:
         if changed:
             self._persist_locked()
 
+    def _prune_stale_workers_locked(self, project_id: str = "") -> None:
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        changed = False
+        for work_item_id, row in list(self._workers.items()):
+            if project_id and str(row.get("project_id", "") or "") != project_id:
+                continue
+            state = str(row.get("state", "") or "").strip().lower()
+            if state not in LIVE_STATES:
+                continue
+            updated_at = _parse_iso(str(row.get("updated_at", "") or ""))
+            if updated_at is None:
+                updated_at = now
+            age_seconds = max(0, int((now - updated_at).total_seconds()))
+            run_id = str(row.get("run_id", "") or "").strip()
+            run_active = self._run_is_active(run_id)
+
+            if state == "assigned" and run_active and age_seconds >= ASSIGNED_STALE_SECONDS:
+                row["state"] = "working"
+                row["task"] = _sanitize_task_text(str(row.get("task", "") or "")) or "Execution in progress"
+                row["updated_at"] = now_iso
+                changed = True
+                continue
+            if state == "working" and age_seconds >= WORKING_STALE_SECONDS:
+                if run_active:
+                    row["state"] = "reporting"
+                    row["updated_at"] = now_iso
+                    changed = True
+                else:
+                    self._workers.pop(work_item_id, None)
+                    changed = True
+                continue
+            if state == "reporting" and age_seconds >= REPORTING_STALE_SECONDS:
+                self._workers.pop(work_item_id, None)
+                changed = True
+                continue
+            if state == "blocked" and age_seconds >= BLOCKED_STALE_SECONDS and not run_active:
+                self._workers.pop(work_item_id, None)
+                changed = True
+
+        if changed:
+            self._persist_locked()
+
     def snapshot(
         self,
         *,
@@ -436,6 +505,7 @@ class WorkforcePresenceService:
         project_filter = str(project_id or "").strip()
         with self._lock:
             self._prune_terminal_runs_locked(project_filter)
+            self._prune_stale_workers_locked(project_filter)
             now = datetime.now(timezone.utc)
             workers: list[dict[str, Any]] = []
             for row in self._workers.values():

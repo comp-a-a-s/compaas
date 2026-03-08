@@ -33,6 +33,32 @@ export interface ProjectRunSnapshot {
   updated_at?: string;
 }
 
+export type ProjectLifecycleState =
+  | 'planning'
+  | 'queued'
+  | 'executing'
+  | 'validating'
+  | 'delivered'
+  | 'blocked'
+  | 'failed'
+  | 'archived';
+
+export interface ProjectTeamLane {
+  owner: string;
+  headline: string;
+  status: string;
+}
+
+export interface ProjectSnapshot {
+  summary?: string;
+  team_lanes_count?: number;
+  run_commands_ready?: boolean;
+  open_url?: string;
+  last_run_state?: string;
+  last_run_updated_at?: string;
+  workspace_path?: string;
+}
+
 export interface ProjectArtifactRecord {
   id?: string;
   file_path: string;
@@ -56,6 +82,10 @@ export interface Project {
   id: string;
   name: string;
   status: string;
+  lifecycle_state?: ProjectLifecycleState | string;
+  last_status_change_at?: string;
+  status_reason?: string;
+  active_run_id?: string;
   description?: string;
   type?: string;
   created_at?: string;
@@ -73,12 +103,10 @@ export interface Project {
   plan_packet?: PlanningPacketStatus;
   metadata?: ProjectMetadata;
   run_instructions?: string;
-  high_level_tasks?: Array<{
-    owner: string;
-    headline: string;
-    status: string;
-  }>;
+  high_level_tasks?: ProjectTeamLane[];
   high_level_tasks_updated_at?: string;
+  team_lanes?: ProjectTeamLane[];
+  project_snapshot?: ProjectSnapshot;
   quality_latest?: ProjectQualitySnapshot;
   quality_updated_at?: string;
   launch_links?: ProjectLaunchLink[];
@@ -170,12 +198,17 @@ export type WorkforceState = 'assigned' | 'working' | 'reporting' | 'blocked';
 export type OrgVisualTier = 'executive' | 'lead' | 'specialist';
 export type OrgMotionMode = 'quiet' | 'active' | 'intense';
 export type OrgNodeState = WorkforceState | 'idle';
+export type OrgConnectorActivityMode = 'idle' | 'assigned' | 'working' | 'reporting' | 'blocked';
 
 export interface OrgNodeDecor {
   tier: OrgVisualTier;
   state: OrgNodeState;
   workloadScore: number;
   stalenessScore: number;
+}
+
+export interface OrgNodeStateDecor extends OrgNodeDecor {
+  connectorActivity: OrgConnectorActivityMode;
 }
 
 export interface WorkforceWorker {

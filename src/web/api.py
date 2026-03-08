@@ -810,6 +810,122 @@ def _normalize_project_tags(values: Any, *, limit: int = 8) -> list[str]:
     return normalized
 
 
+PROJECT_LIFECYCLE_STATES = {
+    "planning",
+    "queued",
+    "executing",
+    "validating",
+    "delivered",
+    "blocked",
+    "failed",
+    "archived",
+}
+
+
+def _normalize_project_lifecycle_state(value: Any, *, fallback: str = "planning") -> str:
+    normalized = str(value or "").strip().lower().replace(" ", "_")
+    if normalized in PROJECT_LIFECYCLE_STATES:
+        return normalized
+    return fallback
+
+
+def _legacy_status_from_lifecycle(lifecycle_state: str) -> str:
+    lifecycle = _normalize_project_lifecycle_state(lifecycle_state)
+    if lifecycle == "planning":
+        return "planning"
+    if lifecycle in {"queued", "executing", "validating"}:
+        return "active"
+    if lifecycle == "delivered":
+        return "completed"
+    if lifecycle in {"blocked", "failed"}:
+        return "blocked"
+    if lifecycle == "archived":
+        return "archived"
+    return "planning"
+
+
+def _infer_lifecycle_from_legacy_status(status: str) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized == "planning":
+        return "planning"
+    if normalized == "active":
+        return "executing"
+    if normalized in {"completed", "done"}:
+        return "delivered"
+    if normalized == "blocked":
+        return "blocked"
+    if normalized == "archived":
+        return "archived"
+    return "planning"
+
+
+def _set_project_lifecycle_state(
+    project_id: str,
+    lifecycle_state: str,
+    *,
+    reason: str = "",
+    active_run_id: str = "",
+    run_id: str = "",
+    emit_event: bool = True,
+) -> dict[str, Any] | None:
+    normalized_project_id = _normalize_project_id(project_id)
+    if not normalized_project_id:
+        return None
+    project = state_manager.get_project(normalized_project_id)
+    if not isinstance(project, dict):
+        return None
+
+    next_lifecycle = _normalize_project_lifecycle_state(
+        lifecycle_state,
+        fallback=_infer_lifecycle_from_legacy_status(str(project.get("status", "") or "")),
+    )
+    next_status = _legacy_status_from_lifecycle(next_lifecycle)
+    next_reason = str(reason or "").strip()
+    next_active_run_id = str(active_run_id or "").strip()
+    previous_lifecycle = _normalize_project_lifecycle_state(
+        project.get("lifecycle_state"),
+        fallback=_infer_lifecycle_from_legacy_status(str(project.get("status", "") or "")),
+    )
+    previous_status = str(project.get("status", "") or "").strip().lower()
+    previous_reason = str(project.get("status_reason", "") or "").strip()
+    previous_active_run_id = str(project.get("active_run_id", "") or "").strip()
+
+    updates: dict[str, Any] = {}
+    status_changed = previous_lifecycle != next_lifecycle or previous_status != next_status
+    if status_changed:
+        updates["lifecycle_state"] = next_lifecycle
+        updates["status"] = next_status
+        updates["last_status_change_at"] = datetime.now(timezone.utc).isoformat()
+    if next_reason and next_reason != previous_reason:
+        updates["status_reason"] = next_reason
+    if next_active_run_id != previous_active_run_id:
+        updates["active_run_id"] = next_active_run_id
+    if not updates:
+        return project
+
+    if not state_manager.update_project(normalized_project_id, updates):
+        return project
+
+    refreshed = state_manager.get_project(normalized_project_id) or project
+    if emit_event and status_changed:
+        emit_activity(
+            DATA_DIR,
+            "ceo",
+            "UPDATED",
+            f"Project status changed: {previous_lifecycle} → {next_lifecycle}.",
+            project_id=normalized_project_id,
+            metadata={
+                "event_kind": "project_status_changed",
+                "run_id": run_id,
+                "from_lifecycle_state": previous_lifecycle,
+                "to_lifecycle_state": next_lifecycle,
+                "legacy_status": next_status,
+                "reason": next_reason,
+            },
+        )
+    return refreshed
+
+
 def _backfill_project_run_instructions(project_id: str) -> str:
     """Best-effort run command backfill from artifacts/02_activation_guide.md."""
     if not project_id:
@@ -1043,9 +1159,47 @@ def _project_last_run(project_id: str) -> dict[str, str]:
     return payload
 
 
+def _project_snapshot_payload(
+    project: dict[str, Any],
+    *,
+    high_level_tasks: list[dict[str, str]],
+    launch_links: list[dict[str, str]],
+    last_run: dict[str, str],
+) -> dict[str, Any]:
+    summary = _compact_headline(str(project.get("description", "") or ""), max_chars=180)
+    run_commands = _normalize_unique_strings(
+        str(project.get("run_instructions", "") or "").splitlines(),
+        limit=16,
+    )
+    first_open_url = ""
+    for row in launch_links:
+        target = str(row.get("target", "") or "").strip()
+        kind = str(row.get("kind", "") or "").strip().lower()
+        if kind == "url" and re.match(r"^https?://", target, flags=re.IGNORECASE):
+            first_open_url = target
+            break
+    return {
+        "summary": summary,
+        "team_lanes_count": len(high_level_tasks),
+        "run_commands_ready": len(run_commands) > 0,
+        "open_url": first_open_url,
+        "last_run_state": str(last_run.get("state", "") or ""),
+        "last_run_updated_at": str(last_run.get("updated_at", "") or ""),
+        "workspace_path": str(project.get("workspace_path", "") or ""),
+    }
+
+
 def _enrich_project_payload(project: dict[str, Any], tasks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     project_id = str(project.get("id", "") or "")
     enriched = dict(project)
+    lifecycle_state = _normalize_project_lifecycle_state(
+        enriched.get("lifecycle_state"),
+        fallback=_infer_lifecycle_from_legacy_status(str(enriched.get("status", "") or "")),
+    )
+    enriched["lifecycle_state"] = lifecycle_state
+    legacy_status = str(enriched.get("status", "") or "").strip().lower()
+    if legacy_status not in {"planning", "active", "completed", "blocked", "archived"}:
+        enriched["status"] = _legacy_status_from_lifecycle(lifecycle_state)
     run_instructions = str(enriched.get("run_instructions", "") or "").strip()
     if not run_instructions and project_id:
         run_instructions = _backfill_project_run_instructions(project_id)
@@ -1075,6 +1229,9 @@ def _enrich_project_payload(project: dict[str, Any], tasks: list[dict[str, Any]]
         })
         if assignees:
             team = assignees
+    launch_links = _project_launch_links(enriched)
+    last_run = _project_last_run(project_id)
+    team_lanes = high_level_tasks[:8]
     return {
         **enriched,
         "team": team,
@@ -1082,10 +1239,17 @@ def _enrich_project_payload(project: dict[str, Any], tasks: list[dict[str, Any]]
         "total_tasks": len(tasks),
         "high_level_tasks": high_level_tasks,
         "high_level_tasks_updated_at": high_level_tasks_updated_at,
+        "team_lanes": team_lanes,
         "plan_packet": plan_packet,
-        "launch_links": _project_launch_links(enriched),
+        "launch_links": launch_links,
         "artifacts_preview": _project_artifacts_preview(project_id),
-        "last_run": _project_last_run(project_id),
+        "last_run": last_run,
+        "project_snapshot": _project_snapshot_payload(
+            enriched,
+            high_level_tasks=team_lanes,
+            launch_links=launch_links,
+            last_run=last_run,
+        ),
     }
 
 
@@ -2235,9 +2399,16 @@ def approve_project_plan(project_id: str) -> dict:
                 "summary": plan_packet.get("summary", ""),
             },
         )
-    ok = state_manager.update_project(project_id, {"plan_approved": True, "status": "active"})
+    ok = state_manager.update_project(project_id, {"plan_approved": True})
     if not ok:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+    _set_project_lifecycle_state(
+        project_id,
+        "queued",
+        reason="Planning approved and ready for execution.",
+        active_run_id="",
+        emit_event=False,
+    )
 
     # Unblock chat execution after approval: prior planning-gate runs may still
     # be left in "planning" state, which would otherwise trip concurrency guard.
@@ -4573,6 +4744,24 @@ def _transition_run_state(
         metadata=metadata,
     )
     normalized_state = str(state or "").strip().lower()
+    if transitioned:
+        project_id = str(transitioned.get("project_id", "") or "")
+        lifecycle_for_run_state = {
+            "queued": "queued",
+            "planning": "queued",
+            "executing": "executing",
+            "verifying": "validating",
+            "failed": "failed",
+            "cancelled": "blocked",
+        }.get(normalized_state, "")
+        if lifecycle_for_run_state and project_id:
+            _set_project_lifecycle_state(
+                project_id,
+                lifecycle_for_run_state,
+                reason=label,
+                active_run_id=run_id if normalized_state in ACTIVE_RUN_STATES else "",
+                run_id=run_id,
+            )
     if transitioned and normalized_state in {"done", "failed", "cancelled"}:
         workforce_presence_service.mark_run_terminal(
             str(transitioned.get("id", "") or run_id),
@@ -4965,9 +5154,15 @@ def _seed_project_execution_scaffold(
     if desired_team and desired_team != existing_team:
         updates["team"] = desired_team
 
-    status = str(project.get("status", "") or "").strip().lower()
-    if status in {"", "planning"}:
-        updates["status"] = "active"
+    lifecycle_state = _normalize_project_lifecycle_state(
+        project.get("lifecycle_state"),
+        fallback=_infer_lifecycle_from_legacy_status(str(project.get("status", "") or "")),
+    )
+    if lifecycle_state in {"planning", "blocked", "failed"}:
+        updates["lifecycle_state"] = "queued"
+        updates["status"] = _legacy_status_from_lifecycle("queued")
+        updates["status_reason"] = "Execution kickoff seeded from CEO turn."
+        updates["last_status_change_at"] = datetime.now(timezone.utc).isoformat()
 
     if updates:
         state_manager.update_project(normalized_project_id, updates)
@@ -7953,6 +8148,14 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     "planning_packet_status": plan_packet_status,
                     "correlation_id": turn_correlation_id,
                 })
+                if active_project_id:
+                    _set_project_lifecycle_state(
+                        active_project_id,
+                        "planning",
+                        reason="Planning packet prepared and awaiting chairman approval.",
+                        active_run_id="",
+                        run_id=run_id,
+                    )
                 await _emit_run_progress(run_id, active_project_id, force_phase=True)
                 await _clear_inflight_tracking()
                 continue
@@ -8401,6 +8604,36 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     )
                     if bool(auto_launch.get("attempted")):
                         done_payload["auto_launch"] = auto_launch
+            if active_project_id:
+                completion_kind = str((structured_payload or {}).get("completion_kind", "") or "").strip().lower()
+                target_lifecycle = ""
+                lifecycle_reason = ""
+                if terminal_state == "done":
+                    if completion_kind == "build_complete":
+                        target_lifecycle = "delivered"
+                        lifecycle_reason = "Build completed and delivery summary published."
+                    elif intent_class == "planning":
+                        target_lifecycle = "planning"
+                        lifecycle_reason = "Planning turn completed."
+                    elif intent_class == "execution":
+                        target_lifecycle = "executing"
+                        lifecycle_reason = "Execution turn completed without final delivery."
+                elif terminal_state == "failed":
+                    target_lifecycle = "failed"
+                    lifecycle_reason = error_reason or "Run failed."
+                elif terminal_state == "cancelled":
+                    target_lifecycle = "blocked"
+                    lifecycle_reason = error_reason or "Run cancelled."
+                if target_lifecycle:
+                    synced_lifecycle_project = _set_project_lifecycle_state(
+                        active_project_id,
+                        target_lifecycle,
+                        reason=lifecycle_reason,
+                        active_run_id="",
+                        run_id=run_id,
+                    )
+                    if isinstance(synced_lifecycle_project, dict):
+                        active_project = synced_lifecycle_project
             if deploy_offer:
                 done_payload["deploy_offer"] = deploy_offer
             replay_summary = _build_run_replay_summary(run_id, active_project_id)

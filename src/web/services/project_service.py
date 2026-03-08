@@ -277,11 +277,47 @@ class ProjectService:
 
     def set_archived(self, project_id: str, archived: bool) -> dict[str, Any]:
         metadata = self.ensure_metadata(project_id)
+        project = self.state_manager.get_project(project_id)
+        if not isinstance(project, dict):
+            raise ValueError("Project not found")
         metadata["archived"] = bool(archived)
         metadata["updated_at"] = _utcnow_iso()
+        if archived:
+            previous_lifecycle = str(project.get("lifecycle_state", "") or "").strip().lower() or "planning"
+            if previous_lifecycle != "archived":
+                metadata["pre_archive_lifecycle_state"] = previous_lifecycle
+            previous_status = str(project.get("status", "") or "").strip().lower() or "planning"
+            if previous_status != "archived":
+                metadata["pre_archive_status"] = previous_status
         self._save_metadata(project_id, metadata)
-        # Keep project status explicit for list view.
-        self.state_manager.update_project(project_id, {"status": "archived" if archived else "planning"})
+        if archived:
+            self.state_manager.update_project(
+                project_id,
+                {
+                    "lifecycle_state": "archived",
+                    "status": "archived",
+                    "status_reason": "Project archived by user.",
+                    "active_run_id": "",
+                    "last_status_change_at": _utcnow_iso(),
+                },
+            )
+        else:
+            restored_lifecycle = str(metadata.get("pre_archive_lifecycle_state", "") or "").strip().lower() or "planning"
+            restored_status = str(metadata.get("pre_archive_status", "") or "").strip().lower() or "planning"
+            if restored_lifecycle == "archived":
+                restored_lifecycle = "planning"
+            if restored_status == "archived":
+                restored_status = "planning"
+            self.state_manager.update_project(
+                project_id,
+                {
+                    "lifecycle_state": restored_lifecycle,
+                    "status": restored_status,
+                    "status_reason": "Project restored from archive.",
+                    "active_run_id": "",
+                    "last_status_change_at": _utcnow_iso(),
+                },
+            )
         return metadata
 
     def list_archived(self) -> list[dict[str, Any]]:

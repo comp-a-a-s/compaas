@@ -621,7 +621,7 @@ const ORG_TREE: OrgTreeNode = {
     { id: 'cfo' },
     {
       id: 'vp-product',
-      displayRole: 'CPO',
+      displayRole: 'Chief Product Officer',
       children: [
         { id: 'lead-designer' },
         { id: 'tech-writer' },
@@ -640,11 +640,6 @@ function subtreeHasActive(node: OrgTreeNode, activeIds: Set<string>): boolean {
 function subtreeHasBlocked(node: OrgTreeNode, blockedIds: Set<string>): boolean {
   if (blockedIds.has(node.id)) return true;
   return (node.children ?? []).some((c) => subtreeHasBlocked(c, blockedIds));
-}
-
-function subtreeHasAny(node: OrgTreeNode, ids: Set<string>): boolean {
-  if (ids.has(node.id)) return true;
-  return (node.children ?? []).some((c) => subtreeHasAny(c, ids));
 }
 
 function orgEdgeKey(parentId: string, childId: string): string {
@@ -703,8 +698,8 @@ function TreeNode({
 
   const hasChildren = children.length > 0;
   const focusMuted = focusActiveChain && focusedAgentIds.size > 0 && !focusedAgentIds.has(node.id);
-  const muted = mutedAgentIds.has(node.id) || focusMuted;
   const liveState = liveStateByAgent.get(node.id);
+  const muted = mutedAgentIds.has(node.id) || (focusMuted && !liveState);
   const liveWorker = liveWorkerByAgent.get(node.id);
   const blocked = blockedAgentIds.has(node.id) || liveState === 'blocked';
   const decorState: OrgNodeState = muted ? 'idle' : (liveState || (blocked ? 'blocked' : 'idle'));
@@ -819,7 +814,6 @@ function ChildrenGroup({
   if (visibleChildren.length === 1) {
     const edgeKey = orgEdgeKey(node.id, visibleChildren[0].id);
     const edgeInFlow = flowEdgeDirections.has(edgeKey);
-    const inFocusScope = !focusActiveChain || focusedAgentIds.size === 0 || subtreeHasAny(visibleChildren[0], focusedAgentIds);
     const childActive = edgeInFlow || subtreeHasActive(visibleChildren[0], activeIds);
     const childBlocked = subtreeHasBlocked(visibleChildren[0], blockedAgentIds);
     const edgeDirection = flowEdgeDirections.get(edgeKey) || 'down';
@@ -828,8 +822,8 @@ function ChildrenGroup({
         <OrgConnector
           vertical
           size={20}
-          active={inFocusScope && childActive}
-          blocked={inFocusScope && childBlocked}
+          active={childActive}
+          blocked={childBlocked}
           flowDirection={edgeDirection}
           motionMode={motionMode}
         />
@@ -855,13 +849,28 @@ function ChildrenGroup({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start' }}>
-      {visibleChildren.map((child, idx) => {
-        const isFirst = idx === 0;
-        const isLast = idx === visibleChildren.length - 1;
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}>
+      <div style={{ position: 'relative', height: '3px', margin: '0 10px' }}>
+        <OrgConnector
+          vertical={false}
+          size="100%"
+          active={visibleChildren.some((child) => flowEdgeDirections.has(orgEdgeKey(node.id, child.id)) || subtreeHasActive(child, activeIds))}
+          blocked={visibleChildren.some((child) => subtreeHasBlocked(child, blockedAgentIds))}
+          flowDirection={
+            flowEdgeDirections.get(
+              orgEdgeKey(
+                node.id,
+                visibleChildren.find((child) => flowEdgeDirections.has(orgEdgeKey(node.id, child.id)))?.id || visibleChildren[0].id,
+              ),
+            ) || 'down'
+          }
+          motionMode={motionMode}
+        />
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start' }}>
+      {visibleChildren.map((child) => {
         const edgeKey = orgEdgeKey(node.id, child.id);
         const edgeInFlow = flowEdgeDirections.has(edgeKey);
-        const inFocusScope = !focusActiveChain || focusedAgentIds.size === 0 || subtreeHasAny(child, focusedAgentIds);
         const childActive = edgeInFlow || subtreeHasActive(child, activeIds);
         const childBlocked = subtreeHasBlocked(child, blockedAgentIds);
         const edgeDirection: FlowDirection = flowEdgeDirections.get(edgeKey) || 'down';
@@ -871,30 +880,12 @@ function ChildrenGroup({
             key={child.id}
             style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 10px' }}
           >
-            {/* Horizontal connector segment — animated when this branch leads to active agent */}
-            <div style={{
-              position: 'absolute',
-              top: 0,
-              left: isFirst ? '50%' : 0,
-              right: isLast ? '50%' : 0,
-              height: '3px',
-            }}>
-              <OrgConnector
-                vertical={false}
-                size="100%"
-                active={inFocusScope && childActive}
-                blocked={inFocusScope && childBlocked}
-                flowDirection={edgeDirection}
-                motionMode={motionMode}
-              />
-            </div>
-
             {/* Vertical stub to child */}
             <OrgConnector
               vertical
               size={20}
-              active={inFocusScope && childActive}
-              blocked={inFocusScope && childBlocked}
+              active={childActive}
+              blocked={childBlocked}
               flowDirection={edgeDirection}
               motionMode={motionMode}
             />
@@ -918,6 +909,7 @@ function ChildrenGroup({
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -1200,13 +1192,8 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
         if (agent.id !== 'ceo') s.add(agent.id);
       }
     }
-    if (focusActiveChain && focusedAgentIds.size > 0) {
-      for (const agent of agents) {
-        if (!focusedAgentIds.has(agent.id)) s.add(agent.id);
-      }
-    }
     return s;
-  }, [agents, microProjectMode, focusActiveChain, focusedAgentIds]);
+  }, [agents, microProjectMode]);
 
   const handoffPairs = useMemo(() => {
     if (microProjectMode) return [] as Array<[string, number]>;
@@ -1378,7 +1365,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   return (
     <div
       ref={chartContainerRef}
-      className={`org-chart-shell org-motion-${motionMode}`}
+      className={`org-chart-shell org-chart-soft-bg org-motion-${motionMode}`}
       style={{ maxWidth: '100%', overflow: 'hidden', ...motionVars }}
     >
       {/* Chart label with active agent count */}

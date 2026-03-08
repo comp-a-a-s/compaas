@@ -255,6 +255,33 @@ textarea:focus-visible {
   --org-flow-duration: 1.45s;
   --org-glow-opacity: 0.86;
   --org-pulse-scale: 1.06;
+  position: relative;
+  border-radius: 18px;
+  padding: 10px 8px;
+}
+
+@keyframes org-bg-drift {
+  0%, 100% {
+    background-position:
+      0% 0%,
+      100% 8%,
+      0% 0%;
+  }
+  50% {
+    background-position:
+      18% 14%,
+      82% 0%,
+      0% 0%;
+  }
+}
+
+.org-chart-soft-bg {
+  background:
+    radial-gradient(900px 320px at 12% 6%, color-mix(in srgb, var(--tf-accent-blue) 10%, transparent), transparent 72%),
+    radial-gradient(760px 300px at 88% 0%, color-mix(in srgb, var(--tf-success) 8%, transparent), transparent 76%),
+    linear-gradient(180deg, color-mix(in srgb, var(--tf-surface) 90%, var(--tf-bg)) 0%, color-mix(in srgb, var(--tf-bg) 92%, var(--tf-surface)) 100%);
+  background-size: 140% 140%, 140% 140%, 100% 100%;
+  animation: org-bg-drift 18s ease-in-out infinite;
 }
 
 .org-node-card {
@@ -515,6 +542,7 @@ textarea:focus-visible {
 
 .org-connector-flow {
   opacity: 0.92;
+  filter: saturate(1.08);
 }
 
 .org-connector-blocked-dot {
@@ -1629,6 +1657,10 @@ body.compact-mode .h-10 { height: 32px !important; }
   }
 
   .floating-select-menu {
+    animation: none !important;
+  }
+
+  .org-chart-soft-bg {
     animation: none !important;
   }
 }

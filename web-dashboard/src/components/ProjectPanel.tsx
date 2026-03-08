@@ -41,7 +41,16 @@ interface ProjectPanelProps {
 }
 
 type ProjectMode = 'local' | 'github';
-type ProjectStatusFilter = 'all' | 'planning' | 'active' | 'completed' | 'blocked' | 'archived';
+type ProjectStatusFilter =
+  | 'all'
+  | 'planning'
+  | 'queued'
+  | 'executing'
+  | 'validating'
+  | 'delivered'
+  | 'blocked'
+  | 'failed'
+  | 'archived';
 type ProjectDeliveryFilter = 'all' | 'local' | 'github';
 type ProjectSortMode = 'recent' | 'status' | 'name';
 type UtilityKind = 'clone' | 'tags' | 'release-notes' | 'artifacts' | null;
@@ -51,7 +60,7 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   'cto': 'CTO',
   'cfo': 'CFO',
   'ciso': 'CISO',
-  'vp-product': 'CPO',
+  'vp-product': 'Chief Product Officer',
   'vp-engineering': 'VP Eng',
   'chief-researcher': 'Research',
   'lead-backend': 'Backend',
@@ -104,9 +113,11 @@ function formatRelativeTime(iso?: string): string {
 
 function statusAccent(status: string): string {
   const value = String(status || '').toLowerCase();
-  if (value === 'active') return 'var(--tf-success)';
-  if (value === 'completed') return 'var(--tf-accent-blue)';
+  if (value === 'active' || value === 'queued' || value === 'executing') return 'var(--tf-success)';
+  if (value === 'validating') return 'var(--tf-accent-blue)';
+  if (value === 'completed' || value === 'delivered') return 'var(--tf-accent-blue)';
   if (value === 'planning') return 'var(--tf-accent)';
+  if (value === 'failed') return 'var(--tf-error)';
   if (value === 'blocked') return 'var(--tf-error)';
   if (value === 'archived') return 'var(--tf-text-muted)';
   return 'var(--tf-text-secondary)';
@@ -114,12 +125,41 @@ function statusAccent(status: string): string {
 
 function statusSurface(status: string): string {
   const value = String(status || '').toLowerCase();
-  if (value === 'active') return 'rgba(63,185,80,0.12)';
-  if (value === 'completed') return 'rgba(59,142,255,0.12)';
+  if (value === 'active' || value === 'queued' || value === 'executing') return 'rgba(63,185,80,0.12)';
+  if (value === 'validating') return 'rgba(59,142,255,0.1)';
+  if (value === 'completed' || value === 'delivered') return 'rgba(59,142,255,0.12)';
   if (value === 'planning') return 'rgba(90,169,255,0.09)';
+  if (value === 'failed') return 'rgba(234,114,103,0.14)';
   if (value === 'blocked') return 'rgba(234,114,103,0.12)';
   if (value === 'archived') return 'rgba(180,190,210,0.08)';
   return 'var(--tf-surface-raised)';
+}
+
+function inferLifecycle(project: Project): string {
+  const lifecycle = String(project.lifecycle_state || '').trim().toLowerCase();
+  if (lifecycle) return lifecycle;
+  const legacy = String(project.status || '').trim().toLowerCase();
+  if (legacy === 'active') return 'executing';
+  if (legacy === 'completed' || legacy === 'done') return 'delivered';
+  if (legacy === 'blocked') return 'blocked';
+  if (legacy === 'archived') return 'archived';
+  return 'planning';
+}
+
+function lifecycleToLegacyStatus(lifecycle: string): string {
+  const normalized = String(lifecycle || '').trim().toLowerCase();
+  if (normalized === 'planning') return 'planning';
+  if (normalized === 'queued' || normalized === 'executing' || normalized === 'validating') return 'active';
+  if (normalized === 'delivered') return 'completed';
+  if (normalized === 'failed' || normalized === 'blocked') return 'blocked';
+  if (normalized === 'archived') return 'archived';
+  return 'planning';
+}
+
+function lifecycleLabel(value: string): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Planning';
+  return normalized.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function laneStatusColor(status: string): string {
@@ -129,6 +169,13 @@ function laneStatusColor(status: string): string {
   if (normalized === 'done') return 'var(--tf-success)';
   if (normalized === 'blocked') return 'var(--tf-error)';
   return 'var(--tf-text-muted)';
+}
+
+function projectTeamLanes(project?: Project | null): Array<{ owner: string; headline: string; status: string }> {
+  if (!project) return [];
+  if (Array.isArray(project.team_lanes) && project.team_lanes.length > 0) return project.team_lanes;
+  if (Array.isArray(project.high_level_tasks)) return project.high_level_tasks;
+  return [];
 }
 
 function parseRunCommands(runInstructions?: string): string[] {
@@ -168,11 +215,14 @@ function buildLaunchPack(project: Project): string {
 function sortProjects(projects: Project[], sortMode: ProjectSortMode): Project[] {
   const statusRank = (status: string): number => {
     const normalized = String(status || '').toLowerCase();
-    if (normalized === 'active') return 0;
-    if (normalized === 'planning') return 1;
-    if (normalized === 'blocked') return 2;
-    if (normalized === 'completed') return 3;
-    if (normalized === 'archived') return 4;
+    if (normalized === 'executing') return 0;
+    if (normalized === 'queued') return 1;
+    if (normalized === 'validating') return 2;
+    if (normalized === 'planning') return 3;
+    if (normalized === 'blocked') return 4;
+    if (normalized === 'failed') return 5;
+    if (normalized === 'delivered') return 6;
+    if (normalized === 'archived') return 7;
     return 5;
   };
 
@@ -182,7 +232,7 @@ function sortProjects(projects: Project[], sortMode: ProjectSortMode): Project[]
       return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
     }
     if (sortMode === 'status') {
-      const rankDelta = statusRank(a.status) - statusRank(b.status);
+      const rankDelta = statusRank(inferLifecycle(a)) - statusRank(inferLifecycle(b));
       if (rankDelta !== 0) return rankDelta;
       return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
     }
@@ -201,9 +251,21 @@ function matchesProject(
   delivery: ProjectDeliveryFilter,
 ): boolean {
   const normalizedQuery = query.trim().toLowerCase();
-  const projectStatus = String(project.status || '').toLowerCase();
+  const lifecycle = inferLifecycle(project);
+  const projectStatus = lifecycleToLegacyStatus(lifecycle);
   const deliveryMode = String(project.delivery_mode || 'local').toLowerCase();
-  if (status !== 'all' && projectStatus !== status) return false;
+  if (status !== 'all') {
+    const target = String(status || '').toLowerCase();
+    if (target === 'delivered') {
+      if (lifecycle !== 'delivered') return false;
+    } else if (target === 'failed') {
+      if (lifecycle !== 'failed') return false;
+    } else if (target === 'queued' || target === 'executing' || target === 'validating' || target === 'planning' || target === 'blocked' || target === 'archived') {
+      if (lifecycle !== target) return false;
+    } else if (projectStatus !== target) {
+      return false;
+    }
+  }
   if (delivery !== 'all' && deliveryMode !== delivery) return false;
   if (!normalizedQuery) return true;
   const haystack = [
@@ -211,7 +273,7 @@ function matchesProject(
     project.description,
     ...(project.team || []),
     ...(project.tags || []),
-    ...((project.high_level_tasks || []).map((lane) => `${lane.owner} ${lane.headline}`)),
+    ...(projectTeamLanes(project).map((lane) => `${lane.owner} ${lane.headline}`)),
   ].join(' ').toLowerCase();
   return haystack.includes(normalizedQuery);
 }
@@ -262,10 +324,14 @@ function ProjectRailCard({
   onOpenWorkspace,
   onCopyLaunchPack,
 }: ProjectRailCardProps) {
-  const teamLanes = Array.isArray(project.high_level_tasks) ? project.high_level_tasks.slice(0, 3) : [];
+  const teamLanes = projectTeamLanes(project).slice(0, 3);
   const launchUrl = primaryLaunchUrl(project);
   const commands = parseRunCommands(project.run_instructions);
   const freshness = formatRelativeTime(project.last_run?.updated_at || project.updated_at || project.created_at);
+  const lifecycle = inferLifecycle(project);
+  const lifecycleText = lifecycleLabel(lifecycle);
+  const statusColor = statusAccent(lifecycle);
+  const statusBg = statusSurface(lifecycle);
 
   return (
     <div
@@ -308,12 +374,12 @@ function ProjectRailCard({
                 fontWeight: 700,
                 letterSpacing: '0.04em',
                 textTransform: 'uppercase',
-                color: statusAccent(project.status),
-                backgroundColor: statusSurface(project.status),
-                border: `1px solid color-mix(in srgb, ${statusAccent(project.status)} 30%, transparent)`,
+                color: statusColor,
+                backgroundColor: statusBg,
+                border: `1px solid color-mix(in srgb, ${statusColor} 30%, transparent)`,
               }}
             >
-              {project.status}
+              {lifecycleText}
             </span>
             <span
               style={{
@@ -343,8 +409,8 @@ function ProjectRailCard({
             borderRadius: '999px',
             flexShrink: 0,
             marginTop: '4px',
-            backgroundColor: statusAccent(project.status),
-            boxShadow: `0 0 10px color-mix(in srgb, ${statusAccent(project.status)} 45%, transparent)`,
+            backgroundColor: statusColor,
+            boxShadow: `0 0 10px color-mix(in srgb, ${statusColor} 45%, transparent)`,
           }}
         />
       </div>
@@ -814,9 +880,12 @@ export default function ProjectPanel({
   const statusOptions = useMemo(() => ([
     { value: 'all', label: 'All statuses' },
     { value: 'planning', label: 'Planning' },
-    { value: 'active', label: 'Active' },
-    { value: 'completed', label: 'Completed' },
+    { value: 'queued', label: 'Queued' },
+    { value: 'executing', label: 'Executing' },
+    { value: 'validating', label: 'Validating' },
+    { value: 'delivered', label: 'Delivered' },
     { value: 'blocked', label: 'Blocked' },
+    { value: 'failed', label: 'Failed' },
     { value: 'archived', label: 'Archived' },
   ]), []);
 
@@ -873,7 +942,7 @@ export default function ProjectPanel({
   }, []);
 
   const activeProjects = useMemo(
-    () => projects.filter((project) => String(project.status || '').toLowerCase() !== 'archived'),
+    () => projects.filter((project) => inferLifecycle(project) !== 'archived'),
     [projects],
   );
   const archivedIds = useMemo(() => new Set(archivedProjects.map((project) => project.id)), [archivedProjects]);
@@ -953,11 +1022,11 @@ export default function ProjectPanel({
   const summaryCounts = useMemo(() => {
     const counts = { active: 0, planning: 0, completed: 0, blocked: 0 };
     for (const project of activeProjects) {
-      const key = String(project.status || '').toLowerCase();
-      if (key === 'active') counts.active += 1;
-      if (key === 'planning') counts.planning += 1;
-      if (key === 'completed') counts.completed += 1;
-      if (key === 'blocked') counts.blocked += 1;
+      const lifecycle = inferLifecycle(project);
+      if (lifecycle === 'planning') counts.planning += 1;
+      if (lifecycle === 'delivered') counts.completed += 1;
+      if (lifecycle === 'blocked' || lifecycle === 'failed') counts.blocked += 1;
+      if (lifecycle === 'queued' || lifecycle === 'executing' || lifecycle === 'validating') counts.active += 1;
     }
     return counts;
   }, [activeProjects]);
@@ -1219,7 +1288,7 @@ export default function ProjectPanel({
       seen.add(name);
       ordered.push(name);
     }
-    for (const lane of selectedProject.high_level_tasks || []) {
+    for (const lane of projectTeamLanes(selectedProject)) {
       const owner = String(lane.owner || '').trim();
       if (!owner || seen.has(owner)) continue;
       seen.add(owner);
@@ -1236,7 +1305,7 @@ export default function ProjectPanel({
 
   const lanesByOwner = useMemo(() => {
     const grouped = new Map<string, Array<{ headline: string; status: string }>>();
-    for (const lane of selectedProject?.high_level_tasks || []) {
+    for (const lane of projectTeamLanes(selectedProject)) {
       const owner = String(lane.owner || '').trim();
       const headline = String(lane.headline || '').trim();
       if (!owner || !headline) continue;
@@ -1245,7 +1314,7 @@ export default function ProjectPanel({
       grouped.set(owner, list);
     }
     return grouped;
-  }, [selectedProject?.high_level_tasks]);
+  }, [selectedProject]);
 
   const tasksByAssignee = useMemo(() => {
     const grouped = new Map<string, string[]>();
@@ -1263,6 +1332,10 @@ export default function ProjectPanel({
   const launchLinks = selectedProject ? projectLaunchLinks(selectedProject) : [];
   const runCommands = selectedProject ? parseRunCommands(selectedProject.run_instructions) : [];
   const launchUrl = selectedProject ? primaryLaunchUrl(selectedProject) : null;
+  const selectedLifecycle = selectedProject ? inferLifecycle(selectedProject) : '';
+  const selectedLifecycleLabel = lifecycleLabel(selectedLifecycle);
+  const selectedLifecycleAccent = statusAccent(selectedLifecycle);
+  const selectedLifecycleSurface = statusSurface(selectedLifecycle);
 
   if (loading) {
     return (
@@ -1462,9 +1535,6 @@ export default function ProjectPanel({
       >
         <div
           style={{
-            position: 'sticky',
-            top: 0,
-            zIndex: 2,
             borderRadius: '18px',
             border: '1px solid var(--tf-border)',
             background: 'linear-gradient(180deg, color-mix(in srgb, var(--tf-surface-raised) 45%, var(--tf-surface)) 0%, var(--tf-surface) 100%)',
@@ -1472,7 +1542,7 @@ export default function ProjectPanel({
             display: 'flex',
             flexDirection: 'column',
             gap: '12px',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.12)',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.08)',
           }}
         >
           <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -1733,12 +1803,12 @@ export default function ProjectPanel({
                             fontWeight: 700,
                             letterSpacing: '0.06em',
                             textTransform: 'uppercase',
-                            color: statusAccent(selectedProject.status),
-                            backgroundColor: statusSurface(selectedProject.status),
-                            border: `1px solid color-mix(in srgb, ${statusAccent(selectedProject.status)} 28%, transparent)`,
+                            color: selectedLifecycleAccent,
+                            backgroundColor: selectedLifecycleSurface,
+                            border: `1px solid color-mix(in srgb, ${selectedLifecycleAccent} 28%, transparent)`,
                           }}
                         >
-                          {selectedProject.status}
+                          {selectedLifecycleLabel}
                         </span>
                         <span
                           style={{
@@ -1852,6 +1922,12 @@ export default function ProjectPanel({
                       </button>
                     </div>
                   </div>
+                  {selectedProject.status_reason && (
+                    <p className="text-xs" style={{ color: 'var(--tf-text-muted)' }}>
+                      {selectedProject.status_reason}
+                      {selectedProject.last_status_change_at ? ` · ${formatRelativeTime(selectedProject.last_status_change_at)}` : ''}
+                    </p>
+                  )}
 
                   {detailError && (
                     <InlineActionCard
