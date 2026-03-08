@@ -502,7 +502,6 @@ export default function Layout({
         <div
           className="flex-shrink-0"
           style={{
-            borderBottom: '1px solid var(--tf-surface-raised)',
             padding: sidebarIsCollapsed ? '14px 0' : '16px 12px',
             display: 'flex',
             alignItems: 'center',
