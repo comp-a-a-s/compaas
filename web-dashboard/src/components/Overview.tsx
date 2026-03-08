@@ -259,6 +259,15 @@ function OrgConnector({
   );
 }
 
+function connectorRailColor(active: boolean, blocked: boolean, flowDirection: FlowDirection): string {
+  if (blocked) return 'rgba(240,170,74,0.62)';
+  if (active) {
+    if (flowDirection === 'up') return 'rgba(59,142,255,0.78)';
+    return 'rgba(63,185,80,0.76)';
+  }
+  return 'rgba(76,109,146,0.72)';
+}
+
 // ---- Org hierarchy node ----
 interface OrgNodeCardProps {
   agent: Agent;
@@ -828,43 +837,45 @@ function ChildrenGroup({
   return (
     <div
       style={{
-        display: 'inline-flex',
-        flexDirection: 'column',
-        alignItems: 'stretch',
-        width: 'fit-content',
-        maxWidth: '100%',
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'flex-start',
       }}
     >
-      <div style={{ position: 'relative', height: '3px', margin: '0 10px' }}>
-        <OrgConnector
-          vertical={false}
-          size="100%"
-          active={visibleChildren.some((child) => flowEdgeDirections.has(orgEdgeKey(node.id, child.id)) || subtreeHasActive(child, activeIds))}
-          blocked={visibleChildren.some((child) => subtreeHasBlocked(child, blockedAgentIds))}
-          flowDirection={
-            flowEdgeDirections.get(
-              orgEdgeKey(
-                node.id,
-                visibleChildren.find((child) => flowEdgeDirections.has(orgEdgeKey(node.id, child.id)))?.id || visibleChildren[0].id,
-              ),
-            ) || 'down'
-          }
-          motionMode={motionMode}
-        />
-      </div>
-      <div style={{ display: 'inline-flex', flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center' }}>
-      {visibleChildren.map((child) => {
+      {visibleChildren.map((child, idx) => {
+        const isFirst = idx === 0;
+        const isLast = idx === visibleChildren.length - 1;
         const edgeKey = orgEdgeKey(node.id, child.id);
         const edgeInFlow = flowEdgeDirections.has(edgeKey);
         const childActive = edgeInFlow || subtreeHasActive(child, activeIds);
         const childBlocked = subtreeHasBlocked(child, blockedAgentIds);
         const edgeDirection: FlowDirection = flowEdgeDirections.get(edgeKey) || 'down';
+        const railColor = connectorRailColor(childActive, childBlocked, edgeDirection);
+        const railGlow = childBlocked
+          ? '0 0 9px rgba(240,170,74,0.22)'
+          : childActive
+            ? edgeDirection === 'up'
+              ? '0 0 9px rgba(59,142,255,0.18)'
+              : '0 0 9px rgba(63,185,80,0.16)'
+            : 'none';
 
         return (
           <div
             key={child.id}
             style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 10px' }}
           >
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: isFirst ? '50%' : 0,
+                right: isLast ? '50%' : 0,
+                height: '3px',
+                borderRadius: '999px',
+                backgroundColor: railColor,
+                boxShadow: railGlow,
+              }}
+            />
             {/* Vertical stub to child */}
             <OrgConnector
               vertical
@@ -894,7 +905,6 @@ function ChildrenGroup({
           </div>
         );
       })}
-      </div>
     </div>
   );
 }
