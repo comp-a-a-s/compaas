@@ -16,6 +16,10 @@ import type {
   OrgNodeState,
   OrgVisualTier,
   RealWorldAgentPose,
+  RealWorldBubbleState,
+  RealWorldFrameState,
+  RealWorldMovementStage,
+  RealWorldSpriteManifest,
   RealWorldZone,
 } from '../types';
 import Tooltip from './Tooltip';
@@ -710,8 +714,17 @@ interface RealWorldAgentState {
   zone: RealWorldZone;
   pose: RealWorldAgentPose;
   state: OrgNodeState;
+  movementStage: RealWorldMovementStage;
+  frameState: RealWorldFrameState;
+  bubbleState: RealWorldBubbleState;
+  spriteVariant: 'executive' | 'lead' | 'specialist';
   delayMs: number;
   reason: string;
+  movementRoute?: {
+    fromZone: RealWorldZone;
+    toZone: RealWorldZone;
+    progress: number;
+  };
   detail?: string;
   task?: string;
 }
@@ -872,12 +885,34 @@ function buildActivationEntries(
   for (const candidate of candidates) {
     const stepIndex = orderByPhase.get(candidate.meta.phase) || 0;
     orderByPhase.set(candidate.meta.phase, stepIndex + 1);
+    const homeZone = candidate.meta.zone;
+    const stage: RealWorldMovementStage = candidate.worker?.state === 'reporting'
+      ? 'reporting'
+      : candidate.worker
+        ? 'executing'
+        : 'dispatch';
+    const fromZone: RealWorldZone = stage === 'reporting'
+      ? homeZone
+      : candidate.meta.phase === 'executive'
+        ? 'executive_row'
+        : 'briefing_area';
+    const toZone: RealWorldZone = stage === 'reporting'
+      ? 'briefing_area'
+      : candidate.meta.phase === 'executive'
+        ? 'briefing_area'
+        : homeZone;
     activationMap.set(candidate.agentId, {
       agent_id: candidate.agentId,
       phase: candidate.meta.phase,
       activation_delay_ms: ORG_PHASE_BASE_DELAY_MS[candidate.meta.phase] + stepIndex * ORG_PHASE_STEP_MS[candidate.meta.phase],
       activation_reason: candidate.reason,
       connector_mode: toConnectorModeForState(candidate.worker?.state),
+      movement_route: {
+        from_zone: fromZone,
+        to_zone: toZone,
+        stage,
+        progress: candidate.worker ? Math.min(1, Math.max(0.15, candidate.worker.elapsed_seconds / 90)) : 0.15,
+      },
     });
   }
   return activationMap;
@@ -894,26 +929,64 @@ function buildRealWorldStates(
     const worker = workforceByAgent.get(agent.id);
     const activation = activationMap.get(agent.id);
     const zone = ORG_META.get(agent.id)?.zone || teamZoneForAgent(agent.id);
+    const tier = ORG_META.get(agent.id)?.tier || toVisualTier(agent);
     const liveState: OrgNodeState = worker?.state || 'idle';
     let pose: RealWorldAgentPose = 'idle';
+    let movementStage: RealWorldMovementStage = 'idle';
+    let frameState: RealWorldFrameState = 'loop';
+    let bubbleState: RealWorldBubbleState = 'none';
     if (isProjectRunning) {
-      if (agent.id === 'ceo' || activation?.phase === 'executive') pose = worker?.state === 'reporting' ? 'presenting' : 'huddle';
-      else if (worker?.state === 'working') pose = 'walking';
-      else if (worker?.state === 'assigned') pose = 'huddle';
-      else if (worker?.state === 'reporting') pose = 'presenting';
-      else pose = activation ? 'seated' : 'idle';
+      if (agent.id === 'ceo' || activation?.phase === 'executive') {
+        pose = worker?.state === 'reporting' ? 'presenting' : 'huddle';
+        movementStage = worker?.state === 'reporting' ? 'reporting' : 'dispatch';
+        bubbleState = worker?.state === 'reporting' ? 'reporting' : 'briefing';
+      } else if (worker?.state === 'working') {
+        pose = 'walking';
+        movementStage = 'executing';
+        bubbleState = 'focus';
+      } else if (worker?.state === 'assigned') {
+        pose = 'huddle';
+        movementStage = 'dispatch';
+        bubbleState = 'briefing';
+      } else if (worker?.state === 'reporting') {
+        pose = 'presenting';
+        movementStage = 'reporting';
+        bubbleState = 'reporting';
+      } else if (worker?.state === 'blocked') {
+        pose = 'huddle';
+        movementStage = 'dispatch';
+        bubbleState = 'blocked';
+      } else {
+        pose = activation ? 'seated' : 'idle';
+        movementStage = activation ? 'executing' : 'idle';
+      }
     } else {
       pose = 'idle';
+      movementStage = 'idle';
     }
+    if (liveState === 'blocked') bubbleState = 'blocked';
+    if (activation && activation.activation_delay_ms > 0 && pose !== 'idle') frameState = 'transition';
+    const route = activation?.movement_route;
     states.set(agent.id, {
       agentId: agent.id,
       zone: pose === 'presenting' || pose === 'huddle'
-        ? (activation?.phase === 'executive' ? 'briefing_area' : zone)
+        ? (activation?.phase === 'executive' || movementStage === 'reporting' ? 'briefing_area' : zone)
         : zone,
       pose,
       state: liveState,
+      movementStage,
+      frameState,
+      bubbleState,
+      spriteVariant: tier,
       delayMs: activation?.activation_delay_ms || 0,
       reason: activation?.activation_reason || 'Calm office state',
+      movementRoute: route
+        ? {
+          fromZone: route.from_zone,
+          toZone: route.to_zone,
+          progress: route.progress,
+        }
+        : undefined,
       detail: worker?.run_id ? `Run ${worker.run_id}` : undefined,
       task: worker?.task,
     });
@@ -1247,6 +1320,7 @@ interface RealWorldSceneProps {
   activationByAgent: Map<string, OrgActivationEntry>;
   motionMode: OrgMotionMode;
   isProjectRunning: boolean;
+  syncFreshness: string;
   onAgentClick: (agent: Agent) => void;
 }
 
@@ -1258,7 +1332,23 @@ interface RealWorldZoneLayout {
   top: number;
   width: number;
   height: number;
-  columns: number;
+  seats: number;
+}
+
+interface RealWorldProp {
+  id: string;
+  kind: 'desk' | 'table' | 'monitor' | 'plant';
+  left: number;
+  top: number;
+  zone?: RealWorldZone;
+}
+
+interface PositionedRealWorldAgent {
+  agent: Agent;
+  scene: RealWorldAgentState;
+  left: number;
+  top: number;
+  zIndex: number;
 }
 
 const REAL_WORLD_ZONE_LAYOUTS: RealWorldZoneLayout[] = [
@@ -1270,7 +1360,7 @@ const REAL_WORLD_ZONE_LAYOUTS: RealWorldZoneLayout[] = [
     top: 8,
     width: 30,
     height: 18,
-    columns: 4,
+    seats: 4,
   },
   {
     id: 'briefing_area',
@@ -1280,7 +1370,7 @@ const REAL_WORLD_ZONE_LAYOUTS: RealWorldZoneLayout[] = [
     top: 10,
     width: 24,
     height: 20,
-    columns: 3,
+    seats: 4,
   },
   {
     id: 'product_pod',
@@ -1290,7 +1380,7 @@ const REAL_WORLD_ZONE_LAYOUTS: RealWorldZoneLayout[] = [
     top: 10,
     width: 30,
     height: 22,
-    columns: 3,
+    seats: 4,
   },
   {
     id: 'engineering_pod',
@@ -1300,7 +1390,7 @@ const REAL_WORLD_ZONE_LAYOUTS: RealWorldZoneLayout[] = [
     top: 34,
     width: 45,
     height: 30,
-    columns: 5,
+    seats: 7,
   },
   {
     id: 'qa_bench',
@@ -1310,7 +1400,7 @@ const REAL_WORLD_ZONE_LAYOUTS: RealWorldZoneLayout[] = [
     top: 42,
     width: 20,
     height: 24,
-    columns: 2,
+    seats: 3,
   },
   {
     id: 'research_corner',
@@ -1320,9 +1410,83 @@ const REAL_WORLD_ZONE_LAYOUTS: RealWorldZoneLayout[] = [
     top: 39,
     width: 18,
     height: 26,
-    columns: 2,
+    seats: 2,
   },
 ];
+
+const REAL_WORLD_PROPS: RealWorldProp[] = [
+  { id: 'exec-desk-1', kind: 'desk', left: 13, top: 17, zone: 'executive_row' },
+  { id: 'exec-desk-2', kind: 'desk', left: 24, top: 17, zone: 'executive_row' },
+  { id: 'brief-table', kind: 'table', left: 50, top: 20, zone: 'briefing_area' },
+  { id: 'prod-desk-1', kind: 'desk', left: 74, top: 18, zone: 'product_pod' },
+  { id: 'prod-desk-2', kind: 'desk', left: 87, top: 20, zone: 'product_pod' },
+  { id: 'eng-desk-1', kind: 'desk', left: 18, top: 46, zone: 'engineering_pod' },
+  { id: 'eng-desk-2', kind: 'desk', left: 30, top: 52, zone: 'engineering_pod' },
+  { id: 'eng-desk-3', kind: 'desk', left: 42, top: 47, zone: 'engineering_pod' },
+  { id: 'qa-desk', kind: 'desk', left: 61, top: 53, zone: 'qa_bench' },
+  { id: 'research-desk', kind: 'desk', left: 84, top: 52, zone: 'research_corner' },
+  { id: 'plant-1', kind: 'plant', left: 6, top: 28 },
+  { id: 'plant-2', kind: 'plant', left: 94, top: 28 },
+  { id: 'monitor-1', kind: 'monitor', left: 51, top: 22 },
+  { id: 'monitor-2', kind: 'monitor', left: 62, top: 56 },
+];
+
+const DEFAULT_REAL_WORLD_MANIFEST: RealWorldSpriteManifest = {
+  atlas_path: '/real-world/sprites/agent/default',
+  role_variants: {
+    executive: 'default',
+    lead: 'default',
+    specialist: 'default',
+  },
+  frame_map: {
+    idle: { id: 'idle', src: '/real-world/sprites/agent/default/idle.svg', width: 96, height: 128 },
+    seated: { id: 'seated', src: '/real-world/sprites/agent/default/seated.svg', width: 96, height: 128 },
+    walking: { id: 'walking', src: '/real-world/sprites/agent/default/walking.svg', width: 96, height: 128 },
+    huddle: { id: 'huddle', src: '/real-world/sprites/agent/default/huddle.svg', width: 96, height: 128 },
+    presenting: { id: 'presenting', src: '/real-world/sprites/agent/default/presenting.svg', width: 96, height: 128 },
+    blocked: { id: 'blocked', src: '/real-world/sprites/agent/default/blocked.svg', width: 96, height: 128 },
+  },
+  fallback_frame: 'idle',
+  props: {
+    desk: '/real-world/props/desk.svg',
+    table: '/real-world/props/table.svg',
+    monitor: '/real-world/props/monitor.svg',
+    plant: '/real-world/props/plant.svg',
+  },
+};
+
+function toPoseFrameKey(scene: RealWorldAgentState): string {
+  if (scene.state === 'blocked') return 'blocked';
+  return scene.pose;
+}
+
+function bubbleLabel(state: RealWorldBubbleState): string {
+  if (state === 'briefing') return 'Briefing';
+  if (state === 'reporting') return 'Reporting';
+  if (state === 'blocked') return 'Blocked';
+  if (state === 'focus') return 'In focus';
+  return '';
+}
+
+function seatPosition(layout: RealWorldZoneLayout, index: number): { left: number; top: number } {
+  const columns = Math.max(1, Math.ceil(Math.sqrt(layout.seats)));
+  const col = index % columns;
+  const row = Math.floor(index / columns);
+  const xGap = columns <= 1 ? 0 : (layout.width - 14) / (columns - 1);
+  const yGap = 7.5;
+  return {
+    left: layout.left + 7 + col * xGap,
+    top: layout.top + 10 + row * yGap + (col % 2 === 0 ? 0.5 : 0),
+  };
+}
+
+function interpolatePos(from: { left: number; top: number }, to: { left: number; top: number }, progress: number) {
+  const p = Math.max(0, Math.min(1, progress));
+  return {
+    left: from.left + (to.left - from.left) * p,
+    top: from.top + (to.top - from.top) * p,
+  };
+}
 
 function RealWorldScene({
   agents,
@@ -1330,12 +1494,37 @@ function RealWorldScene({
   activationByAgent,
   motionMode,
   isProjectRunning,
+  syncFreshness,
   onAgentClick,
 }: RealWorldSceneProps) {
+  const [manifest, setManifest] = useState<RealWorldSpriteManifest>(DEFAULT_REAL_WORLD_MANIFEST);
   const zoneMap = useMemo(() => {
     const map = new Map<RealWorldZone, RealWorldZoneLayout>();
     for (const zone of REAL_WORLD_ZONE_LAYOUTS) map.set(zone.id, zone);
     return map;
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+    const loadManifest = async () => {
+      try {
+        const response = await fetch('/real-world/sprite-manifest.json', { cache: 'force-cache' });
+        if (!response.ok) return;
+        const loaded = (await response.json()) as Partial<RealWorldSpriteManifest>;
+        if (isCancelled) return;
+        setManifest((prev) => ({
+          ...prev,
+          ...loaded,
+          role_variants: { ...prev.role_variants, ...(loaded.role_variants || {}) },
+          frame_map: { ...prev.frame_map, ...(loaded.frame_map || {}) },
+          props: { ...prev.props, ...(loaded.props || {}) },
+        }));
+      } catch {
+        // Keep resilient fallback manifest.
+      }
+    };
+    void loadManifest();
+    return () => { isCancelled = true; };
   }, []);
 
   const agentsByZone = useMemo(() => {
@@ -1360,59 +1549,92 @@ function RealWorldScene({
   }, [agents, realWorldStates, activationByAgent]);
 
   const positionedAgents = useMemo(() => {
-    const out: Array<{ agent: Agent; scene: RealWorldAgentState; left: number; top: number }> = [];
+    const out: PositionedRealWorldAgent[] = [];
     for (const zone of REAL_WORLD_ZONE_LAYOUTS) {
       const zoneAgents = agentsByZone.get(zone.id) || [];
       zoneAgents.forEach((agent, index) => {
         const scene = realWorldStates.get(agent.id);
         if (!scene) return;
-        const col = index % zone.columns;
-        const row = Math.floor(index / zone.columns);
-        const columnGap = zone.columns <= 1 ? 0 : (zone.width - 16) / (zone.columns - 1);
-        const jitter = (stableRunScopedHash(`${agent.id}:${scene.delayMs}`) % 5) - 2;
-        const left = zone.left + 8 + col * columnGap + jitter * 0.35;
-        const top = zone.top + 14 + row * 9 + (col % 2 === 0 ? 0.6 : 0);
-        out.push({ agent, scene, left, top });
+        const baseSeat = seatPosition(zone, index);
+        const route = scene.movementRoute;
+        let position = baseSeat;
+        if (route) {
+          const fromZone = zoneMap.get(route.fromZone) || zone;
+          const toZone = zoneMap.get(route.toZone) || zone;
+          const fromSeat = seatPosition(fromZone, index);
+          const toSeat = seatPosition(toZone, index);
+          position = interpolatePos(fromSeat, toSeat, route.progress);
+        }
+        const jitter = (stableRunScopedHash(`${agent.id}:${scene.delayMs}:${scene.pose}`) % 5) - 2;
+        const left = position.left + jitter * 0.24;
+        const top = position.top + (scene.pose === 'walking' ? -0.7 : 0);
+        out.push({ agent, scene, left, top, zIndex: Math.round(top * 10) });
       });
     }
-    return out;
-  }, [agentsByZone, realWorldStates]);
+    return out.sort((a, b) => a.zIndex - b.zIndex);
+  }, [agentsByZone, realWorldStates, zoneMap]);
 
   return (
     <div className={`real-world-shell real-world-motion-${motionMode} ${isProjectRunning ? 'real-world-running' : 'real-world-idle'}`}>
-      <div className="real-world-office">
-        <div className="real-world-floor" />
-        <div className="real-world-wall real-world-wall--top" />
-        <div className="real-world-wall real-world-wall--left" />
+      <div className="real-world-office" data-real-world-office>
+        <div className="real-world-layer real-world-layer--base">
+          <div className="real-world-floor" />
+          <div className="real-world-wall real-world-wall--top" />
+          <div className="real-world-wall real-world-wall--left" />
+          <div className="real-world-wall real-world-wall--right" />
+        </div>
 
-        {REAL_WORLD_ZONE_LAYOUTS.map((zone) => (
-          <section
-            key={zone.id}
-            className={`real-world-zone-iso real-world-zone-iso--${zone.id}`}
-            style={{
-              left: `${zone.left}%`,
-              top: `${zone.top}%`,
-              width: `${zone.width}%`,
-              height: `${zone.height}%`,
-            }}
-          >
-            <div className="real-world-zone-plate" />
-            <div className="real-world-zone-furniture">
-              <span />
-              <span />
-              <span />
-            </div>
-            <div className="real-world-zone-meta">
-              <p className="real-world-zone-label">{zone.label}</p>
-              <p className="real-world-zone-description">{zone.description}</p>
-            </div>
-          </section>
-        ))}
+        <div className="real-world-layer real-world-layer--zones">
+          {REAL_WORLD_ZONE_LAYOUTS.map((zone) => (
+            <section
+              key={zone.id}
+              className={`real-world-zone-iso real-world-zone-iso--${zone.id}`}
+              style={{
+                left: `${zone.left}%`,
+                top: `${zone.top}%`,
+                width: `${zone.width}%`,
+                height: `${zone.height}%`,
+              }}
+            >
+              <div className="real-world-zone-plate" />
+              <div className="real-world-zone-furniture">
+                <span />
+                <span />
+                <span />
+              </div>
+              <div className="real-world-zone-meta">
+                <p className="real-world-zone-label">{zone.label}</p>
+                <p className="real-world-zone-description">{zone.description}</p>
+              </div>
+            </section>
+          ))}
+        </div>
 
-        {positionedAgents.map(({ agent, scene, left, top }) => {
+        <div className="real-world-layer real-world-layer--props" data-real-world-furniture>
+          {REAL_WORLD_PROPS.map((prop) => (
+            <div
+              key={prop.id}
+              className={`real-world-prop real-world-prop--${prop.kind}`}
+              style={{ left: `${prop.left}%`, top: `${prop.top}%` }}
+            >
+              <img src={manifest.props[prop.kind] || DEFAULT_REAL_WORLD_MANIFEST.props[prop.kind]} alt={prop.kind} loading="lazy" />
+            </div>
+          ))}
+        </div>
+
+        <div className="real-world-layer real-world-layer--paths">
+          <div className="real-world-walk-path real-world-walk-path--north" />
+          <div className="real-world-walk-path real-world-walk-path--mid" />
+          <div className="real-world-walk-path real-world-walk-path--south" />
+        </div>
+
+        <div className="real-world-layer real-world-layer--agents">
+          {positionedAgents.map(({ agent, scene, left, top, zIndex }) => {
           const activation = activationByAgent.get(agent.id);
           const isActive = scene.state !== 'idle' || Boolean(activation);
-          const sceneZone = zoneMap.get(scene.zone);
+          const frameKey = toPoseFrameKey(scene);
+          const sprite = manifest.frame_map[frameKey] || manifest.frame_map[manifest.fallback_frame] || DEFAULT_REAL_WORLD_MANIFEST.frame_map.idle;
+          const bubble = bubbleLabel(scene.bubbleState);
           return (
             <button
               key={agent.id}
@@ -1420,18 +1642,27 @@ function RealWorldScene({
               data-real-world-agent-id={agent.id}
               data-real-world-pose={scene.pose || 'idle'}
               data-real-world-delay={String(scene.delayMs || 0)}
-              className={`real-world-agent real-world-agent--${scene.pose || 'idle'} real-world-agent--${scene.state || 'idle'} ${isActive ? 'real-world-agent--active' : ''}`}
+              className={`real-world-agent real-world-agent--${scene.pose || 'idle'} real-world-agent--${scene.state || 'idle'} real-world-agent--${scene.spriteVariant} ${isActive ? 'real-world-agent--active' : ''}`}
               style={{
                 ['--rw-delay' as any]: `${scene.delayMs || 0}ms`,
                 left: `${left}%`,
                 top: `${top}%`,
+                zIndex,
               }}
               onClick={() => onAgentClick(agent)}
               title={`${agent.name} · ${scene.reason || agent.role}${scene.task ? ` · ${scene.task}` : ''}`}
             >
-              <span className="real-world-avatar">
-                <span className="real-world-avatar-head">{agent.name.charAt(0).toUpperCase()}</span>
-                <span className="real-world-avatar-body" />
+              <span className="real-world-agent-shadow" />
+              <span className={`real-world-sprite-wrap real-world-frame-${scene.frameState}`}>
+                <img
+                  className="real-world-agent-sprite"
+                  src={sprite.src}
+                  alt={`${agent.name} sprite`}
+                  width={sprite.width || 96}
+                  height={sprite.height || 128}
+                  loading="lazy"
+                />
+                <span className="real-world-agent-sprite-tint" />
               </span>
               <span className="real-world-agent-card">
                 <span className="real-world-agent-name">{agent.name}</span>
@@ -1439,22 +1670,25 @@ function RealWorldScene({
                 {scene.task ? (
                   <span className="real-world-agent-task">{scene.task}</span>
                 ) : (
-                  <span className="real-world-agent-task">{isProjectRunning ? scene.reason || `Working in ${sceneZone?.label || 'office'}` : 'Calm office state'}</span>
+                  <span className="real-world-agent-task">{isProjectRunning ? scene.reason : 'Calm office state'}</span>
                 )}
               </span>
-              {(scene.pose === 'huddle' || scene.pose === 'presenting' || scene.pose === 'walking') && (
-                <span className="real-world-speech-bubble">
-                  {scene.pose === 'huddle' ? 'Briefing' : scene.pose === 'presenting' ? 'Reporting' : 'Moving'}
-                </span>
-              )}
+              {bubble && <span className={`real-world-speech-bubble real-world-speech-bubble--${scene.bubbleState}`}>{bubble}</span>}
             </button>
           );
-        })}
+          })}
+        </div>
+
+        <div className="real-world-layer real-world-layer--chips">
+          <span className="real-world-ui-chip">{isProjectRunning ? 'Office live' : 'Office calm'}</span>
+          <span className="real-world-ui-chip">Synced {syncFreshness}</span>
+          <span className="real-world-ui-chip">Executives brief first</span>
+        </div>
       </div>
       <div className="real-world-footer">
-        <span className="real-world-footer-chip">{isProjectRunning ? 'Office live' : 'Office calm'}</span>
+        <span className="real-world-footer-chip">{isProjectRunning ? 'Live mission floor' : 'Calm office floor'}</span>
         <span className="real-world-footer-chip">Task-driven movement</span>
-        <span className="real-world-footer-chip">Executives brief first</span>
+        <span className="real-world-footer-chip">Human sprite actors</span>
       </div>
     </div>
   );
@@ -1472,6 +1706,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   const [hierarchyHeight, setHierarchyHeight] = useState<number | null>(null);
   const [focusActiveChain, setFocusActiveChain] = useState(true);
   const [showHeatOverlay, setShowHeatOverlay] = useState(false);
+  const [compactViewport, setCompactViewport] = useState(() => (typeof window !== 'undefined' ? window.innerWidth <= 900 : false));
   const [documentVisible, setDocumentVisible] = useState(() => {
     if (typeof document === 'undefined') return true;
     return document.visibilityState !== 'hidden';
@@ -1781,6 +2016,14 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onResize = () => setCompactViewport(window.innerWidth <= 900);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
     if (layoutMode !== 'hierarchy') return;
     const viewport = hierarchyViewportRef.current;
     const content = hierarchyContentRef.current;
@@ -1858,6 +2101,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
   const syncFreshness = formatFreshness(workforceLive?.client_meta?.last_success_at);
   const baseMotionMode = toMotionMode(activeIds.size, workingAgentCount, blockedAgentCount, workforceStale);
   const motionMode: OrgMotionMode = documentVisible ? baseMotionMode : 'quiet';
+  const effectiveVisualizationMode: OverviewVisualizationMode = compactViewport ? 'org_tree' : visualizationMode;
   const activationByAgent = useMemo(
     () => buildActivationEntries(workforceByAgent, activeProjectId),
     [workforceByAgent, activeProjectId],
@@ -2073,23 +2317,39 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
           <button
             key={mode}
             onClick={() => setVisualizationMode(mode)}
+            disabled={compactViewport && mode === 'real_world'}
             style={{
               borderRadius: '999px',
-              border: `1px solid ${visualizationMode === mode ? 'var(--tf-success)' : 'var(--tf-border)'}`,
-              backgroundColor: visualizationMode === mode ? 'rgba(63,185,80,0.12)' : 'var(--tf-surface)',
-              color: visualizationMode === mode ? 'var(--tf-success)' : 'var(--tf-text-muted)',
+              border: `1px solid ${effectiveVisualizationMode === mode ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+              backgroundColor: effectiveVisualizationMode === mode ? 'rgba(63,185,80,0.12)' : 'var(--tf-surface)',
+              color: effectiveVisualizationMode === mode ? 'var(--tf-success)' : 'var(--tf-text-muted)',
               fontSize: '11px',
               fontWeight: 600,
               padding: '4px 12px',
-              cursor: 'pointer',
+              cursor: compactViewport && mode === 'real_world' ? 'not-allowed' : 'pointer',
+              opacity: compactViewport && mode === 'real_world' ? 0.52 : 1,
             }}
+            title={compactViewport && mode === 'real_world' ? 'Real World mode is desktop/tablet only.' : undefined}
           >
             {label}
           </button>
         ))}
       </div>
+      {compactViewport && (
+        <p
+          style={{
+            textAlign: 'center',
+            fontSize: '10px',
+            color: 'var(--tf-text-muted)',
+            marginTop: '-4px',
+            marginBottom: '10px',
+          }}
+        >
+          Real World mode is available on desktop/tablet. Showing Org Tree on mobile.
+        </p>
+      )}
 
-      {visualizationMode === 'org_tree' && (
+      {effectiveVisualizationMode === 'org_tree' && (
         <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
           {(['hierarchy', 'cluster', 'timeline'] as const).map((mode) => (
             <button
@@ -2217,13 +2477,14 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
         </div>
       )}
 
-      {visualizationMode === 'real_world' ? (
+      {effectiveVisualizationMode === 'real_world' ? (
         <RealWorldScene
           agents={agents}
           realWorldStates={realWorldStates}
           activationByAgent={activationByAgent}
           motionMode={motionMode}
           isProjectRunning={isProjectRunning}
+          syncFreshness={syncFreshness}
           onAgentClick={handleAgentClick}
         />
       ) : layoutMode === 'timeline' ? (

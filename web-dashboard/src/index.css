@@ -719,10 +719,11 @@ textarea:focus-visible {
   position: relative;
   border: 1px solid var(--tf-border);
   border-radius: 18px;
-  padding: 14px;
+  padding: 12px;
   overflow: hidden;
   background:
-    radial-gradient(1200px 320px at 16% -6%, rgba(59,142,255,0.14), transparent 72%),
+    radial-gradient(1200px 360px at 12% -10%, rgba(59,142,255,0.14), transparent 72%),
+    radial-gradient(900px 320px at 88% -6%, rgba(63,185,80,0.1), transparent 76%),
     linear-gradient(180deg, color-mix(in srgb, var(--tf-surface-raised) 92%, var(--tf-bg)) 0%, color-mix(in srgb, var(--tf-bg) 94%, var(--tf-surface)) 100%);
 }
 
@@ -731,72 +732,107 @@ textarea:focus-visible {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.2;
+  opacity: 0.22;
   background:
-    radial-gradient(900px 220px at 82% 8%, rgba(63,185,80,0.15), transparent 74%),
-    repeating-linear-gradient(150deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 56px);
+    repeating-linear-gradient(150deg, rgba(255,255,255,0.024) 0px, rgba(255,255,255,0.024) 1px, transparent 1px, transparent 54px),
+    repeating-linear-gradient(30deg, rgba(255,255,255,0.018) 0px, rgba(255,255,255,0.018) 1px, transparent 1px, transparent 54px);
 }
 
 .real-world-running::before {
-  animation: real-world-bg-shift 18s ease-in-out infinite;
+  animation: real-world-bg-shift 16s ease-in-out infinite;
 }
 
 .real-world-office {
   position: relative;
   z-index: 1;
-  height: 460px;
+  height: 520px;
   border-radius: 16px;
   overflow: hidden;
-  background:
-    linear-gradient(165deg, rgba(255,255,255,0.02), rgba(0,0,0,0.08)),
-    color-mix(in srgb, var(--tf-surface) 95%, var(--tf-bg));
+  background: linear-gradient(165deg, rgba(255,255,255,0.02), rgba(0,0,0,0.1)), color-mix(in srgb, var(--tf-surface) 95%, var(--tf-bg));
   border: 1px solid color-mix(in srgb, var(--tf-border) 84%, transparent);
-  transform: perspective(1200px) rotateX(15deg);
+  transform: perspective(1400px) rotateX(18deg);
   transform-origin: center top;
+}
+
+.real-world-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.real-world-layer--base {
+  z-index: 1;
+}
+
+.real-world-layer--zones {
+  z-index: 2;
+}
+
+.real-world-layer--props {
+  z-index: 3;
+}
+
+.real-world-layer--paths {
+  z-index: 4;
+}
+
+.real-world-layer--agents {
+  z-index: 5;
+}
+
+.real-world-layer--chips {
+  z-index: 6;
+  pointer-events: none;
 }
 
 .real-world-floor {
   position: absolute;
   inset: 0;
   background:
-    repeating-linear-gradient(135deg, rgba(83,127,170,0.16) 0px, rgba(83,127,170,0.16) 1px, transparent 1px, transparent 26px),
-    repeating-linear-gradient(45deg, rgba(83,127,170,0.14) 0px, rgba(83,127,170,0.14) 1px, transparent 1px, transparent 26px),
-    radial-gradient(800px 280px at 50% -15%, rgba(80,176,255,0.14), transparent 72%);
+    repeating-linear-gradient(145deg, rgba(216,206,182,0.22) 0px, rgba(216,206,182,0.22) 2px, transparent 2px, transparent 34px),
+    repeating-linear-gradient(55deg, rgba(173,157,130,0.15) 0px, rgba(173,157,130,0.15) 1px, transparent 1px, transparent 34px),
+    linear-gradient(180deg, rgba(224,210,180,0.16) 0%, rgba(122,106,80,0.2) 100%);
   animation: real-world-floor-drift 20s linear infinite;
 }
 
 .real-world-wall {
   position: absolute;
-  background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(18,33,52,0.24));
+  background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(31,46,66,0.28));
   border: 1px solid color-mix(in srgb, var(--tf-border) 82%, transparent);
-  box-shadow: 0 12px 20px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
 }
 
 .real-world-wall--top {
   left: 6%;
-  right: 6%;
-  top: 4%;
-  height: 10%;
+  right: 6.5%;
+  top: 3.5%;
+  height: 11%;
   border-radius: 14px 14px 8px 8px;
 }
 
 .real-world-wall--left {
   left: 4%;
-  top: 9%;
-  width: 8%;
-  bottom: 12%;
+  top: 8%;
+  width: 8.5%;
+  bottom: 10%;
   border-radius: 14px 8px 8px 14px;
 }
 
+.real-world-wall--right {
+  right: 3.5%;
+  top: 10%;
+  width: 7%;
+  bottom: 11%;
+  border-radius: 8px 14px 14px 8px;
+}
+
 .real-world-zone-iso {
-  position: relative;
   position: absolute;
   border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--tf-border) 88%, transparent);
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.005)),
+    linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.01)),
     color-mix(in srgb, var(--tf-surface) 92%, transparent);
-  box-shadow: 0 12px 20px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.03);
+  box-shadow: 0 12px 20px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.04);
   transform: skewY(-7deg);
   overflow: hidden;
   transition: border-color 0.24s ease, box-shadow 0.24s ease;
@@ -861,11 +897,54 @@ textarea:focus-visible {
 
 .real-world-zone-description {
   margin: 0 10px;
-  font-size: 10px;
+  font-size: 9px;
   color: var(--tf-text-secondary);
   line-height: 1.2;
   max-width: 190px;
 }
+
+.real-world-prop {
+  position: absolute;
+  transform: translate(-50%, -50%) skewY(7deg);
+  width: 42px;
+  height: 42px;
+  opacity: 0.95;
+}
+
+.real-world-prop img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 3px 4px rgba(0,0,0,0.24));
+}
+
+.real-world-prop--table {
+  width: 70px;
+  height: 60px;
+}
+
+.real-world-prop--plant {
+  width: 34px;
+  height: 50px;
+}
+
+.real-world-walk-path {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(59,142,255,0.2), rgba(63,185,80,0.2), rgba(59,142,255,0.2));
+  opacity: 0.6;
+}
+
+.real-world-running .real-world-walk-path {
+  animation: real-world-path-flow 2.8s linear infinite;
+}
+
+.real-world-walk-path--north { top: 29%; }
+.real-world-walk-path--mid { top: 45%; }
+.real-world-walk-path--south { top: 63%; }
 
 .real-world-agent {
   border: 0;
@@ -875,12 +954,12 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   transition: transform 0.28s ease, opacity 0.28s ease, filter 0.28s ease;
 }
 
 .real-world-agent:hover {
-  transform: skewY(7deg) translateY(-5px);
+  transform: skewY(7deg) translateY(-6px) scale(1.02);
 }
 
 .real-world-agent--active {
@@ -888,45 +967,69 @@ textarea:focus-visible {
   animation-delay: var(--rw-delay, 0ms);
 }
 
-.real-world-avatar {
+.real-world-agent-shadow {
+  width: 40px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.24);
+  filter: blur(1px);
+}
+
+.real-world-sprite-wrap {
   position: relative;
-  width: 38px;
-  height: 42px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 2px;
+  width: 56px;
+  height: 72px;
 }
 
-.real-world-avatar-head {
-  width: 24px;
-  height: 24px;
+.real-world-agent-sprite {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+  filter: drop-shadow(0 4px 5px rgba(0, 0, 0, 0.22));
+}
+
+.real-world-agent-sprite-tint {
+  position: absolute;
+  inset: 6px 10px 10px 10px;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--tf-success) 86%, white 10%);
-  color: var(--tf-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  opacity: 0.34;
 }
 
-.real-world-avatar-body {
-  width: 20px;
-  height: 13px;
-  border-radius: 4px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(59,142,255,0.38));
+.real-world-agent--executive .real-world-agent-sprite-tint {
+  background: rgba(63, 185, 80, 0.34);
+}
+
+.real-world-agent--lead .real-world-agent-sprite-tint {
+  background: rgba(59, 142, 255, 0.32);
+}
+
+.real-world-agent--specialist .real-world-agent-sprite-tint {
+  background: rgba(240, 170, 74, 0.26);
+}
+
+.real-world-agent--blocked .real-world-agent-sprite {
+  filter: grayscale(0.28) saturate(0.82) drop-shadow(0 3px 5px rgba(234,114,103,0.34));
+}
+
+.real-world-frame-transition {
+  animation: real-world-frame-shift 0.8s ease-in-out infinite;
+}
+
+.real-world-frame-intro {
+  animation: real-world-frame-intro 0.3s ease-out both;
 }
 
 .real-world-agent-card {
-  min-width: 112px;
-  max-width: 160px;
+  min-width: 118px;
+  max-width: 170px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border-radius: 10px;
   border: 1px solid var(--tf-border);
   background: color-mix(in srgb, var(--tf-surface-raised) 94%, transparent);
@@ -959,6 +1062,10 @@ textarea:focus-visible {
   animation-delay: var(--rw-delay, 0ms);
 }
 
+.real-world-agent--presenting .real-world-sprite-wrap {
+  transform: translateY(-2px);
+}
+
 .real-world-agent--huddle .real-world-agent-card,
 .real-world-agent--presenting .real-world-agent-card {
   border-color: color-mix(in srgb, var(--tf-success) 48%, transparent);
@@ -975,16 +1082,28 @@ textarea:focus-visible {
 
 .real-world-speech-bubble {
   position: absolute;
-  top: -8px;
-  right: -4px;
+  top: -12px;
+  right: -8px;
   border-radius: 999px;
-  padding: 2px 7px;
+  padding: 3px 8px;
   font-size: 9px;
   font-weight: 700;
-  border: 1px solid color-mix(in srgb, var(--tf-success) 46%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tf-accent-blue) 46%, transparent);
+  background: color-mix(in srgb, var(--tf-accent-blue) 16%, transparent);
+  color: var(--tf-accent-blue);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.real-world-speech-bubble--briefing {
+  border-color: color-mix(in srgb, var(--tf-success) 46%, transparent);
   background: color-mix(in srgb, var(--tf-success) 18%, transparent);
   color: var(--tf-success);
-  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.real-world-speech-bubble--blocked {
+  border-color: color-mix(in srgb, var(--tf-error) 52%, transparent);
+  background: color-mix(in srgb, var(--tf-error) 20%, transparent);
+  color: var(--tf-error);
 }
 
 .real-world-footer {
@@ -1006,33 +1125,71 @@ textarea:focus-visible {
   padding: 3px 9px;
 }
 
+.real-world-ui-chip {
+  display: inline-flex;
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--tf-border);
+  background: color-mix(in srgb, var(--tf-surface-raised) 88%, transparent);
+  color: var(--tf-text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+}
+
+.real-world-ui-chip:nth-child(2) {
+  left: 140px;
+}
+
+.real-world-ui-chip:nth-child(3) {
+  left: 276px;
+}
+
 .real-world-motion-intense .real-world-agent--walking {
-  animation-duration: 1.6s;
+  animation-duration: 1.45s;
 }
 
 .real-world-motion-quiet .real-world-agent--walking {
-  animation-duration: 2.9s;
+  animation-duration: 2.8s;
 }
 
 @keyframes real-world-bg-shift {
-  0%, 100% { opacity: 0.18; }
-  50% { opacity: 0.32; }
+  0%, 100% { opacity: 0.17; transform: scale(1); }
+  50% { opacity: 0.32; transform: scale(1.02); }
 }
 
 @keyframes real-world-floor-drift {
   0% { background-position: 0 0, 0 0, 0 0; }
-  100% { background-position: 42px 24px, -42px 24px, 0 0; }
+  100% { background-position: 48px 26px, -48px 26px, 0 0; }
 }
 
 @keyframes real-world-agent-enter {
-  0% { opacity: 0; transform: translateY(10px) scale(0.97); }
+  0% { opacity: 0; transform: translateY(10px) scale(0.97) skewY(7deg); }
   100% { opacity: 1; transform: skewY(7deg) translateY(0) scale(1); }
 }
 
 @keyframes real-world-walk {
   0%, 100% { transform: skewY(7deg) translate3d(0, 0, 0); }
-  25% { transform: skewY(7deg) translate3d(4px, -3px, 0); }
-  75% { transform: skewY(7deg) translate3d(-4px, -2px, 0); }
+  25% { transform: skewY(7deg) translate3d(5px, -3px, 0); }
+  75% { transform: skewY(7deg) translate3d(-5px, -2px, 0); }
+}
+
+@keyframes real-world-path-flow {
+  0% { opacity: 0.35; transform: translateX(-2%); }
+  50% { opacity: 0.75; transform: translateX(2%); }
+  100% { opacity: 0.35; transform: translateX(-2%); }
+}
+
+@keyframes real-world-frame-shift {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+
+@keyframes real-world-frame-intro {
+  0% { opacity: 0.6; transform: scale(0.96); }
+  100% { opacity: 1; transform: scale(1); }
 }
 
 /* ---- Project approval card entrance ---- */
@@ -2108,7 +2265,7 @@ body.compact-mode .h-10 { height: 32px !important; }
   }
 
   .real-world-office {
-    height: 560px;
+    height: 500px;
     transform: perspective(900px) rotateX(12deg);
   }
 
@@ -2118,6 +2275,14 @@ body.compact-mode .h-10 { height: 32px !important; }
 
   .real-world-wall--left {
     width: 6%;
+  }
+
+  .real-world-wall--right {
+    display: none;
+  }
+
+  .real-world-ui-chip:nth-child(3) {
+    display: none;
   }
 
   .header-controls {

@@ -1,0 +1,23 @@
+{
+  "atlas_path": "/real-world/sprites/agent/default",
+  "role_variants": {
+    "executive": "default",
+    "lead": "default",
+    "specialist": "default"
+  },
+  "frame_map": {
+    "idle": { "id": "idle", "src": "/real-world/sprites/agent/default/idle.svg", "width": 96, "height": 128 },
+    "seated": { "id": "seated", "src": "/real-world/sprites/agent/default/seated.svg", "width": 96, "height": 128 },
+    "walking": { "id": "walking", "src": "/real-world/sprites/agent/default/walking.svg", "width": 96, "height": 128 },
+    "huddle": { "id": "huddle", "src": "/real-world/sprites/agent/default/huddle.svg", "width": 96, "height": 128 },
+    "presenting": { "id": "presenting", "src": "/real-world/sprites/agent/default/presenting.svg", "width": 96, "height": 128 },
+    "blocked": { "id": "blocked", "src": "/real-world/sprites/agent/default/blocked.svg", "width": 96, "height": 128 }
+  },
+  "fallback_frame": "idle",
+  "props": {
+    "desk": "/real-world/props/desk.svg",
+    "table": "/real-world/props/table.svg",
+    "monitor": "/real-world/props/monitor.svg",
+    "plant": "/real-world/props/plant.svg"
+  }
+}

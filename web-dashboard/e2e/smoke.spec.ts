@@ -553,6 +553,9 @@ test('overview live sequencing activates executives before lower tiers and suppo
   expect(ctoDelay).toBeLessThan(frontendLeadDelay);
 
   await page.getByRole('button', { name: 'Real World' }).click();
+  await expect(page.locator('[data-real-world-office]')).toBeVisible();
+  await expect(page.locator('[data-real-world-furniture]')).toBeVisible();
+  await expect(page.locator('.real-world-wall--top')).toBeVisible();
   await expect(page.getByText('Executive Row')).toBeVisible();
   await expect(page.getByText('Office live')).toBeVisible();
   await expect(page.locator('[data-real-world-agent-id="ceo"]')).toHaveAttribute('data-real-world-pose', /huddle|presenting/);
@@ -581,6 +584,16 @@ test('real world mode falls back to calm office state without live workforce @sm
 
   await expect(page.getByText('Office calm')).toBeVisible();
   await expect(page.getByText('Calm office state').first()).toBeVisible();
+});
+
+test('real world mode auto-falls back to org tree on mobile viewport @smoke', async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 980 });
+  await page.goto('/');
+
+  const realWorldToggle = page.getByRole('button', { name: 'Real World' });
+  await expect(realWorldToggle).toBeDisabled();
+  await expect(page.getByText('Real World mode is available on desktop/tablet. Showing Org Tree on mobile.')).toBeVisible();
+  await expect(page.locator('[data-org-node-id="ceo"]')).toBeVisible();
 });
 
 test('project detail delete removes project from list and clears detail pane @smoke', async ({ page }) => {

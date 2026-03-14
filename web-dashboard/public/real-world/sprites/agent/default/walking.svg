@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 128" role="img" aria-label="Walking office worker sprite">
+  <ellipse cx="48" cy="115" rx="18" ry="6" fill="rgba(0,0,0,0.22)"/>
+  <rect x="40" y="23" width="15" height="15" rx="5" fill="#f2c9a4"/>
+  <rect x="38" y="21" width="19" height="7" rx="3" fill="#2f2f36"/>
+  <rect x="33" y="39" width="29" height="33" rx="7" fill="#2c5d8b"/>
+  <rect x="25" y="45" width="8" height="19" rx="4" fill="#2d4f72" transform="rotate(-18 25 45)"/>
+  <rect x="62" y="46" width="8" height="19" rx="4" fill="#2d4f72" transform="rotate(16 62 46)"/>
+  <rect x="36" y="72" width="7" height="27" rx="3" fill="#1d2f47" transform="rotate(12 36 72)"/>
+  <rect x="53" y="72" width="7" height="27" rx="3" fill="#1d2f47" transform="rotate(-14 53 72)"/>
+  <rect x="34" y="98" width="13" height="6" rx="2" fill="#141a25"/>
+  <rect x="50" y="98" width="13" height="6" rx="2" fill="#141a25"/>
+</svg>
