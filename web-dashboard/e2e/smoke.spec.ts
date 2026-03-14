@@ -542,6 +542,47 @@ test('workforce states stay consistent across overview and agents @smoke', async
   await expect(page.getByText('Implement signup form validation').first()).toBeVisible();
 });
 
+test('overview live sequencing activates executives before lower tiers and supports real world mode @smoke', async ({ page }) => {
+  await page.goto('/');
+
+  const ceoDelay = Number(await page.locator('[data-org-node-id="ceo"]').getAttribute('data-org-delay'));
+  const ctoDelay = Number(await page.locator('[data-org-node-id="cto"]').getAttribute('data-org-delay'));
+  const frontendLeadDelay = Number(await page.locator('[data-org-node-id="lead-frontend"]').getAttribute('data-org-delay'));
+
+  expect(ceoDelay).toBeLessThan(ctoDelay);
+  expect(ctoDelay).toBeLessThan(frontendLeadDelay);
+
+  await page.getByRole('button', { name: 'Real World' }).click();
+  await expect(page.getByText('Executive Row')).toBeVisible();
+  await expect(page.getByText('Office live')).toBeVisible();
+  await expect(page.locator('[data-real-world-agent-id="ceo"]')).toHaveAttribute('data-real-world-pose', /huddle|presenting/);
+
+  await page.getByRole('button', { name: 'Org Tree' }).click();
+  await expect(page.locator('[data-org-node-id="ceo"]')).toBeVisible();
+});
+
+test('real world mode falls back to calm office state without live workforce @smoke', async ({ page }) => {
+  await page.unroute('**/api/workforce/live**');
+  await page.route('**/api/workforce/live**', async (route) => {
+    const url = new URL(route.request().url());
+    await route.fulfill({
+      json: {
+        status: 'ok',
+        as_of: workforcePayload.as_of,
+        project_id: url.searchParams.get('project_id') || null,
+        counts: { assigned: 0, working: 0, reporting: 0, blocked: 0 },
+        workers: [],
+      },
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Real World' }).click();
+
+  await expect(page.getByText('Office calm')).toBeVisible();
+  await expect(page.getByText('Calm office state').first()).toBeVisible();
+});
+
 test('project detail delete removes project from list and clears detail pane @smoke', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Projects' }).click();

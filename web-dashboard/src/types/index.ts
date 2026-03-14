@@ -199,6 +199,10 @@ export type OrgVisualTier = 'executive' | 'lead' | 'specialist';
 export type OrgMotionMode = 'quiet' | 'active' | 'intense';
 export type OrgNodeState = WorkforceState | 'idle';
 export type OrgConnectorActivityMode = 'idle' | 'assigned' | 'working' | 'reporting' | 'blocked';
+export type OverviewVisualizationMode = 'org_tree' | 'real_world';
+export type OrgActivationPhase = 'executive' | 'lead' | 'specialist';
+export type RealWorldAgentPose = 'seated' | 'walking' | 'huddle' | 'presenting' | 'idle';
+export type RealWorldZone = 'executive_row' | 'product_pod' | 'engineering_pod' | 'research_corner' | 'qa_bench' | 'briefing_area';
 
 export interface OrgNodeDecor {
   tier: OrgVisualTier;
@@ -209,6 +213,14 @@ export interface OrgNodeDecor {
 
 export interface OrgNodeStateDecor extends OrgNodeDecor {
   connectorActivity: OrgConnectorActivityMode;
+}
+
+export interface OrgActivationEntry {
+  agent_id: string;
+  phase: OrgActivationPhase;
+  activation_delay_ms: number;
+  activation_reason: string;
+  connector_mode: OrgConnectorActivityMode;
 }
 
 export interface WorkforceWorker {

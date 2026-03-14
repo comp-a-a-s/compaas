@@ -4,13 +4,19 @@ import type {
   Project,
   Task,
   ActivityEvent,
+  OverviewVisualizationMode,
   WorkforceLiveSnapshot,
   WorkforceState,
   WorkforceWorker,
+  OrgActivationEntry,
+  OrgActivationPhase,
+  OrgConnectorActivityMode,
   OrgMotionMode,
   OrgNodeDecor,
   OrgNodeState,
   OrgVisualTier,
+  RealWorldAgentPose,
+  RealWorldZone,
 } from '../types';
 import Tooltip from './Tooltip';
 
@@ -202,17 +208,62 @@ function toMotionMode(
   return 'active';
 }
 
-const ORG_DEPTH_ANIMATION_STEP_MS = 160;
-const ORG_SIBLING_STAGGER_MS = 42;
+const ORG_PHASE_BASE_DELAY_MS: Record<OrgActivationPhase, number> = {
+  executive: 0,
+  lead: 260,
+  specialist: 560,
+};
+const ORG_PHASE_STEP_MS: Record<OrgActivationPhase, number> = {
+  executive: 110,
+  lead: 90,
+  specialist: 72,
+};
 
-function orgTierDelayMs(tier: OrgVisualTier): number {
-  if (tier === 'executive') return 0;
-  if (tier === 'lead') return 26;
-  return 54;
+function toActivationPhase(tier: OrgVisualTier): OrgActivationPhase {
+  if (tier === 'executive') return 'executive';
+  if (tier === 'lead') return 'lead';
+  return 'specialist';
 }
 
-function orgActivationDelayMs(depth: number, tier: OrgVisualTier): number {
-  return Math.max(0, depth * ORG_DEPTH_ANIMATION_STEP_MS + orgTierDelayMs(tier));
+function toConnectorModeForState(state?: WorkforceState): OrgConnectorActivityMode {
+  if (state === 'assigned') return 'assigned';
+  if (state === 'working') return 'working';
+  if (state === 'reporting') return 'reporting';
+  if (state === 'blocked') return 'blocked';
+  return 'idle';
+}
+
+function toIsoMillis(value?: string): number {
+  if (!value) return Number.POSITIVE_INFINITY;
+  const ts = new Date(value).getTime();
+  return Number.isFinite(ts) && ts > 0 ? ts : Number.POSITIVE_INFINITY;
+}
+
+function stableRunScopedHash(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function stateOrderForActivation(state?: WorkforceState): number {
+  if (state === 'working') return 0;
+  if (state === 'reporting') return 1;
+  if (state === 'assigned') return 2;
+  if (state === 'blocked') return 3;
+  return 4;
+}
+
+function teamZoneForAgent(agentId: string): RealWorldZone {
+  if (agentId === 'ceo' || agentId === 'cto' || agentId === 'cfo' || agentId === 'ciso') return 'executive_row';
+  if (agentId === 'vp-product' || agentId === 'lead-designer' || agentId === 'tech-writer') return 'product_pod';
+  if (agentId === 'vp-engineering' || agentId === 'lead-backend' || agentId === 'lead-frontend' || agentId === 'devops' || agentId === 'data-engineer') {
+    return 'engineering_pod';
+  }
+  if (agentId === 'qa-lead' || agentId === 'security-engineer') return 'qa_bench';
+  if (agentId === 'chief-researcher') return 'research_corner';
+  return 'briefing_area';
 }
 
 type FlowDirection = 'down' | 'up' | null;
@@ -288,8 +339,9 @@ function connectorRailColor(active: boolean, blocked: boolean, flowDirection: Fl
 interface OrgNodeCardProps {
   agent: Agent;
   decor: OrgNodeDecor;
-  depth: number;
   motionMode: OrgMotionMode;
+  activationDelayMs?: number;
+  activationReason?: string;
   displayRole?: string;
   onAgentClick?: (agent: Agent) => void;
   muted?: boolean;
@@ -301,8 +353,9 @@ interface OrgNodeCardProps {
 function OrgNodeCard({
   agent,
   decor,
-  depth,
   motionMode,
+  activationDelayMs = 0,
+  activationReason,
   displayRole,
   onAgentClick,
   muted = false,
@@ -338,15 +391,19 @@ function OrgNodeCard({
     liveWorker?.source ? `Source ${liveWorker.source}` : '',
     liveWorker?.updated_at ? `Updated ${formatFreshness(liveWorker.updated_at)}` : '',
     liveWorker ? `Elapsed ${formatElapsedSeconds(liveWorker.elapsed_seconds)}` : '',
+    activationReason ? `Activation ${activationReason}` : '',
   ].filter(Boolean);
   const heatIntensity = showHeatOverlay && !muted
     ? Math.max(0.08, Math.min(0.44, decor.workloadScore / 170))
     : 0;
-  const activeDelayMs = orgActivationDelayMs(depth, decor.tier);
+  const activeDelayMs = activationDelayMs;
 
   return (
     <div
       data-org-node-id={agent.id}
+      data-org-tier={decor.tier}
+      data-org-state={decor.state}
+      data-org-delay={String(activeDelayMs)}
       className={`org-node-card org-node--${decor.tier} org-node-state--${decor.state}${isActive ? ' org-node-active' : ''}${muted ? ' org-node-muted' : ''}${motionMode === 'quiet' ? ' org-node-quiet' : ''}`}
       style={{
         ['--org-active-delay' as any]: `${activeDelayMs}ms`,
@@ -639,6 +696,51 @@ const ORG_TREE: OrgTreeNode = {
   ],
 };
 
+interface OrgTreeMeta {
+  depth: number;
+  parentId?: string;
+  tier: OrgVisualTier;
+  phase: OrgActivationPhase;
+  displayRole?: string;
+  zone: RealWorldZone;
+}
+
+interface RealWorldAgentState {
+  agentId: string;
+  zone: RealWorldZone;
+  pose: RealWorldAgentPose;
+  state: OrgNodeState;
+  delayMs: number;
+  reason: string;
+  detail?: string;
+  task?: string;
+}
+
+function buildOrgMetaTree(node: OrgTreeNode, depth = 0, parentId?: string, meta = new Map<string, OrgTreeMeta>()) {
+  const syntheticAgent: Agent = {
+    id: node.id,
+    name: node.id,
+    role: node.displayRole || node.id,
+    model: '',
+    status: 'active',
+  };
+  const tier = toVisualTier(syntheticAgent);
+  meta.set(node.id, {
+    depth,
+    parentId,
+    tier,
+    phase: toActivationPhase(tier),
+    displayRole: node.displayRole,
+    zone: teamZoneForAgent(node.id),
+  });
+  for (const child of node.children ?? []) {
+    buildOrgMetaTree(child, depth + 1, node.id, meta);
+  }
+  return meta;
+}
+
+const ORG_META = buildOrgMetaTree(ORG_TREE);
+
 // Check if a subtree contains any active agent
 function subtreeHasActive(node: OrgTreeNode, activeIds: Set<string>): boolean {
   if (activeIds.has(node.id)) return true;
@@ -664,6 +766,161 @@ function findPathToNode(node: OrgTreeNode, targetId: string, path: string[] = []
   return null;
 }
 
+function compareActivationWorkers(
+  a: WorkforceWorker,
+  b: WorkforceWorker,
+  activeRunId: string,
+  phase: OrgActivationPhase,
+): number {
+  const aRun = String(a.run_id || '');
+  const bRun = String(b.run_id || '');
+  const aRelevant = aRun === activeRunId ? 0 : 1;
+  const bRelevant = bRun === activeRunId ? 0 : 1;
+  if (aRelevant !== bRelevant) return aRelevant - bRelevant;
+
+  const aStart = toIsoMillis(a.started_at);
+  const bStart = toIsoMillis(b.started_at);
+  if (aStart !== bStart) return aStart - bStart;
+
+  const aState = stateOrderForActivation(a.state);
+  const bState = stateOrderForActivation(b.state);
+  if (aState !== bState) return aState - bState;
+
+  const runScope = activeRunId || 'steady';
+  const aHash = stableRunScopedHash(`${runScope}:${phase}:${a.agent_id}`);
+  const bHash = stableRunScopedHash(`${runScope}:${phase}:${b.agent_id}`);
+  return aHash - bHash;
+}
+
+function deriveActiveRunId(workforceRows: WorkforceWorker[]): string {
+  const counts = new Map<string, number>();
+  for (const row of workforceRows) {
+    const runId = String(row.run_id || '').trim();
+    if (!runId) continue;
+    counts.set(runId, (counts.get(runId) || 0) + 1);
+  }
+  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+}
+
+function buildActivationEntries(
+  workforceByAgent: Map<string, WorkforceWorker>,
+  activeProjectId: string,
+): Map<string, OrgActivationEntry> {
+  const workforceRows = Array.from(workforceByAgent.values());
+  const activeRunId = deriveActiveRunId(workforceRows);
+  const candidateIds = new Set<string>();
+
+  if (workforceRows.length === 0) return new Map();
+
+  candidateIds.add('ceo');
+  for (const row of workforceRows) {
+    const path = findPathToNode(ORG_TREE, row.agent_id);
+    if (!path) continue;
+    for (const id of path) candidateIds.add(id);
+  }
+
+  const candidates = Array.from(candidateIds)
+    .map((agentId) => {
+      const meta = ORG_META.get(agentId);
+      if (!meta) return null;
+      const supportingWorkers = workforceRows
+        .filter((row) => {
+          const path = findPathToNode(ORG_TREE, row.agent_id);
+          return Boolean(path?.includes(agentId));
+        })
+        .sort((a, b) => compareActivationWorkers(a, b, activeRunId, meta.phase));
+      const bestWorker = workforceByAgent.get(agentId) || supportingWorkers[0];
+      const reason = bestWorker
+        ? bestWorker.agent_id === agentId
+          ? `${liveStateLabel(bestWorker.state)} on ${bestWorker.task || 'current work'}`
+          : `${bestWorker.agent_name || bestWorker.agent_id} pulled this branch live`
+        : 'Awaiting delegation';
+      return {
+        agentId,
+        meta,
+        worker: bestWorker,
+        earliestMs: bestWorker ? Math.min(toIsoMillis(bestWorker.started_at), toIsoMillis(bestWorker.updated_at)) : Number.POSITIVE_INFINITY,
+        statePriority: stateOrderForActivation(bestWorker?.state),
+        tieBreaker: stableRunScopedHash(`${activeRunId || activeProjectId || 'steady'}:${meta.phase}:${agentId}`),
+        reason,
+      };
+    })
+    .filter(Boolean) as Array<{
+      agentId: string;
+      meta: OrgTreeMeta;
+      worker?: WorkforceWorker;
+      earliestMs: number;
+      statePriority: number;
+      tieBreaker: number;
+      reason: string;
+    }>;
+
+  candidates.sort((a, b) => {
+    const phaseGap = ORG_PHASE_BASE_DELAY_MS[a.meta.phase] - ORG_PHASE_BASE_DELAY_MS[b.meta.phase];
+    if (phaseGap !== 0) return phaseGap;
+    if (a.earliestMs !== b.earliestMs) return a.earliestMs - b.earliestMs;
+    if (a.statePriority !== b.statePriority) return a.statePriority - b.statePriority;
+    return a.tieBreaker - b.tieBreaker;
+  });
+
+  const orderByPhase = new Map<OrgActivationPhase, number>([
+    ['executive', 0],
+    ['lead', 0],
+    ['specialist', 0],
+  ]);
+  const activationMap = new Map<string, OrgActivationEntry>();
+  for (const candidate of candidates) {
+    const stepIndex = orderByPhase.get(candidate.meta.phase) || 0;
+    orderByPhase.set(candidate.meta.phase, stepIndex + 1);
+    activationMap.set(candidate.agentId, {
+      agent_id: candidate.agentId,
+      phase: candidate.meta.phase,
+      activation_delay_ms: ORG_PHASE_BASE_DELAY_MS[candidate.meta.phase] + stepIndex * ORG_PHASE_STEP_MS[candidate.meta.phase],
+      activation_reason: candidate.reason,
+      connector_mode: toConnectorModeForState(candidate.worker?.state),
+    });
+  }
+  return activationMap;
+}
+
+function buildRealWorldStates(
+  agents: Agent[],
+  workforceByAgent: Map<string, WorkforceWorker>,
+  activationMap: Map<string, OrgActivationEntry>,
+  isProjectRunning: boolean,
+): Map<string, RealWorldAgentState> {
+  const states = new Map<string, RealWorldAgentState>();
+  for (const agent of agents) {
+    const worker = workforceByAgent.get(agent.id);
+    const activation = activationMap.get(agent.id);
+    const zone = ORG_META.get(agent.id)?.zone || teamZoneForAgent(agent.id);
+    const liveState: OrgNodeState = worker?.state || 'idle';
+    let pose: RealWorldAgentPose = 'idle';
+    if (isProjectRunning) {
+      if (agent.id === 'ceo' || activation?.phase === 'executive') pose = worker?.state === 'reporting' ? 'presenting' : 'huddle';
+      else if (worker?.state === 'working') pose = 'walking';
+      else if (worker?.state === 'assigned') pose = 'huddle';
+      else if (worker?.state === 'reporting') pose = 'presenting';
+      else pose = activation ? 'seated' : 'idle';
+    } else {
+      pose = 'idle';
+    }
+    states.set(agent.id, {
+      agentId: agent.id,
+      zone: pose === 'presenting' || pose === 'huddle'
+        ? (activation?.phase === 'executive' ? 'briefing_area' : zone)
+        : zone,
+      pose,
+      state: liveState,
+      delayMs: activation?.activation_delay_ms || 0,
+      reason: activation?.activation_reason || 'Calm office state',
+      detail: worker?.run_id ? `Run ${worker.run_id}` : undefined,
+      task: worker?.task,
+    });
+  }
+  return states;
+}
+
 interface TreeNodeProps {
   node: OrgTreeNode;
   depth: number;
@@ -679,6 +936,7 @@ interface TreeNodeProps {
   liveWorkerByAgent: Map<string, WorkforceWorker>;
   workloadScoreByAgent: Map<string, number>;
   stalenessScoreByAgent: Map<string, number>;
+  activationByAgent: Map<string, OrgActivationEntry>;
   showHeatOverlay: boolean;
   motionMode: OrgMotionMode;
 }
@@ -698,6 +956,7 @@ function TreeNode({
   liveWorkerByAgent,
   workloadScoreByAgent,
   stalenessScoreByAgent,
+  activationByAgent,
   showHeatOverlay,
   motionMode,
 }: TreeNodeProps) {
@@ -713,6 +972,7 @@ function TreeNode({
   const liveWorker = liveWorkerByAgent.get(node.id);
   const blocked = blockedAgentIds.has(node.id) || liveState === 'blocked';
   const decorState: OrgNodeState = muted ? 'idle' : (liveState || (blocked ? 'blocked' : 'idle'));
+  const activation = activationByAgent.get(node.id);
   const decor: OrgNodeDecor = {
     tier: toVisualTier(agent),
     state: decorState,
@@ -726,10 +986,10 @@ function TreeNode({
   const stemDirection: FlowDirection = firstFlowEdge
     ? (flowEdgeDirections.get(orgEdgeKey(node.id, firstFlowEdge.id)) || 'down')
     : 'down';
-  const stemDelayMs = orgActivationDelayMs(depth + 1, 'lead');
+  const stemDelayMs = activation?.activation_delay_ms || 0;
   const tooltipContent = liveWorker
-    ? `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)} · ${liveWhyTitle(liveWorker).replace(/\n/g, ' • ')}`
-    : `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)}`;
+    ? `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)} · ${liveWhyTitle(liveWorker).replace(/\n/g, ' • ')}${activation?.activation_reason ? ` • ${activation.activation_reason}` : ''}`
+    : `${node.displayRole ?? agent.role} · ${runtimeLabel(agent)}${activation?.activation_reason ? ` · ${activation.activation_reason}` : ''}`;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -737,8 +997,9 @@ function TreeNode({
         <OrgNodeCard
           agent={agent}
           decor={decor}
-          depth={depth}
           motionMode={motionMode}
+          activationDelayMs={activation?.activation_delay_ms || 0}
+          activationReason={activation?.activation_reason}
           displayRole={node.displayRole}
           onAgentClick={onAgentClick}
           muted={muted}
@@ -776,6 +1037,7 @@ function TreeNode({
             liveWorkerByAgent={liveWorkerByAgent}
             workloadScoreByAgent={workloadScoreByAgent}
             stalenessScoreByAgent={stalenessScoreByAgent}
+            activationByAgent={activationByAgent}
             showHeatOverlay={showHeatOverlay}
             motionMode={motionMode}
           />
@@ -800,6 +1062,7 @@ interface ChildrenGroupProps {
   liveWorkerByAgent: Map<string, WorkforceWorker>;
   workloadScoreByAgent: Map<string, number>;
   stalenessScoreByAgent: Map<string, number>;
+  activationByAgent: Map<string, OrgActivationEntry>;
   showHeatOverlay: boolean;
   motionMode: OrgMotionMode;
 }
@@ -819,6 +1082,7 @@ function ChildrenGroup({
   liveWorkerByAgent,
   workloadScoreByAgent,
   stalenessScoreByAgent,
+  activationByAgent,
   showHeatOverlay,
   motionMode,
 }: ChildrenGroupProps) {
@@ -833,7 +1097,7 @@ function ChildrenGroup({
     const childActive = edgeInFlow || subtreeHasActive(visibleChildren[0], activeIds);
     const childBlocked = subtreeHasBlocked(visibleChildren[0], blockedAgentIds);
     const edgeDirection = flowEdgeDirections.get(edgeKey) || 'down';
-    const childDelayMs = orgActivationDelayMs(depth + 1, 'lead');
+    const childDelayMs = activationByAgent.get(visibleChildren[0].id)?.activation_delay_ms || 0;
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <OrgConnector
@@ -860,6 +1124,7 @@ function ChildrenGroup({
           liveWorkerByAgent={liveWorkerByAgent}
           workloadScoreByAgent={workloadScoreByAgent}
           stalenessScoreByAgent={stalenessScoreByAgent}
+          activationByAgent={activationByAgent}
           showHeatOverlay={showHeatOverlay}
           motionMode={motionMode}
         />
@@ -891,7 +1156,7 @@ function ChildrenGroup({
               ? '0 0 9px rgba(59,142,255,0.18)'
               : '0 0 9px rgba(63,185,80,0.16)'
             : 'none';
-        const childDelayMs = orgActivationDelayMs(depth + 1, 'lead') + idx * ORG_SIBLING_STAGGER_MS;
+        const childDelayMs = (activationByAgent.get(child.id)?.activation_delay_ms || 0) + idx * 18;
 
         return (
           <div
@@ -937,6 +1202,7 @@ function ChildrenGroup({
               liveWorkerByAgent={liveWorkerByAgent}
               workloadScoreByAgent={workloadScoreByAgent}
               stalenessScoreByAgent={stalenessScoreByAgent}
+              activationByAgent={activationByAgent}
               showHeatOverlay={showHeatOverlay}
               motionMode={motionMode}
             />
@@ -975,12 +1241,103 @@ function OrgLegend({ motionMode, focusActiveChain, showHeatOverlay }: OrgLegendP
   );
 }
 
+interface RealWorldSceneProps {
+  agents: Agent[];
+  realWorldStates: Map<string, RealWorldAgentState>;
+  activationByAgent: Map<string, OrgActivationEntry>;
+  motionMode: OrgMotionMode;
+  isProjectRunning: boolean;
+  onAgentClick: (agent: Agent) => void;
+}
+
+function RealWorldScene({
+  agents,
+  realWorldStates,
+  activationByAgent,
+  motionMode,
+  isProjectRunning,
+  onAgentClick,
+}: RealWorldSceneProps) {
+  const zones: Array<{ id: RealWorldZone; label: string; description: string }> = [
+    { id: 'executive_row', label: 'Executive Row', description: 'Where the company decides, aligns, and redirects.' },
+    { id: 'briefing_area', label: 'Briefing Area', description: 'The live handoff space when the CEO mobilizes the team.' },
+    { id: 'product_pod', label: 'Product + Design', description: 'Specs, flows, and UI direction take shape here.' },
+    { id: 'engineering_pod', label: 'Engineering Pod', description: 'Implementation and systems execution happen here.' },
+    { id: 'qa_bench', label: 'QA Bench', description: 'Validation, review, and release checks.' },
+    { id: 'research_corner', label: 'Research Corner', description: 'Discovery, scope framing, and insight work.' },
+  ];
+
+  return (
+    <div className={`real-world-shell real-world-motion-${motionMode}`}>
+      <div className="real-world-stage">
+        {zones.map((zone) => {
+          const zoneAgents = agents.filter((agent) => realWorldStates.get(agent.id)?.zone === zone.id);
+          return (
+            <section key={zone.id} className={`real-world-zone real-world-zone--${zone.id}`}>
+              <div className="real-world-zone-surface" />
+              <div className="real-world-zone-meta">
+                <p className="real-world-zone-label">{zone.label}</p>
+                <p className="real-world-zone-description">{zone.description}</p>
+              </div>
+              <div className="real-world-desk-row">
+                {zoneAgents.map((agent) => {
+                  const scene = realWorldStates.get(agent.id);
+                  const activation = activationByAgent.get(agent.id);
+                  const isActive = scene?.state !== 'idle' || Boolean(activation);
+                  return (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      data-real-world-agent-id={agent.id}
+                      data-real-world-pose={scene?.pose || 'idle'}
+                      data-real-world-delay={String(scene?.delayMs || 0)}
+                      className={`real-world-agent real-world-agent--${scene?.pose || 'idle'} real-world-agent--${scene?.state || 'idle'} ${isActive ? 'real-world-agent--active' : ''}`}
+                      style={{ ['--rw-delay' as any]: `${scene?.delayMs || 0}ms` }}
+                      onClick={() => onAgentClick(agent)}
+                      title={`${agent.name} · ${scene?.reason || agent.role}${scene?.task ? ` · ${scene.task}` : ''}`}
+                    >
+                      <span className="real-world-avatar">
+                        <span className="real-world-avatar-head">{agent.name.charAt(0).toUpperCase()}</span>
+                        <span className="real-world-avatar-body" />
+                      </span>
+                      <span className="real-world-agent-card">
+                        <span className="real-world-agent-name">{agent.name}</span>
+                        <span className="real-world-agent-role">{ORG_META.get(agent.id)?.displayRole || agent.role}</span>
+                        {scene?.task ? (
+                          <span className="real-world-agent-task">{scene.task}</span>
+                        ) : (
+                          <span className="real-world-agent-task">{isProjectRunning ? scene?.reason || 'On standby' : 'Calm office state'}</span>
+                        )}
+                      </span>
+                      {(scene?.pose === 'huddle' || scene?.pose === 'presenting' || scene?.pose === 'walking') && (
+                        <span className="real-world-speech-bubble">
+                          {scene.pose === 'huddle' ? 'Briefing' : scene.pose === 'presenting' ? 'Reporting' : 'In motion'}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+      <div className="real-world-footer">
+        <span className="real-world-footer-chip">{isProjectRunning ? 'Office live' : 'Office calm'}</span>
+        <span className="real-world-footer-chip">Task-driven movement</span>
+        <span className="real-world-footer-chip">Executives brief first</span>
+      </div>
+    </div>
+  );
+}
+
 function OrgChart({ agents, loading, events, activeProjectId = '', microProjectMode = false, workforceLive }: OrgChartProps) {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [showTruthDrawer, setShowTruthDrawer] = useState(false);
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const hierarchyViewportRef = useRef<HTMLDivElement | null>(null);
   const hierarchyContentRef = useRef<HTMLDivElement | null>(null);
+  const [visualizationMode, setVisualizationMode] = useState<OverviewVisualizationMode>('org_tree');
   const [layoutMode, setLayoutMode] = useState<'hierarchy' | 'cluster' | 'timeline'>('hierarchy');
   const [hierarchyScale, setHierarchyScale] = useState(1);
   const [hierarchyHeight, setHierarchyHeight] = useState<number | null>(null);
@@ -1356,6 +1713,36 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     return names;
   }, [recentActiveIds, agentMap]);
 
+  const ceoAgent = agentMap.get('ceo');
+  const laneSections = [
+    { title: 'Leadership', ids: ['cto', 'cfo', 'ciso', 'vp-product', 'vp-engineering', 'chief-researcher'] },
+    { title: 'Product + Design', ids: ['lead-designer', 'tech-writer'] },
+    { title: 'Engineering', ids: ['lead-backend', 'lead-frontend', 'qa-lead', 'devops'] },
+    { title: 'Specialists', ids: ['security-engineer', 'data-engineer'] },
+  ] as const;
+
+  const workingAgentCount = workforceCounts.working;
+  const assignedAgentCount = workforceCounts.assigned;
+  const reportingAgentCount = workforceCounts.reporting;
+  const blockedAgentCount = workforceCounts.blocked;
+  const isProjectRunning = activeIds.size > 0 || workingAgentCount > 0 || assignedAgentCount > 0 || reportingAgentCount > 0;
+  const syncFreshness = formatFreshness(workforceLive?.client_meta?.last_success_at);
+  const baseMotionMode = toMotionMode(activeIds.size, workingAgentCount, blockedAgentCount, workforceStale);
+  const motionMode: OrgMotionMode = documentVisible ? baseMotionMode : 'quiet';
+  const activationByAgent = useMemo(
+    () => buildActivationEntries(workforceByAgent, activeProjectId),
+    [workforceByAgent, activeProjectId],
+  );
+  const realWorldStates = useMemo(
+    () => buildRealWorldStates(agents, workforceByAgent, activationByAgent, isProjectRunning),
+    [agents, workforceByAgent, activationByAgent, isProjectRunning],
+  );
+  const motionVars = {
+    ['--org-flow-duration' as any]: motionMode === 'intense' ? '1.05s' : motionMode === 'active' ? '1.45s' : '2.1s',
+    ['--org-glow-opacity' as any]: motionMode === 'intense' ? 1 : motionMode === 'active' ? 0.86 : 0.6,
+    ['--org-pulse-scale' as any]: motionMode === 'intense' ? 1.12 : motionMode === 'active' ? 1.06 : 1.02,
+  };
+
   if (loading) {
     return (
       <div className="space-y-2 py-4">
@@ -1373,28 +1760,6 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
       </p>
     );
   }
-
-  const ceoAgent = agentMap.get('ceo');
-  const laneSections = [
-    { title: 'Leadership', ids: ['cto', 'cfo', 'ciso', 'vp-product', 'vp-engineering', 'chief-researcher'] },
-    { title: 'Product + Design', ids: ['lead-designer', 'tech-writer'] },
-    { title: 'Engineering', ids: ['lead-backend', 'lead-frontend', 'qa-lead', 'devops'] },
-    { title: 'Specialists', ids: ['security-engineer', 'data-engineer'] },
-  ] as const;
-
-  const workingAgentCount = workforceCounts.working;
-  const assignedAgentCount = workforceCounts.assigned;
-  const reportingAgentCount = workforceCounts.reporting;
-  const blockedAgentCount = workforceCounts.blocked;
-  const isProjectRunning = activeIds.size > 0 || workingAgentCount > 0 || assignedAgentCount > 0 || reportingAgentCount > 0;
-  const syncFreshness = formatFreshness(workforceLive?.client_meta?.last_success_at);
-  const baseMotionMode = toMotionMode(activeIds.size, workingAgentCount, blockedAgentCount, workforceStale);
-  const motionMode: OrgMotionMode = documentVisible ? baseMotionMode : 'quiet';
-  const motionVars = {
-    ['--org-flow-duration' as any]: motionMode === 'intense' ? '1.05s' : motionMode === 'active' ? '1.45s' : '2.1s',
-    ['--org-glow-opacity' as any]: motionMode === 'intense' ? 1 : motionMode === 'active' ? 0.86 : 0.6,
-    ['--org-pulse-scale' as any]: motionMode === 'intense' ? 1.12 : motionMode === 'active' ? 1.06 : 1.02,
-  };
 
   return (
     <div
@@ -1572,56 +1937,83 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
       )}
 
       <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
-        {(['hierarchy', 'cluster', 'timeline'] as const).map((mode) => (
+        {([
+          ['org_tree', 'Org Tree'],
+          ['real_world', 'Real World'],
+        ] as const).map(([mode, label]) => (
           <button
             key={mode}
-            onClick={() => setLayoutMode(mode)}
+            onClick={() => setVisualizationMode(mode)}
             style={{
               borderRadius: '999px',
-              border: `1px solid ${layoutMode === mode ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
-              backgroundColor: layoutMode === mode ? 'rgba(59,142,255,0.12)' : 'var(--tf-surface)',
-              color: layoutMode === mode ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+              border: `1px solid ${visualizationMode === mode ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+              backgroundColor: visualizationMode === mode ? 'rgba(63,185,80,0.12)' : 'var(--tf-surface)',
+              color: visualizationMode === mode ? 'var(--tf-success)' : 'var(--tf-text-muted)',
+              fontSize: '11px',
+              fontWeight: 600,
+              padding: '4px 12px',
+              cursor: 'pointer',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {visualizationMode === 'org_tree' && (
+        <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
+          {(['hierarchy', 'cluster', 'timeline'] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setLayoutMode(mode)}
+              style={{
+                borderRadius: '999px',
+                border: `1px solid ${layoutMode === mode ? 'var(--tf-accent-blue)' : 'var(--tf-border)'}`,
+                backgroundColor: layoutMode === mode ? 'rgba(59,142,255,0.12)' : 'var(--tf-surface)',
+                color: layoutMode === mode ? 'var(--tf-accent-blue)' : 'var(--tf-text-muted)',
+                fontSize: '11px',
+                fontWeight: 600,
+                padding: '4px 10px',
+                cursor: 'pointer',
+                textTransform: 'capitalize',
+              }}
+            >
+              {mode}
+            </button>
+          ))}
+          <button
+            onClick={() => setFocusActiveChain((v) => !v)}
+            style={{
+              borderRadius: '999px',
+              border: `1px solid ${focusActiveChain ? 'var(--tf-success)' : 'var(--tf-border)'}`,
+              backgroundColor: focusActiveChain ? 'rgba(63,185,80,0.12)' : 'var(--tf-surface)',
+              color: focusActiveChain ? 'var(--tf-success)' : 'var(--tf-text-muted)',
               fontSize: '11px',
               fontWeight: 600,
               padding: '4px 10px',
               cursor: 'pointer',
-              textTransform: 'capitalize',
             }}
           >
-            {mode}
+            {focusActiveChain ? 'Focus Chain: On' : 'Focus Chain: Off'}
           </button>
-        ))}
-        <button
-          onClick={() => setFocusActiveChain((v) => !v)}
-          style={{
-            borderRadius: '999px',
-            border: `1px solid ${focusActiveChain ? 'var(--tf-success)' : 'var(--tf-border)'}`,
-            backgroundColor: focusActiveChain ? 'rgba(63,185,80,0.12)' : 'var(--tf-surface)',
-            color: focusActiveChain ? 'var(--tf-success)' : 'var(--tf-text-muted)',
-            fontSize: '11px',
-            fontWeight: 600,
-            padding: '4px 10px',
-            cursor: 'pointer',
-          }}
-        >
-          {focusActiveChain ? 'Focus Chain: On' : 'Focus Chain: Off'}
-        </button>
-        <button
-          onClick={() => setShowHeatOverlay((v) => !v)}
-          style={{
-            borderRadius: '999px',
-            border: `1px solid ${showHeatOverlay ? 'var(--tf-warning)' : 'var(--tf-border)'}`,
-            backgroundColor: showHeatOverlay ? 'rgba(240,170,74,0.12)' : 'var(--tf-surface)',
-            color: showHeatOverlay ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
-            fontSize: '11px',
-            fontWeight: 600,
-            padding: '4px 10px',
-            cursor: 'pointer',
-          }}
-        >
-          {showHeatOverlay ? 'Heat Overlay: On' : 'Heat Overlay: Off'}
-        </button>
-      </div>
+          <button
+            onClick={() => setShowHeatOverlay((v) => !v)}
+            style={{
+              borderRadius: '999px',
+              border: `1px solid ${showHeatOverlay ? 'var(--tf-warning)' : 'var(--tf-border)'}`,
+              backgroundColor: showHeatOverlay ? 'rgba(240,170,74,0.12)' : 'var(--tf-surface)',
+              color: showHeatOverlay ? 'var(--tf-warning)' : 'var(--tf-text-muted)',
+              fontSize: '11px',
+              fontWeight: 600,
+              padding: '4px 10px',
+              cursor: 'pointer',
+            }}
+          >
+            {showHeatOverlay ? 'Heat Overlay: On' : 'Heat Overlay: Off'}
+          </button>
+        </div>
+      )}
+
       <OrgLegend motionMode={motionMode} focusActiveChain={focusActiveChain} showHeatOverlay={showHeatOverlay} />
 
       {showTruthDrawer && (
@@ -1696,7 +2088,16 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
         </div>
       )}
 
-      {layoutMode === 'timeline' ? (
+      {visualizationMode === 'real_world' ? (
+        <RealWorldScene
+          agents={agents}
+          realWorldStates={realWorldStates}
+          activationByAgent={activationByAgent}
+          motionMode={motionMode}
+          isProjectRunning={isProjectRunning}
+          onAgentClick={handleAgentClick}
+        />
+      ) : layoutMode === 'timeline' ? (
         <div style={{ border: '1px solid var(--tf-border)', borderRadius: '10px', backgroundColor: 'var(--tf-surface-raised)', maxHeight: '320px', overflowY: 'auto' }}>
           {timelineEvents.length === 0 ? (
             <p className="text-xs py-4 text-center" style={{ color: 'var(--tf-text-muted)' }}>No timeline data yet.</p>
@@ -1730,8 +2131,9 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
                       workloadScore: workloadScoreByAgent.get(ceoAgent.id) || 0,
                       stalenessScore: stalenessScoreByAgent.get(ceoAgent.id) || 0,
                     }}
-                    depth={0}
                     motionMode={motionMode}
+                    activationDelayMs={activationByAgent.get(ceoAgent.id)?.activation_delay_ms || 0}
+                    activationReason={activationByAgent.get(ceoAgent.id)?.activation_reason}
                     onAgentClick={handleAgentClick}
                     showHeatOverlay={showHeatOverlay}
                     liveState={workforceStateByAgent.get(ceoAgent.id)}
@@ -1872,6 +2274,7 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
                 liveWorkerByAgent={workforceByAgent}
                 workloadScoreByAgent={workloadScoreByAgent}
                 stalenessScoreByAgent={stalenessScoreByAgent}
+                activationByAgent={activationByAgent}
                 showHeatOverlay={showHeatOverlay}
                 motionMode={motionMode}
               />
