@@ -1250,6 +1250,80 @@ interface RealWorldSceneProps {
   onAgentClick: (agent: Agent) => void;
 }
 
+interface RealWorldZoneLayout {
+  id: RealWorldZone;
+  label: string;
+  description: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  columns: number;
+}
+
+const REAL_WORLD_ZONE_LAYOUTS: RealWorldZoneLayout[] = [
+  {
+    id: 'executive_row',
+    label: 'Executive Row',
+    description: 'Where strategic direction and decisions start.',
+    left: 5,
+    top: 8,
+    width: 30,
+    height: 18,
+    columns: 4,
+  },
+  {
+    id: 'briefing_area',
+    label: 'Briefing Area',
+    description: 'The handoff zone when the CEO mobilizes the team.',
+    left: 38,
+    top: 10,
+    width: 24,
+    height: 20,
+    columns: 3,
+  },
+  {
+    id: 'product_pod',
+    label: 'Product + Design',
+    description: 'Planning, UX shaping, and product flow work.',
+    left: 65,
+    top: 10,
+    width: 30,
+    height: 22,
+    columns: 3,
+  },
+  {
+    id: 'engineering_pod',
+    label: 'Engineering Pod',
+    description: 'Implementation and architecture execution.',
+    left: 7,
+    top: 34,
+    width: 45,
+    height: 30,
+    columns: 5,
+  },
+  {
+    id: 'qa_bench',
+    label: 'QA Bench',
+    description: 'Validation checks and release confidence.',
+    left: 54,
+    top: 42,
+    width: 20,
+    height: 24,
+    columns: 2,
+  },
+  {
+    id: 'research_corner',
+    label: 'Research Corner',
+    description: 'Discovery, scope framing, and synthesis.',
+    left: 76,
+    top: 39,
+    width: 18,
+    height: 26,
+    columns: 2,
+  },
+];
+
 function RealWorldScene({
   agents,
   realWorldStates,
@@ -1258,67 +1332,122 @@ function RealWorldScene({
   isProjectRunning,
   onAgentClick,
 }: RealWorldSceneProps) {
-  const zones: Array<{ id: RealWorldZone; label: string; description: string }> = [
-    { id: 'executive_row', label: 'Executive Row', description: 'Where the company decides, aligns, and redirects.' },
-    { id: 'briefing_area', label: 'Briefing Area', description: 'The live handoff space when the CEO mobilizes the team.' },
-    { id: 'product_pod', label: 'Product + Design', description: 'Specs, flows, and UI direction take shape here.' },
-    { id: 'engineering_pod', label: 'Engineering Pod', description: 'Implementation and systems execution happen here.' },
-    { id: 'qa_bench', label: 'QA Bench', description: 'Validation, review, and release checks.' },
-    { id: 'research_corner', label: 'Research Corner', description: 'Discovery, scope framing, and insight work.' },
-  ];
+  const zoneMap = useMemo(() => {
+    const map = new Map<RealWorldZone, RealWorldZoneLayout>();
+    for (const zone of REAL_WORLD_ZONE_LAYOUTS) map.set(zone.id, zone);
+    return map;
+  }, []);
+
+  const agentsByZone = useMemo(() => {
+    const grouped = new Map<RealWorldZone, Agent[]>();
+    for (const zone of REAL_WORLD_ZONE_LAYOUTS) grouped.set(zone.id, []);
+    for (const agent of agents) {
+      const zone = realWorldStates.get(agent.id)?.zone || teamZoneForAgent(agent.id);
+      const list = grouped.get(zone) || [];
+      list.push(agent);
+      grouped.set(zone, list);
+    }
+    for (const [zone, list] of grouped.entries()) {
+      list.sort((a, b) => {
+        const aDelay = activationByAgent.get(a.id)?.activation_delay_ms ?? Number.MAX_SAFE_INTEGER;
+        const bDelay = activationByAgent.get(b.id)?.activation_delay_ms ?? Number.MAX_SAFE_INTEGER;
+        if (aDelay !== bDelay) return aDelay - bDelay;
+        return a.name.localeCompare(b.name);
+      });
+      grouped.set(zone, list);
+    }
+    return grouped;
+  }, [agents, realWorldStates, activationByAgent]);
+
+  const positionedAgents = useMemo(() => {
+    const out: Array<{ agent: Agent; scene: RealWorldAgentState; left: number; top: number }> = [];
+    for (const zone of REAL_WORLD_ZONE_LAYOUTS) {
+      const zoneAgents = agentsByZone.get(zone.id) || [];
+      zoneAgents.forEach((agent, index) => {
+        const scene = realWorldStates.get(agent.id);
+        if (!scene) return;
+        const col = index % zone.columns;
+        const row = Math.floor(index / zone.columns);
+        const columnGap = zone.columns <= 1 ? 0 : (zone.width - 16) / (zone.columns - 1);
+        const jitter = (stableRunScopedHash(`${agent.id}:${scene.delayMs}`) % 5) - 2;
+        const left = zone.left + 8 + col * columnGap + jitter * 0.35;
+        const top = zone.top + 14 + row * 9 + (col % 2 === 0 ? 0.6 : 0);
+        out.push({ agent, scene, left, top });
+      });
+    }
+    return out;
+  }, [agentsByZone, realWorldStates]);
 
   return (
-    <div className={`real-world-shell real-world-motion-${motionMode}`}>
-      <div className="real-world-stage">
-        {zones.map((zone) => {
-          const zoneAgents = agents.filter((agent) => realWorldStates.get(agent.id)?.zone === zone.id);
+    <div className={`real-world-shell real-world-motion-${motionMode} ${isProjectRunning ? 'real-world-running' : 'real-world-idle'}`}>
+      <div className="real-world-office">
+        <div className="real-world-floor" />
+        <div className="real-world-wall real-world-wall--top" />
+        <div className="real-world-wall real-world-wall--left" />
+
+        {REAL_WORLD_ZONE_LAYOUTS.map((zone) => (
+          <section
+            key={zone.id}
+            className={`real-world-zone-iso real-world-zone-iso--${zone.id}`}
+            style={{
+              left: `${zone.left}%`,
+              top: `${zone.top}%`,
+              width: `${zone.width}%`,
+              height: `${zone.height}%`,
+            }}
+          >
+            <div className="real-world-zone-plate" />
+            <div className="real-world-zone-furniture">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="real-world-zone-meta">
+              <p className="real-world-zone-label">{zone.label}</p>
+              <p className="real-world-zone-description">{zone.description}</p>
+            </div>
+          </section>
+        ))}
+
+        {positionedAgents.map(({ agent, scene, left, top }) => {
+          const activation = activationByAgent.get(agent.id);
+          const isActive = scene.state !== 'idle' || Boolean(activation);
+          const sceneZone = zoneMap.get(scene.zone);
           return (
-            <section key={zone.id} className={`real-world-zone real-world-zone--${zone.id}`}>
-              <div className="real-world-zone-surface" />
-              <div className="real-world-zone-meta">
-                <p className="real-world-zone-label">{zone.label}</p>
-                <p className="real-world-zone-description">{zone.description}</p>
-              </div>
-              <div className="real-world-desk-row">
-                {zoneAgents.map((agent) => {
-                  const scene = realWorldStates.get(agent.id);
-                  const activation = activationByAgent.get(agent.id);
-                  const isActive = scene?.state !== 'idle' || Boolean(activation);
-                  return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      data-real-world-agent-id={agent.id}
-                      data-real-world-pose={scene?.pose || 'idle'}
-                      data-real-world-delay={String(scene?.delayMs || 0)}
-                      className={`real-world-agent real-world-agent--${scene?.pose || 'idle'} real-world-agent--${scene?.state || 'idle'} ${isActive ? 'real-world-agent--active' : ''}`}
-                      style={{ ['--rw-delay' as any]: `${scene?.delayMs || 0}ms` }}
-                      onClick={() => onAgentClick(agent)}
-                      title={`${agent.name} · ${scene?.reason || agent.role}${scene?.task ? ` · ${scene.task}` : ''}`}
-                    >
-                      <span className="real-world-avatar">
-                        <span className="real-world-avatar-head">{agent.name.charAt(0).toUpperCase()}</span>
-                        <span className="real-world-avatar-body" />
-                      </span>
-                      <span className="real-world-agent-card">
-                        <span className="real-world-agent-name">{agent.name}</span>
-                        <span className="real-world-agent-role">{ORG_META.get(agent.id)?.displayRole || agent.role}</span>
-                        {scene?.task ? (
-                          <span className="real-world-agent-task">{scene.task}</span>
-                        ) : (
-                          <span className="real-world-agent-task">{isProjectRunning ? scene?.reason || 'On standby' : 'Calm office state'}</span>
-                        )}
-                      </span>
-                      {(scene?.pose === 'huddle' || scene?.pose === 'presenting' || scene?.pose === 'walking') && (
-                        <span className="real-world-speech-bubble">
-                          {scene.pose === 'huddle' ? 'Briefing' : scene.pose === 'presenting' ? 'Reporting' : 'In motion'}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
+            <button
+              key={agent.id}
+              type="button"
+              data-real-world-agent-id={agent.id}
+              data-real-world-pose={scene.pose || 'idle'}
+              data-real-world-delay={String(scene.delayMs || 0)}
+              className={`real-world-agent real-world-agent--${scene.pose || 'idle'} real-world-agent--${scene.state || 'idle'} ${isActive ? 'real-world-agent--active' : ''}`}
+              style={{
+                ['--rw-delay' as any]: `${scene.delayMs || 0}ms`,
+                left: `${left}%`,
+                top: `${top}%`,
+              }}
+              onClick={() => onAgentClick(agent)}
+              title={`${agent.name} · ${scene.reason || agent.role}${scene.task ? ` · ${scene.task}` : ''}`}
+            >
+              <span className="real-world-avatar">
+                <span className="real-world-avatar-head">{agent.name.charAt(0).toUpperCase()}</span>
+                <span className="real-world-avatar-body" />
+              </span>
+              <span className="real-world-agent-card">
+                <span className="real-world-agent-name">{agent.name}</span>
+                <span className="real-world-agent-role">{ORG_META.get(agent.id)?.displayRole || agent.role}</span>
+                {scene.task ? (
+                  <span className="real-world-agent-task">{scene.task}</span>
+                ) : (
+                  <span className="real-world-agent-task">{isProjectRunning ? scene.reason || `Working in ${sceneZone?.label || 'office'}` : 'Calm office state'}</span>
+                )}
+              </span>
+              {(scene.pose === 'huddle' || scene.pose === 'presenting' || scene.pose === 'walking') && (
+                <span className="real-world-speech-bubble">
+                  {scene.pose === 'huddle' ? 'Briefing' : scene.pose === 'presenting' ? 'Reporting' : 'Moving'}
+                </span>
+              )}
+            </button>
           );
         })}
       </div>

@@ -719,9 +719,10 @@ textarea:focus-visible {
   position: relative;
   border: 1px solid var(--tf-border);
   border-radius: 18px;
-  padding: 18px;
+  padding: 14px;
   overflow: hidden;
   background:
+    radial-gradient(1200px 320px at 16% -6%, rgba(59,142,255,0.14), transparent 72%),
     linear-gradient(180deg, color-mix(in srgb, var(--tf-surface-raised) 92%, var(--tf-bg)) 0%, color-mix(in srgb, var(--tf-bg) 94%, var(--tf-surface)) 100%);
 }
 
@@ -730,86 +731,143 @@ textarea:focus-visible {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.22;
+  opacity: 0.2;
   background:
-    radial-gradient(900px 220px at 18% 8%, rgba(59,142,255,0.18), transparent 70%),
-    linear-gradient(135deg, rgba(63,185,80,0.08), transparent 45%),
-    repeating-linear-gradient(150deg, rgba(255,255,255,0.028) 0px, rgba(255,255,255,0.028) 1px, transparent 1px, transparent 48px);
+    radial-gradient(900px 220px at 82% 8%, rgba(63,185,80,0.15), transparent 74%),
+    repeating-linear-gradient(150deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 56px);
 }
 
-.real-world-stage {
+.real-world-running::before {
+  animation: real-world-bg-shift 18s ease-in-out infinite;
+}
+
+.real-world-office {
   position: relative;
   z-index: 1;
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 14px;
+  height: 460px;
+  border-radius: 16px;
+  overflow: hidden;
+  background:
+    linear-gradient(165deg, rgba(255,255,255,0.02), rgba(0,0,0,0.08)),
+    color-mix(in srgb, var(--tf-surface) 95%, var(--tf-bg));
+  border: 1px solid color-mix(in srgb, var(--tf-border) 84%, transparent);
+  transform: perspective(1200px) rotateX(15deg);
+  transform-origin: center top;
 }
 
-.real-world-zone {
+.real-world-floor {
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(135deg, rgba(83,127,170,0.16) 0px, rgba(83,127,170,0.16) 1px, transparent 1px, transparent 26px),
+    repeating-linear-gradient(45deg, rgba(83,127,170,0.14) 0px, rgba(83,127,170,0.14) 1px, transparent 1px, transparent 26px),
+    radial-gradient(800px 280px at 50% -15%, rgba(80,176,255,0.14), transparent 72%);
+  animation: real-world-floor-drift 20s linear infinite;
+}
+
+.real-world-wall {
+  position: absolute;
+  background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(18,33,52,0.24));
+  border: 1px solid color-mix(in srgb, var(--tf-border) 82%, transparent);
+  box-shadow: 0 12px 20px rgba(0, 0, 0, 0.18);
+}
+
+.real-world-wall--top {
+  left: 6%;
+  right: 6%;
+  top: 4%;
+  height: 10%;
+  border-radius: 14px 14px 8px 8px;
+}
+
+.real-world-wall--left {
+  left: 4%;
+  top: 9%;
+  width: 8%;
+  bottom: 12%;
+  border-radius: 14px 8px 8px 14px;
+}
+
+.real-world-zone-iso {
   position: relative;
-  min-height: 158px;
-  padding: 16px 14px 18px;
-  border-radius: 18px;
+  position: absolute;
+  border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--tf-border) 88%, transparent);
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)),
+    linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.005)),
     color-mix(in srgb, var(--tf-surface) 92%, transparent);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
-  transform: skewY(-3deg);
+  box-shadow: 0 12px 20px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.03);
+  transform: skewY(-7deg);
   overflow: hidden;
+  transition: border-color 0.24s ease, box-shadow 0.24s ease;
 }
 
-.real-world-zone-surface {
+.real-world-zone-plate {
+  position: absolute;
+  inset: auto 6px 6px 6px;
+  height: 26px;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.08)),
+    color-mix(in srgb, var(--tf-surface-raised) 90%, transparent);
+  transform: skewY(7deg);
+}
+
+.real-world-zone-furniture {
   position: absolute;
   inset: auto 10px 10px 10px;
-  height: 34px;
-  border-radius: 12px;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.06)),
-    color-mix(in srgb, var(--tf-surface-raised) 90%, transparent);
-  transform: skewY(3deg);
+  display: flex;
+  gap: 6px;
+  transform: skewY(7deg);
 }
 
-.real-world-zone--executive_row,
-.real-world-zone--briefing_area,
-.real-world-zone--product_pod,
-.real-world-zone--engineering_pod,
-.real-world-zone--qa_bench,
-.real-world-zone--research_corner {
-  grid-column: span 6;
+.real-world-zone-furniture span {
+  height: 8px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--tf-border) 82%, transparent);
+  background: color-mix(in srgb, var(--tf-surface-raised) 86%, transparent);
+}
+
+.real-world-zone-furniture span:nth-child(1) { width: 22px; }
+.real-world-zone-furniture span:nth-child(2) { width: 14px; }
+.real-world-zone-furniture span:nth-child(3) { width: 18px; }
+
+.real-world-zone-iso--briefing_area {
+  border-color: color-mix(in srgb, var(--tf-success) 45%, var(--tf-border));
+}
+
+.real-world-zone-iso--engineering_pod {
+  border-color: color-mix(in srgb, var(--tf-accent-blue) 40%, var(--tf-border));
+}
+
+.real-world-zone-iso--product_pod {
+  border-color: color-mix(in srgb, var(--tf-warning) 40%, var(--tf-border));
 }
 
 .real-world-zone-meta,
-.real-world-desk-row {
-  position: relative;
+.real-world-agent {
+  position: absolute;
   z-index: 1;
-  transform: skewY(3deg);
+  transform: skewY(7deg);
 }
 
 .real-world-zone-label {
-  margin: 0 0 4px;
-  font-size: 11px;
+  margin: 8px 10px 4px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   color: var(--tf-text-muted);
 }
 
 .real-world-zone-description {
-  margin: 0 0 12px;
-  font-size: 11px;
+  margin: 0 10px;
+  font-size: 10px;
   color: var(--tf-text-secondary);
-  max-width: 320px;
-}
-
-.real-world-desk-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: flex-end;
+  line-height: 1.2;
+  max-width: 190px;
 }
 
 .real-world-agent {
-  position: relative;
   border: 0;
   background: transparent;
   padding: 0;
@@ -818,11 +876,11 @@ textarea:focus-visible {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  transition: transform 0.28s ease, opacity 0.28s ease;
+  transition: transform 0.28s ease, opacity 0.28s ease, filter 0.28s ease;
 }
 
 .real-world-agent:hover {
-  transform: translateY(-3px);
+  transform: skewY(7deg) translateY(-5px);
 }
 
 .real-world-agent--active {
@@ -844,7 +902,7 @@ textarea:focus-visible {
 .real-world-avatar-head {
   width: 24px;
   height: 24px;
-  border-radius: 10px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--tf-success) 86%, white 10%);
   color: var(--tf-bg);
   display: flex;
@@ -856,20 +914,20 @@ textarea:focus-visible {
 }
 
 .real-world-avatar-body {
-  width: 18px;
-  height: 14px;
-  border-radius: 6px;
+  width: 20px;
+  height: 13px;
+  border-radius: 4px;
   background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(59,142,255,0.38));
 }
 
 .real-world-agent-card {
-  min-width: 108px;
-  max-width: 150px;
+  min-width: 112px;
+  max-width: 160px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 8px 10px;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid var(--tf-border);
   background: color-mix(in srgb, var(--tf-surface-raised) 94%, transparent);
   text-align: center;
@@ -948,15 +1006,33 @@ textarea:focus-visible {
   padding: 3px 9px;
 }
 
+.real-world-motion-intense .real-world-agent--walking {
+  animation-duration: 1.6s;
+}
+
+.real-world-motion-quiet .real-world-agent--walking {
+  animation-duration: 2.9s;
+}
+
+@keyframes real-world-bg-shift {
+  0%, 100% { opacity: 0.18; }
+  50% { opacity: 0.32; }
+}
+
+@keyframes real-world-floor-drift {
+  0% { background-position: 0 0, 0 0, 0 0; }
+  100% { background-position: 42px 24px, -42px 24px, 0 0; }
+}
+
 @keyframes real-world-agent-enter {
   0% { opacity: 0; transform: translateY(10px) scale(0.97); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 1; transform: skewY(7deg) translateY(0) scale(1); }
 }
 
 @keyframes real-world-walk {
-  0%, 100% { transform: translate3d(0, 0, 0); }
-  25% { transform: translate3d(3px, -2px, 0); }
-  75% { transform: translate3d(-3px, -1px, 0); }
+  0%, 100% { transform: skewY(7deg) translate3d(0, 0, 0); }
+  25% { transform: skewY(7deg) translate3d(4px, -3px, 0); }
+  75% { transform: skewY(7deg) translate3d(-4px, -2px, 0); }
 }
 
 /* ---- Project approval card entrance ---- */
@@ -2031,17 +2107,17 @@ body.compact-mode .h-10 { height: 32px !important; }
     font-size: 14px;
   }
 
-  .real-world-stage {
-    grid-template-columns: 1fr;
+  .real-world-office {
+    height: 560px;
+    transform: perspective(900px) rotateX(12deg);
   }
 
-  .real-world-zone--executive_row,
-  .real-world-zone--briefing_area,
-  .real-world-zone--product_pod,
-  .real-world-zone--engineering_pod,
-  .real-world-zone--qa_bench,
-  .real-world-zone--research_corner {
-    grid-column: span 1;
+  .real-world-zone-description {
+    display: none;
+  }
+
+  .real-world-wall--left {
+    width: 6%;
   }
 
   .header-controls {
