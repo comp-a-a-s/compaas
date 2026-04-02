@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Isometric monitor">
-  <polygon points="26,34 58,26 72,34 40,42" fill="#9bb7d4"/>
-  <polygon points="40,42 72,34 72,56 40,64" fill="#6f8ba8"/>
-  <polygon points="26,34 40,42 40,64 26,56" fill="#5f7791"/>
-  <rect x="44" y="64" width="12" height="4" rx="2" fill="#495d74"/>
-</svg>

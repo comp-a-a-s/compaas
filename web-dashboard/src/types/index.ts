@@ -199,13 +199,7 @@ export type OrgVisualTier = 'executive' | 'lead' | 'specialist';
 export type OrgMotionMode = 'quiet' | 'active' | 'intense';
 export type OrgNodeState = WorkforceState | 'idle';
 export type OrgConnectorActivityMode = 'idle' | 'assigned' | 'working' | 'reporting' | 'blocked';
-export type OverviewVisualizationMode = 'org_tree' | 'real_world';
 export type OrgActivationPhase = 'executive' | 'lead' | 'specialist';
-export type RealWorldAgentPose = 'seated' | 'walking' | 'huddle' | 'presenting' | 'idle';
-export type RealWorldZone = 'executive_row' | 'product_pod' | 'engineering_pod' | 'research_corner' | 'qa_bench' | 'briefing_area';
-export type RealWorldMovementStage = 'dispatch' | 'executing' | 'reporting' | 'idle';
-export type RealWorldFrameState = 'intro' | 'loop' | 'transition';
-export type RealWorldBubbleState = 'none' | 'briefing' | 'reporting' | 'blocked' | 'focus';
 
 export interface OrgNodeDecor {
   tier: OrgVisualTier;
@@ -224,27 +218,6 @@ export interface OrgActivationEntry {
   activation_delay_ms: number;
   activation_reason: string;
   connector_mode: OrgConnectorActivityMode;
-  movement_route?: {
-    from_zone: RealWorldZone;
-    to_zone: RealWorldZone;
-    stage: RealWorldMovementStage;
-    progress: number;
-  };
-}
-
-export interface RealWorldSpriteFrame {
-  id: string;
-  src: string;
-  width?: number;
-  height?: number;
-}
-
-export interface RealWorldSpriteManifest {
-  atlas_path: string;
-  role_variants: Record<string, string>;
-  frame_map: Record<string, RealWorldSpriteFrame>;
-  fallback_frame: string;
-  props: Record<string, string>;
 }
 
 export interface WorkforceWorker {

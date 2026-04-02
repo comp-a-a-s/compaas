@@ -542,7 +542,7 @@ test('workforce states stay consistent across overview and agents @smoke', async
   await expect(page.getByText('Implement signup form validation').first()).toBeVisible();
 });
 
-test('overview live sequencing activates executives before lower tiers and supports real world mode @smoke', async ({ page }) => {
+test('overview live sequencing activates executives before lower tiers @smoke', async ({ page }) => {
   await page.goto('/');
 
   const ceoDelay = Number(await page.locator('[data-org-node-id="ceo"]').getAttribute('data-org-delay'));
@@ -551,48 +551,6 @@ test('overview live sequencing activates executives before lower tiers and suppo
 
   expect(ceoDelay).toBeLessThan(ctoDelay);
   expect(ctoDelay).toBeLessThan(frontendLeadDelay);
-
-  await page.getByRole('button', { name: 'Real World' }).click();
-  await expect(page.locator('[data-real-world-office]')).toBeVisible();
-  await expect(page.locator('[data-real-world-furniture]')).toBeVisible();
-  await expect(page.locator('.real-world-wall--top')).toBeVisible();
-  await expect(page.getByText('Executive Row')).toBeVisible();
-  await expect(page.getByText('Office live')).toBeVisible();
-  await expect(page.locator('[data-real-world-agent-id="ceo"]')).toHaveAttribute('data-real-world-pose', /huddle|presenting/);
-
-  await page.getByRole('button', { name: 'Org Tree' }).click();
-  await expect(page.locator('[data-org-node-id="ceo"]')).toBeVisible();
-});
-
-test('real world mode falls back to calm office state without live workforce @smoke', async ({ page }) => {
-  await page.unroute('**/api/workforce/live**');
-  await page.route('**/api/workforce/live**', async (route) => {
-    const url = new URL(route.request().url());
-    await route.fulfill({
-      json: {
-        status: 'ok',
-        as_of: workforcePayload.as_of,
-        project_id: url.searchParams.get('project_id') || null,
-        counts: { assigned: 0, working: 0, reporting: 0, blocked: 0 },
-        workers: [],
-      },
-    });
-  });
-
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Real World' }).click();
-
-  await expect(page.getByText('Office calm')).toBeVisible();
-  await expect(page.getByText('Calm office state').first()).toBeVisible();
-});
-
-test('real world mode auto-falls back to org tree on mobile viewport @smoke', async ({ page }) => {
-  await page.setViewportSize({ width: 760, height: 980 });
-  await page.goto('/');
-
-  const realWorldToggle = page.getByRole('button', { name: 'Real World' });
-  await expect(realWorldToggle).toBeDisabled();
-  await expect(page.getByText('Real World mode is available on desktop/tablet. Showing Org Tree on mobile.')).toBeVisible();
   await expect(page.locator('[data-org-node-id="ceo"]')).toBeVisible();
 });
 
@@ -699,6 +657,10 @@ test('ceo chat renders structured response with links, wrapping, focus, and icon
   projectsListPayload = [];
 
   await page.setViewportSize({ width: 1366, height: 900 });
+  await page.addInitScript(() => {
+    localStorage.setItem('compaas_chat_maximized', 'false');
+    localStorage.removeItem('compaas_chat_split_width');
+  });
   await page.goto('/');
   const openChatButton = page.getByRole('button', { name: 'Open CEO chat' });
   if (await openChatButton.count()) {

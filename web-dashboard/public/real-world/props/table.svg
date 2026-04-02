@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Isometric meeting table">
-  <polygon points="20,44 72,30 104,48 52,62" fill="#d9c29b"/>
-  <polygon points="52,62 104,48 104,78 52,92" fill="#b89e76"/>
-  <polygon points="20,44 52,62 52,92 20,74" fill="#a38b66"/>
-  <rect x="62" y="44" width="18" height="9" rx="2" fill="#58708f" transform="skewY(-10)"/>
-</svg>
