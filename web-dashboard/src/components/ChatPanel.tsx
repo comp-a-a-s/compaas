@@ -496,6 +496,10 @@ function normalizeRunStatusEvent(value: unknown): RunStatusEvent | null {
       };
       const task = String(item.task || '').trim();
       if (task) payload.task = task;
+      const source = String(item.source || '').trim().toLowerCase();
+      if (source === 'real' || source === 'synthetic') payload.source = source;
+      const evidenceLevel = String(item.evidence_level || '').trim().toLowerCase();
+      if (evidenceLevel === 'observed' || evidenceLevel === 'planned') payload.evidence_level = evidenceLevel;
       return payload;
     })
     .filter((entry): entry is RunStatusEvent['active_agents'][number] => entry !== null);
@@ -3736,11 +3740,12 @@ export default function ChatPanel({
                       {Array.isArray(liveRunStatus.active_agents) && liveRunStatus.active_agents.length > 0 ? (
                         liveRunStatus.active_agents.slice(0, 4).map((agent) => (
                           <span
-                            key={`${agent.agent_id}-${agent.state}`}
+                            key={`${agent.agent_id}-${agent.state}-${agent.source || 'real'}`}
                             className="px-2 py-1 rounded-full text-[11px]"
                             style={{ border: '1px solid var(--tf-border)', color: 'var(--tf-text-secondary)', backgroundColor: 'var(--tf-surface)' }}
                           >
                             {agent.agent_name} · {agent.state}
+                            {agent.evidence_level ? ` · ${agent.evidence_level}` : ''}
                           </span>
                         ))
                       ) : (

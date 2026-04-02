@@ -362,8 +362,11 @@ function OrgNodeCard({
     : !muted && isActive
       ? liveStateLabel(effectiveState || 'working')
       : null;
+  const evidenceLabel = liveWorker
+    ? (String(liveWorker.source || '').toLowerCase() === 'synthetic' ? 'planned' : 'observed')
+    : '';
   const liveMetaLabel = liveWorker
-    ? `${liveWorker.run_id ? `${liveWorker.run_id.slice(0, 10)} ` : ''}${liveWorker.source || 'real'} · ${formatElapsedSeconds(liveWorker.elapsed_seconds)}`
+    ? `${liveWorker.run_id ? `${liveWorker.run_id.slice(0, 10)} ` : ''}${evidenceLabel} · ${liveWorker.source || 'real'} · ${formatElapsedSeconds(liveWorker.elapsed_seconds)}`
     : '';
   const staleVisible = !muted && liveWorker && decor.stalenessScore >= 62;
   const roleLabel = displayRole ?? agent.role;
@@ -374,6 +377,7 @@ function OrgNodeCard({
     `State ${stateLabel}`,
     liveWorker?.task ? `Task ${liveWorker.task}` : '',
     liveWorker?.run_id ? `Run ${liveWorker.run_id}` : '',
+    evidenceLabel ? `Evidence ${evidenceLabel}` : '',
     liveWorker?.source ? `Source ${liveWorker.source}` : '',
     liveWorker?.updated_at ? `Updated ${formatFreshness(liveWorker.updated_at)}` : '',
     liveWorker ? `Elapsed ${formatElapsedSeconds(liveWorker.elapsed_seconds)}` : '',

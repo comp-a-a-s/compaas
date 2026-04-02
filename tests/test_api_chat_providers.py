@@ -294,6 +294,13 @@ def test_infer_support_agents_respects_configured_max_agents():
     assert len(agents) == 2
 
 
+def test_resolve_delegated_agent_id_maps_known_aliases():
+    assert api._resolve_delegated_agent_id("lead-frontend") == "lead-frontend"
+    assert api._resolve_delegated_agent_id("Chief Product Officer") == "vp-product"
+    assert api._resolve_delegated_agent_id("Lena") == "lead-designer"
+    assert api._resolve_delegated_agent_id("unknown-specialist") == ""
+
+
 @pytest.mark.asyncio
 async def test_handle_ceo_claude_apikey_mode_requires_key():
     ws = _FakeWebSocket()
@@ -366,6 +373,55 @@ async def test_handle_ceo_claude_streams_chunks_actions_and_results(monkeypatch)
     assert "chunk" in event_types
     assert "action" in event_types
     assert "action_result" in event_types
+
+
+@pytest.mark.asyncio
+async def test_handle_ceo_claude_blocks_invalid_task_subagent(monkeypatch):
+    lines = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Task",
+                            "input": {"subagent_type": "unknown-specialist", "description": "Do the work"},
+                        }
+                    ]
+                },
+            }
+        ),
+        json.dumps({"type": "result", "result": "Final CEO answer"}),
+    ]
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess(lines=lines, returncode=0)
+
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(api, "_emit_chat_activity", lambda *args, **kwargs: None)
+
+    ws = _FakeWebSocket()
+    result = await api._handle_ceo_claude(
+        websocket=ws,
+        prompt="run",
+        claude_path="/usr/bin/claude",
+        llm_cfg={"anthropic_mode": "cli"},
+        ceo_name="Marcus",
+    )
+
+    assert result == "Final CEO answer"
+    assert any(
+        event.get("type") == "warning"
+        and "delegation blocked" in str(event.get("content", "")).lower()
+        for event in ws.events
+    )
+    assert any(
+        event.get("type") == "action_detail"
+        and isinstance(event.get("content"), dict)
+        and str(event["content"].get("invalid_target", "")) == "unknown-specialist"
+        for event in ws.events
+    )
 
 
 @pytest.mark.asyncio

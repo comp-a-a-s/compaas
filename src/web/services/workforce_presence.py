@@ -24,6 +24,7 @@ LIVE_STATES = {"assigned", "working", "reporting", "blocked"}
 TERMINAL_WORK_STATES = {"completed", "failed"}
 ACTIVE_RUN_STATES = {"queued", "planning", "executing", "verifying"}
 ASSIGNED_STALE_SECONDS = 90
+ASSIGNED_MAX_SECONDS = 900
 WORKING_STALE_SECONDS = 240
 REPORTING_STALE_SECONDS = 90
 BLOCKED_STALE_SECONDS = 600
@@ -468,11 +469,20 @@ class WorkforcePresenceService:
             run_id = str(row.get("run_id", "") or "").strip()
             run_active = self._run_is_active(run_id)
 
-            if state == "assigned" and run_active and age_seconds >= ASSIGNED_STALE_SECONDS:
-                row["state"] = "working"
-                row["task"] = _sanitize_task_text(str(row.get("task", "") or "")) or "Execution in progress"
-                row["updated_at"] = now_iso
-                changed = True
+            if state == "assigned":
+                source = str(row.get("source", "real") or "real").strip().lower()
+                # Synthetic assignment pulses are planning hints only; never
+                # auto-promote synthetic rows to active execution states.
+                if source == "synthetic" and age_seconds >= ASSIGNED_STALE_SECONDS:
+                    self._workers.pop(work_item_id, None)
+                    changed = True
+                    continue
+                # Real assignment rows remain assigned until real execution
+                # evidence arrives. We only expire stale rows to avoid false
+                # "working" states and long-lived stale entries.
+                if (not run_active and age_seconds >= ASSIGNED_STALE_SECONDS) or age_seconds >= ASSIGNED_MAX_SECONDS:
+                    self._workers.pop(work_item_id, None)
+                    changed = True
                 continue
             if state == "working" and age_seconds >= WORKING_STALE_SECONDS:
                 if run_active:

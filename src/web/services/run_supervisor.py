@@ -128,6 +128,11 @@ def _build_active_agents(workforce_snapshot: dict[str, Any], run_id: str) -> lis
             "agent_name": agent_name,
             "state": state or "working",
         }
+        source = str(worker.get("source", "") or "real").strip().lower()
+        if source not in {"real", "synthetic"}:
+            source = "real"
+        payload["source"] = source
+        payload["evidence_level"] = "planned" if source == "synthetic" else "observed"
         if task:
             payload["task"] = task
         result.append(payload)

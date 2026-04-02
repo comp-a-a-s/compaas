@@ -223,6 +223,8 @@ class TestListProjectsEndpoint:
         lane = lanes[0]
         assert lane["owner"] == "vinod"
         assert lane["status"] == "in_progress"
+        assert lane["source"] == "real"
+        assert lane["evidence_level"] == "observed"
         assert "dashboard shell and auth flow" in lane["headline"].lower()
 
     def test_list_includes_launch_artifact_and_run_metadata(self, client, monkeypatch):
@@ -518,6 +520,8 @@ class TestGetProjectEndpoint:
         lanes = data.get("high_level_tasks")
         assert isinstance(lanes, list)
         assert lanes[0]["owner"] == "ceo"
+        assert lanes[0]["source"] == "real"
+        assert lanes[0]["evidence_level"] == "observed"
         assert "kickoff scope and acceptance criteria" in lanes[0]["headline"].lower()
 
     def test_response_contains_project_launch_metadata(self, client, monkeypatch):

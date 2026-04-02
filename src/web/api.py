@@ -52,6 +52,7 @@ from src.web.services.integration_service import IntegrationService
 from src.web.services.context_pack_service import ContextPackService
 from src.web.services.review_service import ReviewService
 from src.web.services.workforce_presence import WorkforcePresenceService
+from src.web.services.delegation_ledger import DelegationLedgerService
 from src.web.services.run_supervisor import ACTIVE_RUN_STATES, build_run_status_payload, detect_run_incident
 from src.web.routers.v1 import V1Context, create_v1_router
 from src.web.template_rendering import render_agent_templates
@@ -77,6 +78,7 @@ integration_service = IntegrationService(DATA_DIR, workspace_root=WORKSPACE_ROOT
 context_pack_service = ContextPackService(DATA_DIR)
 review_service = ReviewService(DATA_DIR)
 workforce_presence_service = WorkforcePresenceService(DATA_DIR, run_service=run_service)
+delegation_ledger_service = DelegationLedgerService(DATA_DIR)
 try:
     workforce_presence_service.rebuild_from_activity_log_and_runs(
         activity_log_path=os.path.join(DATA_DIR, "activity.log"),
@@ -84,6 +86,22 @@ try:
     )
 except Exception:
     logger.warning("Failed to rebuild workforce presence snapshot at startup.", exc_info=True)
+try:
+    activity_log_path = os.path.join(DATA_DIR, "activity.log")
+    if os.path.exists(activity_log_path):
+        with open(activity_log_path, "r", encoding="utf-8", errors="replace") as activity_stream:
+            for raw_line in activity_stream:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    delegation_ledger_service.ingest_event(event)
+except Exception:
+    logger.warning("Failed to rebuild delegation ledger snapshot at startup.", exc_info=True)
 
 UPDATE_LOG_PATH = os.path.join(DATA_DIR, "update_events.log")
 
@@ -1045,6 +1063,32 @@ def _compute_project_high_level_tasks(
     *,
     limit: int = 12,
 ) -> tuple[list[dict[str, str]], str]:
+    project_id = str(project.get("id", "") or "").strip()
+    if project_id:
+        lanes_from_ledger = delegation_ledger_service.project_lanes(project_id, limit=max(limit, 8))
+        if lanes_from_ledger:
+            latest_update = max(
+                (str(row.get("updated_at", "") or "").strip() for row in lanes_from_ledger),
+                default="",
+            )
+            if limit > 0:
+                lanes_from_ledger = lanes_from_ledger[:limit]
+            normalized_lanes = [
+                {
+                    "owner": str(row.get("owner", "") or ""),
+                    "headline": str(row.get("headline", "") or ""),
+                    "status": _normalize_lane_status(row.get("status")),
+                    "source": str(row.get("source", "real") or "real"),
+                    "evidence_level": str(row.get("evidence_level", "observed") or "observed"),
+                    "updated_at": str(row.get("updated_at", "") or ""),
+                    "run_id": str(row.get("run_id", "") or ""),
+                }
+                for row in lanes_from_ledger
+                if str(row.get("owner", "") or "").strip() and str(row.get("headline", "") or "").strip()
+            ]
+            if normalized_lanes:
+                return normalized_lanes, latest_update
+
     best_by_owner: dict[str, dict[str, str]] = {}
     best_rank: dict[str, tuple[int, str]] = {}
     latest_update = ""
@@ -1076,6 +1120,10 @@ def _compute_project_high_level_tasks(
             "owner": owner,
             "headline": headline,
             "status": status,
+            "source": "real",
+            "evidence_level": "observed",
+            "updated_at": updated_at,
+            "run_id": "",
         }
 
     ordered = sorted(
@@ -1229,6 +1277,10 @@ def _enrich_project_payload(project: dict[str, Any], tasks: list[dict[str, Any]]
         })
         if assignees:
             team = assignees
+        elif high_level_tasks:
+            lane_owners = [str(row.get("owner", "") or "").strip() for row in high_level_tasks if str(row.get("owner", "") or "").strip()]
+            if lane_owners:
+                team = _ordered_unique(lane_owners)
     launch_links = _project_launch_links(enriched)
     last_run = _project_last_run(project_id)
     team_lanes = high_level_tasks[:8]
@@ -4772,6 +4824,7 @@ def _emit_chat_activity(
         metadata=normalized_metadata,
     )
     workforce_presence_service.ingest_event(event_payload)
+    delegation_ledger_service.ingest_event(event_payload)
 
 
 def _transition_run_state(
@@ -4969,6 +5022,39 @@ def _ordered_unique(values: list[str]) -> list[str]:
     return ordered
 
 
+def _normalize_agent_token(value: str) -> str:
+    token = str(value or "").strip().lower()
+    token = token.replace("_", "-").replace(" ", "-")
+    token = re.sub(r"[^a-z0-9-]", "", token)
+    token = re.sub(r"-{2,}", "-", token).strip("-")
+    return token
+
+
+def _resolve_delegated_agent_id(raw_value: str) -> str:
+    """Resolve delegation target to a canonical roster ID."""
+    token = _normalize_agent_token(raw_value)
+    if not token:
+        return ""
+    if token in AGENT_REGISTRY and token != "ceo":
+        return token
+    collapsed = token.replace("-", "")
+    for agent_id, info in AGENT_REGISTRY.items():
+        if agent_id == "ceo":
+            continue
+        candidates = {
+            _normalize_agent_token(agent_id),
+            _normalize_agent_token(str(info.get("name", "") or "")),
+            _normalize_agent_token(str(info.get("role", "") or "")),
+            _normalize_agent_token(str(info.get("team", "") or "")),
+        }
+        for candidate in list(candidates):
+            if candidate:
+                candidates.add(candidate.replace("-", ""))
+        if token in candidates or collapsed in candidates:
+            return agent_id
+    return ""
+
+
 def _configured_agent_name(agent_id: str, config: dict) -> str:
     configured = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
     value = str(configured.get(agent_id, "") or "").strip()
@@ -4992,6 +5078,44 @@ def _is_validation_stage(
     return _contains_keyword(text, _VALIDATION_STAGE_HINTS)
 
 
+def _count_keyword_hits(text: str, keywords: tuple[str, ...]) -> int:
+    lowered = str(text or "").lower()
+    if not lowered:
+        return 0
+    return sum(1 for keyword in keywords if keyword and keyword in lowered)
+
+
+def _project_workload_states(project: dict | None) -> dict[str, str]:
+    """Return the busiest known live state per agent for the active project."""
+    project_id = str((project or {}).get("id", "") or "").strip()
+    if not project_id:
+        return {}
+    try:
+        snapshot = workforce_presence_service.snapshot(
+            project_id=project_id,
+            include_assigned=True,
+            include_reporting=True,
+        )
+    except Exception:
+        return {}
+    workers = snapshot.get("workers", []) if isinstance(snapshot, dict) else []
+    if not isinstance(workers, list):
+        return {}
+    state_priority = {"blocked": 4, "working": 3, "reporting": 2, "assigned": 1}
+    by_agent: dict[str, str] = {}
+    for row in workers:
+        if not isinstance(row, dict):
+            continue
+        agent_id = _normalize_agent_token(str(row.get("agent_id", "") or ""))
+        state = str(row.get("state", "") or "").strip().lower()
+        if not agent_id or state not in state_priority:
+            continue
+        current = by_agent.get(agent_id, "")
+        if not current or state_priority[state] > state_priority.get(current, 0):
+            by_agent[agent_id] = state
+    return by_agent
+
+
 def _infer_support_agents(
     user_message: str,
     *,
@@ -4999,7 +5123,7 @@ def _infer_support_agents(
     project: dict | None = None,
     config: dict | None = None,
 ) -> list[str]:
-    """Infer specialist involvement using stage-aware delegation defaults."""
+    """Infer specialist involvement using stage-aware + workload-aware defaults."""
     text = (user_message or "").lower()
     profile = intent or _classify_execution_intent(user_message)
     intent_class = str(profile.get("class", "") or "")
@@ -5032,11 +5156,19 @@ def _infer_support_agents(
         "from scratch",
     )
     keyword_inferred: list[str] = []
+    keyword_hits_by_agent: dict[str, int] = {}
     for keywords, agent_id in _SUPPORT_AGENT_HINTS:
-        if _contains_keyword(text, keywords):
+        hit_count = _count_keyword_hits(text, keywords)
+        if hit_count > 0:
             keyword_inferred.append(agent_id)
+            keyword_hits_by_agent[agent_id] = hit_count
     high_scope_turn = _contains_keyword(text, complexity_markers)
     medium_scope_turn = high_scope_turn or (len(keyword_inferred) >= 3) or _is_ui_execution_turn(user_message)
+    validation_stage = _is_validation_stage(
+        user_message,
+        intent_class=intent_class,
+        project=project,
+    )
 
     inferred: list[str] = []
 
@@ -5047,11 +5179,6 @@ def _infer_support_agents(
     if str(profile.get("intent", "")) == "execution":
         status = str((project or {}).get("status", "") or "").strip().lower()
         early_stage = status in _EARLY_PROJECT_STATUSES
-        validation_stage = _is_validation_stage(
-            user_message,
-            intent_class=intent_class,
-            project=project,
-        )
         plan_approved = bool((project or {}).get("plan_approved"))
         alignment_stage = strategy == "executive_first" and not validation_stage and (not plan_approved or early_stage)
 
@@ -5089,6 +5216,8 @@ def _infer_support_agents(
         for agent_id in _ordered_unique(inferred)
         if agent_id in AGENT_REGISTRY and agent_id != "ceo"
     ]
+    if not ordered:
+        return []
     configured_cap = max_agents
     dynamic_target = configured_cap
     if intent_class == "planning":
@@ -5101,7 +5230,40 @@ def _infer_support_agents(
         else:
             dynamic_target = 4
     dynamic_cap = max(1, min(configured_cap, dynamic_target))
-    # Cap concurrent delegation to reduce noise and over-orchestration.
+    workload_by_agent = _project_workload_states(project)
+    scored: list[tuple[float, int, str]] = []
+    for index, agent_id in enumerate(ordered):
+        score = float(120 - index * 6)
+        score += float(keyword_hits_by_agent.get(agent_id, 0) * 12)
+
+        if intent_class == "planning" and agent_id in _EXECUTIVE_ALIGNMENT_AGENTS:
+            score += 28.0
+        if validation_stage and agent_id in {"qa-lead", "tech-writer"}:
+            score += 24.0
+        if _is_ui_execution_turn(user_message) and agent_id == "lead-designer":
+            score += 18.0
+        if high_scope_turn and agent_id in {"vp-engineering", "qa-lead", "devops", "tech-writer"}:
+            score += 8.0
+
+        live_state = workload_by_agent.get(agent_id, "")
+        if live_state == "working":
+            score -= 8.0
+        elif live_state == "reporting":
+            score -= 5.0
+        elif live_state == "assigned":
+            score -= 3.0
+        elif live_state == "blocked":
+            score -= 20.0
+
+        if _is_backend_or_infra_only_turn(user_message) and agent_id == "lead-designer":
+            score -= 100.0
+        scored.append((score, index, agent_id))
+
+    scored.sort(key=lambda row: (-row[0], row[1], row[2]))
+    selected = [agent_id for score, _index, agent_id in scored if score > 0][:dynamic_cap]
+    if selected:
+        return selected
+    # Fallback for unusual edge-cases: preserve deterministic ordering.
     return ordered[:dynamic_cap]
 
 
@@ -6221,11 +6383,51 @@ async def _handle_ceo_claude(
                         })
                         is_delegation = False
                         if tool_name == "Task":
-                            delegated_agent = str(tool_input.get("subagent_type", "") or "").strip().lower()
+                            delegated_agent_raw = str(tool_input.get("subagent_type", "") or "").strip()
+                            delegated_agent = _resolve_delegated_agent_id(delegated_agent_raw)
                             delegated_task = str(
                                 tool_input.get("description") or tool_input.get("prompt") or ""
                             ).strip()
                             tool_use_id = str(block.get("id", "") or "").strip()
+                            if delegated_agent_raw and not delegated_agent:
+                                is_delegation = True
+                                invalid_message = (
+                                    f"Delegation blocked: unknown specialist '{delegated_agent_raw}'. "
+                                    "Use a valid COMPaaS specialist id from the roster."
+                                )
+                                await websocket.send_json({"type": "warning", "content": invalid_message})
+                                await websocket.send_json({
+                                    "type": "action_detail",
+                                    "content": {
+                                        "label": invalid_message,
+                                        "tool": tool_name,
+                                        "state": "blocked",
+                                        "run_id": run_id,
+                                        "actor": "ceo",
+                                        "source_agent": "ceo",
+                                        "target": delegated_agent_raw,
+                                        "target_agent": delegated_agent_raw,
+                                        "flow": "blocked",
+                                        "source": "real",
+                                        "work_state": "blocked",
+                                        "invalid_target": delegated_agent_raw,
+                                        **runtime_metadata,
+                                    },
+                                })
+                                _emit_chat_activity(
+                                    "ceo",
+                                    "WARNING",
+                                    invalid_message,
+                                    project_id=project_id,
+                                    metadata={
+                                        "tool": tool_name,
+                                        "invalid_target": delegated_agent_raw,
+                                        "flow": "blocked",
+                                        "work_state": "blocked",
+                                        **runtime_metadata,
+                                    },
+                                )
+                                continue
                             if delegated_agent:
                                 saw_real_delegation = True
                                 is_delegation = True

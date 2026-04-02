@@ -47,6 +47,10 @@ export interface ProjectTeamLane {
   owner: string;
   headline: string;
   status: string;
+  source?: 'real' | 'synthetic' | string;
+  evidence_level?: 'observed' | 'planned' | string;
+  updated_at?: string;
+  run_id?: string;
 }
 
 export interface ProjectSnapshot {
@@ -559,6 +563,8 @@ export interface RunActiveAgent {
   agent_name: string;
   state: string;
   task?: string;
+  source?: 'real' | 'synthetic' | string;
+  evidence_level?: 'observed' | 'planned' | string;
 }
 
 export interface RunStatusEvent {

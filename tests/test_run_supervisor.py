@@ -58,6 +58,8 @@ def test_build_run_status_payload_collects_active_agents_for_run():
     assert payload["heartbeat_seq"] == 7
     assert len(payload["active_agents"]) == 1
     assert payload["active_agents"][0]["agent_id"] == "lead-frontend"
+    assert payload["active_agents"][0]["source"] == "real"
+    assert payload["active_agents"][0]["evidence_level"] == "observed"
     assert payload["guardrails"]["command_budget_remaining"] == 11
 
 

@@ -4,6 +4,7 @@ import type {
   ProjectArtifactRecord,
   ProjectLaunchLink,
   ProjectReleaseNotes,
+  ProjectTeamLane,
   Task,
 } from '../types';
 import {
@@ -171,7 +172,7 @@ function laneStatusColor(status: string): string {
   return 'var(--tf-text-muted)';
 }
 
-function projectTeamLanes(project?: Project | null): Array<{ owner: string; headline: string; status: string }> {
+function projectTeamLanes(project?: Project | null): Array<ProjectTeamLane> {
   if (!project) return [];
   if (Array.isArray(project.team_lanes) && project.team_lanes.length > 0) return project.team_lanes;
   if (Array.isArray(project.high_level_tasks)) return project.high_level_tasks;
@@ -470,6 +471,12 @@ function ProjectRailCard({
                 <p className="text-[11px]" style={{ color: 'var(--tf-text-secondary)', lineHeight: 1.4 }}>
                   <span style={{ color: 'var(--tf-text)', fontWeight: 700 }}>{resolveTeamName(lane.owner)}</span>{' '}
                   {lane.headline}
+                  <span
+                    className="ml-2 text-[10px] uppercase tracking-wide"
+                    style={{ color: lane.evidence_level === 'planned' ? 'var(--tf-warning)' : 'var(--tf-accent-blue)' }}
+                  >
+                    {lane.evidence_level || (lane.source === 'synthetic' ? 'planned' : 'observed')}
+                  </span>
                 </p>
               </div>
             ))}
@@ -1304,13 +1311,18 @@ export default function ProjectPanel({
   }, [selectedProject, selectedTasks]);
 
   const lanesByOwner = useMemo(() => {
-    const grouped = new Map<string, Array<{ headline: string; status: string }>>();
+    const grouped = new Map<string, Array<{ headline: string; status: string; source?: string; evidence_level?: string }>>();
     for (const lane of projectTeamLanes(selectedProject)) {
       const owner = String(lane.owner || '').trim();
       const headline = String(lane.headline || '').trim();
       if (!owner || !headline) continue;
       const list = grouped.get(owner) || [];
-      list.push({ headline, status: String(lane.status || '').trim() });
+      list.push({
+        headline,
+        status: String(lane.status || '').trim(),
+        source: String(lane.source || '').trim() || undefined,
+        evidence_level: String(lane.evidence_level || '').trim() || undefined,
+      });
       grouped.set(owner, list);
     }
     return grouped;
@@ -2058,6 +2070,12 @@ export default function ProjectPanel({
                                           />
                                           <p className="text-xs" style={{ color: 'var(--tf-text-secondary)', lineHeight: 1.5 }}>
                                             {lane.headline}
+                                            <span
+                                              className="ml-2 text-[10px] uppercase tracking-wide"
+                                              style={{ color: lane.evidence_level === 'planned' ? 'var(--tf-warning)' : 'var(--tf-accent-blue)' }}
+                                            >
+                                              {lane.evidence_level || (lane.source === 'synthetic' ? 'planned' : 'observed')}
+                                            </span>
                                           </p>
                                         </div>
                                       ))}
@@ -2231,6 +2249,12 @@ export default function ProjectPanel({
                           {((lanesByOwner.get(member) || []).slice(0, 2)).map((lane, index) => (
                             <p key={`${member}-${index}`} className="text-xs mt-1" style={{ color: 'var(--tf-text-secondary)' }}>
                               {lane.headline}
+                              <span
+                                className="ml-2 text-[10px] uppercase tracking-wide"
+                                style={{ color: lane.evidence_level === 'planned' ? 'var(--tf-warning)' : 'var(--tf-accent-blue)' }}
+                              >
+                                {lane.evidence_level || (lane.source === 'synthetic' ? 'planned' : 'observed')}
+                              </span>
                             </p>
                           ))}
                         </div>

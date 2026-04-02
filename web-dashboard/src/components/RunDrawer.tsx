@@ -155,6 +155,12 @@ export default function RunDrawer({
                   <div key={`${agent.agent_id}-${agent.state}`} className="run-agent-row">
                     <div className="run-agent-name">{agent.agent_name}</div>
                     <div className="run-agent-state">{agent.state}</div>
+                    {(agent.evidence_level || agent.source) && (
+                      <div className="run-agent-task">
+                        {agent.evidence_level || (agent.source === 'synthetic' ? 'planned' : 'observed')}
+                        {agent.source ? ` · source ${agent.source}` : ''}
+                      </div>
+                    )}
                     {agent.task && <div className="run-agent-task">{agent.task}</div>}
                   </div>
                 ))}
@@ -188,4 +194,3 @@ export default function RunDrawer({
     </aside>
   );
 }
-
