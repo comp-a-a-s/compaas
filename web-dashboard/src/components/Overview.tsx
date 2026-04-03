@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
+import type { CSSProperties } from 'react';
 import type {
   Agent,
   Project,
@@ -387,6 +388,26 @@ function OrgNodeCard({
     ? Math.max(0.08, Math.min(0.44, decor.workloadScore / 170))
     : 0;
   const activeDelayMs = activationDelayMs;
+  const nodeStyle: CSSProperties & { '--org-active-delay': string } = {
+    '--org-active-delay': `${activeDelayMs}ms`,
+    backgroundColor: muted
+      ? 'color-mix(in srgb, var(--tf-surface-raised) 84%, var(--tf-bg))'
+      : isActive
+        ? `color-mix(in srgb, ${visual.bg} 88%, var(--tf-surface-raised))`
+        : 'var(--tf-surface-raised)',
+    border: `1.5px solid ${isActive ? visual.color : 'var(--tf-border)'}`,
+    cursor: onAgentClick ? 'pointer' : 'default',
+    transition: 'border-color 0.26s, background-color 0.26s, box-shadow 0.26s, transform 0.22s',
+    transitionDelay: isActive ? `${Math.round(activeDelayMs * 0.55)}ms` : '0ms',
+    boxShadow: isActive
+      ? `0 0 16px color-mix(in srgb, ${visual.color} 34%, transparent), 0 0 4px color-mix(in srgb, ${visual.color} 22%, transparent), inset 0 1px 0 rgba(255,255,255,0.08)`
+      : 'inset 0 1px 0 rgba(255,255,255,0.04)',
+    opacity: muted ? 0.46 : 1,
+    filter: muted ? 'grayscale(38%)' : 'none',
+    backgroundImage: heatIntensity > 0
+      ? `radial-gradient(circle at 12% 14%, color-mix(in srgb, ${visual.color} ${Math.round(heatIntensity * 100)}%, transparent), transparent 62%)`
+      : undefined,
+  };
 
   return (
     <div
@@ -395,26 +416,7 @@ function OrgNodeCard({
       data-org-state={decor.state}
       data-org-delay={String(activeDelayMs)}
       className={`org-node-card org-node--${decor.tier} org-node-state--${decor.state}${isActive ? ' org-node-active' : ''}${muted ? ' org-node-muted' : ''}${motionMode === 'quiet' ? ' org-node-quiet' : ''}`}
-      style={{
-        ['--org-active-delay' as any]: `${activeDelayMs}ms`,
-        backgroundColor: muted
-          ? 'color-mix(in srgb, var(--tf-surface-raised) 84%, var(--tf-bg))'
-          : isActive
-            ? `color-mix(in srgb, ${visual.bg} 88%, var(--tf-surface-raised))`
-            : 'var(--tf-surface-raised)',
-        border: `1.5px solid ${isActive ? visual.color : 'var(--tf-border)'}`,
-        cursor: onAgentClick ? 'pointer' : 'default',
-        transition: 'border-color 0.26s, background-color 0.26s, box-shadow 0.26s, transform 0.22s',
-        transitionDelay: isActive ? `${Math.round(activeDelayMs * 0.55)}ms` : '0ms',
-        boxShadow: isActive
-          ? `0 0 16px color-mix(in srgb, ${visual.color} 34%, transparent), 0 0 4px color-mix(in srgb, ${visual.color} 22%, transparent), inset 0 1px 0 rgba(255,255,255,0.08)`
-          : 'inset 0 1px 0 rgba(255,255,255,0.04)',
-        opacity: muted ? 0.46 : 1,
-        filter: muted ? 'grayscale(38%)' : 'none',
-        backgroundImage: heatIntensity > 0
-          ? `radial-gradient(circle at 12% 14%, color-mix(in srgb, ${visual.color} ${Math.round(heatIntensity * 100)}%, transparent), transparent 62%)`
-          : undefined,
-      }}
+      style={nodeStyle}
       onClick={() => onAgentClick?.(agent)}
       role={onAgentClick ? 'button' : undefined}
       tabIndex={onAgentClick ? 0 : undefined}
@@ -1581,10 +1583,14 @@ function OrgChart({ agents, loading, events, activeProjectId = '', microProjectM
     () => buildActivationEntries(workforceByAgent, activeProjectId),
     [workforceByAgent, activeProjectId],
   );
-  const motionVars = {
-    ['--org-flow-duration' as any]: motionMode === 'intense' ? '1.05s' : motionMode === 'active' ? '1.45s' : '2.1s',
-    ['--org-glow-opacity' as any]: motionMode === 'intense' ? 1 : motionMode === 'active' ? 0.86 : 0.6,
-    ['--org-pulse-scale' as any]: motionMode === 'intense' ? 1.12 : motionMode === 'active' ? 1.06 : 1.02,
+  const motionVars: CSSProperties & {
+    '--org-flow-duration': string;
+    '--org-glow-opacity': string;
+    '--org-pulse-scale': string;
+  } = {
+    '--org-flow-duration': motionMode === 'intense' ? '1.05s' : motionMode === 'active' ? '1.45s' : '2.1s',
+    '--org-glow-opacity': String(motionMode === 'intense' ? 1 : motionMode === 'active' ? 0.86 : 0.6),
+    '--org-pulse-scale': String(motionMode === 'intense' ? 1.12 : motionMode === 'active' ? 1.06 : 1.02),
   };
 
   if (loading) {
