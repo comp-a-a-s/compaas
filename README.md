@@ -80,21 +80,33 @@ Each project is tracked through:
 
 ## Installation
 
-### Option A (Recommended)
+### Option A: One-Line Bootstrap (Fastest)
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/comp-a-a-s/compaas/master/bootstrap.sh)
 ```
 
-### Option B (Existing Checkout)
+This installs dependencies and configures COMPaaS automatically.
+
+### Option B: Full Source Install (Clone + Install)
 
 ```bash
+git clone https://github.com/comp-a-a-s/compaas.git
+cd compaas
 ./install.sh
 ```
 
-### Option C (Manual)
+Then start:
 
 ```bash
+compaas-web
+```
+
+### Option C: Manual Source Setup (Step-by-Step)
+
+```bash
+git clone https://github.com/comp-a-a-s/compaas.git
+cd compaas
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,local-models]"
@@ -109,7 +121,8 @@ cd ..
 
 ```bash
 cp .env.example .env
-pytest tests/ -v
+pytest -q
+compaas-web
 ```
 
 ## Run COMPaaS
