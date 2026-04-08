@@ -75,8 +75,21 @@ Each project is tracked through:
 ### Integrations
 
 - GitHub for repository delivery
-- Vercel for deployment workflow
+- Vercel or Netlify for deployment workflow
 - Telegram for chat mirroring
+
+### AI Provider Options
+
+- OpenAI (Codex CLI or API key)
+- Anthropic (Claude CLI or API key)
+- Google Gemini (AI Studio key)
+- Local OpenAI-compatible runtimes
+
+### Deployment Preference
+
+If both Vercel and Netlify are connected and verified, COMPaaS uses your configured
+`deploy_provider_preference` to route one-click deploy actions from chat/project completion cards.
+It falls back automatically to the other verified provider if the preferred one is unavailable.
 
 ## Installation
 

@@ -532,6 +532,47 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
     assert deploy_saved["status"] == "ok"
     assert deploy_saved["deployment_url"] == "https://compaas-preview.vercel.app"
 
+    # Netlify API wrappers
+    monkeypatch.setattr(
+        IntegrationService,
+        "_netlify_request",
+        staticmethod(lambda *_args, **_kwargs: (200, {"id": "site_123", "url": "https://demo.netlify.app"})),
+    )
+    assert service.netlify_deploy("token", site_id="site_123", target="preview")["status"] == "ok"
+    assert service.netlify_assign_domain("token", site_id="site_123", domain="example.com")["status"] == "ok"
+    assert service.netlify_set_env("token", site_id="site_123", key="API_KEY", value="123")["status"] == "ok"
+
+    def fake_netlify_verify(_token, _method, path, _payload=None):
+        if path == "/user":
+            return (200, {"id": "user_1", "full_name": "Test User", "email": "test@example.com"})
+        if path == "/sites/site_123":
+            return (200, {"id": "site_123", "name": "demo"})
+        if path == "/sites/site_123/builds":
+            return (200, {"id": "dep_1", "deploy_ssl_url": "https://demo.netlify.app"})
+        return (404, {"message": "Not Found"})
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_netlify_request",
+        staticmethod(fake_netlify_verify),
+    )
+    netlify_verified = service.netlify_verify_connection("token", site_id="site_123", team_id="team_1")
+    assert netlify_verified["status"] == "ok"
+    assert netlify_verified["ok"] is True
+    assert netlify_verified["site_ok"] is True
+    assert netlify_verified["account"]["id"] == "user_1"
+
+    deploy_saved_netlify = service.netlify_deploy_saved(
+        {
+            "netlify_token": "token",
+            "netlify_site_id": "site_123",
+            "netlify_team_id": "team_1",
+        },
+        target="preview",
+    )
+    assert deploy_saved_netlify["status"] == "ok"
+    assert deploy_saved_netlify["deployment_url"] == "https://demo.netlify.app"
+
 
 def test_integration_service_repo_path_guard_allows_valid_repo(monkeypatch, tmp_path):
     workspace_root = tmp_path / "workspace"

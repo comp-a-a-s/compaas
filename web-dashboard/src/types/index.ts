@@ -647,8 +647,8 @@ export interface RunControlResponse {
 }
 
 export interface LlmConfig {
-  /** "anthropic" | "openai" | "openai_compat" */
-  provider: 'anthropic' | 'openai' | 'openai_compat';
+  /** "anthropic" | "openai" | "gemini" | "openai_compat" */
+  provider: 'anthropic' | 'openai' | 'gemini' | 'openai_compat';
   /** Anthropic runtime mode (Claude Code CLI with local login or API key from config) */
   anthropic_mode?: 'cli' | 'apikey';
   /** OpenAI runtime mode (direct API or local Codex CLI runtime) */
@@ -708,6 +708,14 @@ export interface AppConfig {
     vercel_verified?: boolean;
     vercel_verified_at?: string;
     vercel_last_error?: string;
+    netlify_token?: string;
+    netlify_site_id?: string;
+    netlify_team_id?: string;
+    netlify_default_target?: 'preview' | 'production';
+    netlify_verified?: boolean;
+    netlify_verified_at?: string;
+    netlify_last_error?: string;
+    deploy_provider_preference?: 'vercel' | 'netlify';
     stripe_secret_key?: string;
     stripe_publishable_key?: string;
     stripe_webhook_secret?: string;

@@ -841,6 +841,14 @@ export async function saveIntegrations(data: {
   vercel_verified?: boolean;
   vercel_verified_at?: string;
   vercel_last_error?: string;
+  netlify_token?: string;
+  netlify_site_id?: string;
+  netlify_team_id?: string;
+  netlify_default_target?: 'preview' | 'production';
+  netlify_verified?: boolean;
+  netlify_verified_at?: string;
+  netlify_last_error?: string;
+  deploy_provider_preference?: 'vercel' | 'netlify';
   stripe_secret_key?: string;
   stripe_publishable_key?: string;
   stripe_webhook_secret?: string;
@@ -873,6 +881,14 @@ export async function saveIntegrationsResult(data: {
   vercel_verified?: boolean;
   vercel_verified_at?: string;
   vercel_last_error?: string;
+  netlify_token?: string;
+  netlify_site_id?: string;
+  netlify_team_id?: string;
+  netlify_default_target?: 'preview' | 'production';
+  netlify_verified?: boolean;
+  netlify_verified_at?: string;
+  netlify_last_error?: string;
+  deploy_provider_preference?: 'vercel' | 'netlify';
   stripe_secret_key?: string;
   stripe_publishable_key?: string;
   stripe_webhook_secret?: string;
@@ -1132,6 +1148,30 @@ export async function vercelSetEnv(data: { token: string; project_name: string; 
   );
 }
 
+export async function netlifyDeploy(data: { token: string; site_id: string; team_id?: string; target: 'preview' | 'production' }): Promise<Record<string, unknown> | null> {
+  return safeFetch<Record<string, unknown> | null>(
+    `${V1}/netlify/deploy`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function netlifyAssignDomain(data: { token: string; site_id: string; domain: string; team_id?: string }): Promise<Record<string, unknown> | null> {
+  return safeFetch<Record<string, unknown> | null>(
+    `${V1}/netlify/domain`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function netlifySetEnv(data: { token: string; site_id: string; key: string; value: string; target?: string[]; team_id?: string }): Promise<Record<string, unknown> | null> {
+  return safeFetch<Record<string, unknown> | null>(
+    `${V1}/netlify/env`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
 export async function githubVerifyIntegration(data: { token?: string; repo?: string }): Promise<{
   ok: boolean;
   account?: Record<string, unknown>;
@@ -1153,6 +1193,19 @@ export async function vercelVerifyIntegration(data: { token?: string; project_na
 } | null> {
   return safeFetch(
     `${V1}/vercel/verify`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function netlifyVerifyIntegration(data: { token?: string; site_id?: string; team_id?: string }): Promise<{
+  ok: boolean;
+  account?: Record<string, unknown>;
+  site_ok?: boolean;
+  message: string;
+} | null> {
+  return safeFetch(
+    `${V1}/netlify/verify`,
     null,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
   );
@@ -1287,8 +1340,9 @@ export async function applyStripeBillingPack(
   );
 }
 
-export async function deployProjectToVercel(projectId: string, target: 'preview' | 'production' = 'preview'): Promise<{
+type DeployProjectResponse = {
   ok: boolean;
+  provider?: 'vercel' | 'netlify';
   deployment_url?: string;
   target?: 'preview' | 'production';
   error?: {
@@ -1297,11 +1351,17 @@ export async function deployProjectToVercel(projectId: string, target: 'preview'
     message: string;
     settings_target?: string;
   };
-}> {
+};
+
+async function deployProjectToProvider(
+  projectId: string,
+  provider: 'vercel' | 'netlify',
+  target: 'preview' | 'production' = 'preview',
+): Promise<DeployProjectResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS * 2);
   try {
-    const res = await fetch(`${V1}/projects/${encodeURIComponent(projectId)}/deploy/vercel`, {
+    const res = await fetch(`${V1}/projects/${encodeURIComponent(projectId)}/deploy/${provider}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target }),
@@ -1341,18 +1401,36 @@ export async function deployProjectToVercel(projectId: string, target: 'preview'
     const payload = await res.json() as { ok?: boolean; deployment_url?: string; target?: 'preview' | 'production' };
     return {
       ok: Boolean(payload.ok),
+      provider,
       deployment_url: payload.deployment_url,
       target: payload.target,
     };
   } catch {
     return {
       ok: false,
+      provider,
       error: {
         status: 0,
-        message: 'Network error while deploying to Vercel.',
+        message: `Network error while deploying to ${provider === 'netlify' ? 'Netlify' : 'Vercel'}.`,
       },
     };
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export async function deployProjectToVercel(projectId: string, target: 'preview' | 'production' = 'preview'): Promise<DeployProjectResponse> {
+  return deployProjectToProvider(projectId, 'vercel', target);
+}
+
+export async function deployProjectToNetlify(projectId: string, target: 'preview' | 'production' = 'preview'): Promise<DeployProjectResponse> {
+  return deployProjectToProvider(projectId, 'netlify', target);
+}
+
+export async function deployProject(
+  projectId: string,
+  provider: 'vercel' | 'netlify',
+  target: 'preview' | 'production' = 'preview',
+): Promise<DeployProjectResponse> {
+  return deployProjectToProvider(projectId, provider, target);
 }

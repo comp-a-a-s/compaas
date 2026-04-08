@@ -1035,6 +1035,7 @@ class TestIntegrationSecurity:
                 "integrations": {
                     "github_token": "ghp_secret",
                     "vercel_token": "vercel_secret",
+                    "netlify_token": "nfp_secret",
                     "slack_token": "xoxb_secret",
                     "webhook_url": "https://example.com/hook",
                 },
@@ -1046,6 +1047,7 @@ class TestIntegrationSecurity:
         assert data["llm"]["api_key"] == api_module.REDACTED_SECRET
         assert data["integrations"]["github_token"] == api_module.REDACTED_SECRET
         assert data["integrations"]["vercel_token"] == api_module.REDACTED_SECRET
+        assert data["integrations"]["netlify_token"] == api_module.REDACTED_SECRET
         assert data["integrations"]["slack_token"] == api_module.REDACTED_SECRET
         assert data["integrations"]["webhook_url"] == "https://example.com/hook"
 
@@ -1216,6 +1218,9 @@ class TestIntegrationSecurity:
             "github_auto_pr": True,
             "vercel_team_id": "team_123",
             "vercel_project_name": "compaas-dashboard",
+            "netlify_site_id": "site_123",
+            "netlify_team_id": "team_456",
+            "deploy_provider_preference": "netlify",
         })
         assert response.status_code == 200
 
@@ -1228,6 +1233,9 @@ class TestIntegrationSecurity:
         assert integrations["github_auto_pr"] is True
         assert integrations["vercel_team_id"] == "team_123"
         assert integrations["vercel_project_name"] == "compaas-dashboard"
+        assert integrations["netlify_site_id"] == "site_123"
+        assert integrations["netlify_team_id"] == "team_456"
+        assert integrations["deploy_provider_preference"] == "netlify"
 
     def test_get_integration_capabilities_reflects_configuration(self, client, monkeypatch, temp_data_dir):
         import src.web.api as api_module
@@ -1248,6 +1256,13 @@ class TestIntegrationSecurity:
                     "vercel_verified": True,
                     "vercel_verified_at": "2026-02-23T10:01:00Z",
                     "vercel_default_target": "production",
+                    "netlify_token": "nfp_secret",
+                    "netlify_site_id": "site_123",
+                    "netlify_team_id": "team_456",
+                    "netlify_verified": True,
+                    "netlify_verified_at": "2026-02-23T10:02:00Z",
+                    "netlify_default_target": "preview",
+                    "deploy_provider_preference": "netlify",
                 }
             }, f)
 
@@ -1266,6 +1281,13 @@ class TestIntegrationSecurity:
         assert data["vercel"]["verified_at"] == "2026-02-23T10:01:00Z"
         assert data["vercel"]["default_target"] == "production"
         assert "deploy_preview" in data["vercel"]["capabilities"]
+        assert data["netlify"]["configured"] is True
+        assert data["netlify"]["verified"] is True
+        assert data["netlify"]["site_id"] == "site_123"
+        assert data["netlify"]["verified_at"] == "2026-02-23T10:02:00Z"
+        assert data["netlify"]["default_target"] == "preview"
+        assert "deploy_preview" in data["netlify"]["capabilities"]
+        assert data["deployment"]["provider_preference"] == "netlify"
 
     def test_v1_github_verify_persists_verified_state(self, client, monkeypatch, temp_data_dir):
         import src.web.api as api_module
@@ -1339,6 +1361,43 @@ class TestIntegrationSecurity:
         assert integrations.get("vercel_verified_at")
         assert integrations.get("vercel_last_error", "") == ""
 
+    def test_v1_netlify_verify_persists_verified_state(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "netlify_verify_connection",
+            lambda token, site_id="", team_id="": {
+                "status": "ok",
+                "ok": True,
+                "site_ok": True,
+                "account": {"id": "user_123"},
+                "message": f"Verified {site_id}",
+            },
+        )
+
+        response = client.post("/api/v1/netlify/verify", json={
+            "token": "nfp_abc",
+            "site_id": "site_123",
+            "team_id": "team_123",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["site_ok"] is True
+        assert payload["account"]["id"] == "user_123"
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations["netlify_token"] == "nfp_abc"
+        assert integrations["netlify_site_id"] == "site_123"
+        assert integrations["netlify_team_id"] == "team_123"
+        assert integrations["netlify_verified"] is True
+        assert integrations.get("netlify_verified_at")
+        assert integrations.get("netlify_last_error", "") == ""
+
     def test_v1_project_vercel_deploy_uses_saved_integration(self, client, monkeypatch, temp_data_dir):
         import src.web.api as api_module
         import src.web.routers.v1 as v1_module
@@ -1385,6 +1444,56 @@ class TestIntegrationSecurity:
         assert payload["ok"] is True
         assert payload["target"] == "preview"
         assert payload["deployment_url"] == "https://demo-app-preview.vercel.app"
+        assert project_id in updated_metadata
+        assert isinstance(updated_metadata[project_id].get("deployments"), list)
+
+    def test_v1_project_netlify_deploy_uses_saved_integration(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        import src.web.routers.v1 as v1_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({
+                "integrations": {
+                    "netlify_token": "nfp_abc",
+                    "netlify_site_id": "site_123",
+                    "netlify_verified": True,
+                    "netlify_default_target": "preview",
+                }
+            }, f)
+
+        project_id = "project_demo_234"
+        monkeypatch.setattr(
+            api_module.project_service.state_manager,
+            "get_project",
+            lambda pid: {"id": project_id, "name": "Demo App"} if pid == project_id else None,
+        )
+        monkeypatch.setattr(api_module.project_service, "get_metadata", lambda _pid: {"deployments": []})
+        updated_metadata: dict[str, dict] = {}
+        monkeypatch.setattr(
+            api_module.project_service,
+            "update_metadata",
+            lambda pid, updates: updated_metadata.setdefault(pid, updates),
+        )
+        monkeypatch.setattr(v1_module, "emit_activity", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "netlify_deploy_saved",
+            lambda _integrations, target="preview": {
+                "status": "ok",
+                "target": target,
+                "deployment_url": "https://demo-app.netlify.app",
+                "deployment": {"id": "dep_netlify_1"},
+            },
+        )
+
+        response = client.post(f"/api/v1/projects/{project_id}/deploy/netlify", json={"target": "preview"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["provider"] == "netlify"
+        assert payload["target"] == "preview"
+        assert payload["deployment_url"] == "https://demo-app.netlify.app"
         assert project_id in updated_metadata
         assert isinstance(updated_metadata[project_id].get("deployments"), list)
 
@@ -1738,3 +1847,5 @@ class TestReliabilityErrorContracts:
         assert "tools" in payload
         assert "workspace" in payload
         assert "integrations" in payload
+        assert "netlify" in payload["integrations"]
+        assert "deployment" in payload["integrations"]

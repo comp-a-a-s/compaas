@@ -92,6 +92,44 @@ def test_classify_execution_intent_treats_difficulty_question_as_planning():
     assert intent["needs_planning"] is True
 
 
+def test_llm_runtime_snapshot_supports_gemini(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "_load_config",
+        lambda: {
+            "llm": {
+                "provider": "gemini",
+                "model": "gemini-2.5-flash",
+                "api_key": "AIza-test",
+            }
+        },
+    )
+
+    runtime = api._llm_runtime_snapshot()
+    assert runtime["provider"] == "gemini"
+    assert runtime["mode"] == "apikey"
+    assert runtime["label"] == "Google Gemini API"
+    assert runtime["model"] == "gemini-2.5-flash"
+
+
+def test_resolve_routed_model_for_runtime_keeps_gemini_on_non_anthropic_model():
+    routed = api._resolve_routed_model_for_runtime(
+        provider="gemini",
+        openai_mode="apikey",
+        configured_model="gemini-2.5-pro",
+        routed_model="sonnet",
+    )
+    assert routed == "gemini-2.5-pro"
+
+    routed_openai_style = api._resolve_routed_model_for_runtime(
+        provider="gemini",
+        openai_mode="apikey",
+        configured_model="gemini-2.5-pro",
+        routed_model="gemini-2.5-flash",
+    )
+    assert routed_openai_style == "gemini-2.5-flash"
+
+
 @pytest.mark.parametrize(
     "message",
     [

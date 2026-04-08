@@ -1,4 +1,4 @@
-"""Service helpers for GitHub, Vercel, and Stripe integration workflows."""
+"""Service helpers for GitHub, Vercel, Netlify, and Stripe integration workflows."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def _utcnow_iso() -> str:
 
 
 class IntegrationService:
-    """Best-effort integration actions for GitHub/Vercel/Stripe workflows."""
+    """Best-effort integration actions for GitHub/Vercel/Netlify/Stripe workflows."""
 
     def __init__(self, data_dir: str, workspace_root: str = ""):
         self.data_dir = data_dir
@@ -371,6 +371,44 @@ class IntegrationService:
             return 0, {"message": str(exc)}
 
     @staticmethod
+    def _netlify_request(
+        token: str,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        url = f"https://api.netlify.com/api/v1{path}"
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            url,
+            data=data,
+            method=method.upper(),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "User-Agent": "COMPaaS",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20, context=IntegrationService._request_ssl_context()) as resp:
+                body = resp.read().decode("utf-8")
+                parsed: Any = json.loads(body) if body else {}
+                if isinstance(parsed, dict):
+                    return resp.getcode(), parsed
+                return resp.getcode(), {"data": parsed}
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            try:
+                parsed = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                parsed = {"message": body}
+            if isinstance(parsed, dict):
+                return exc.code, parsed
+            return exc.code, {"data": parsed}
+        except Exception as exc:
+            return 0, {"message": str(exc)}
+
+    @staticmethod
     def _stripe_request(
         token: str,
         method: str,
@@ -531,6 +569,168 @@ class IntegrationService:
         if status not in (200, 201):
             return {"status": "error", "http_status": status, "message": body.get("error", {}).get("message") or body.get("message", "Failed to set environment variable")}
         return {"status": "ok", "result": body}
+
+    def netlify_verify_connection(self, token: str, *, site_id: str = "", team_id: str = "") -> dict[str, Any]:
+        token = (token or "").strip()
+        site_id = (site_id or "").strip()
+        team_id = (team_id or "").strip()
+        if not token:
+            return {"status": "error", "ok": False, "site_ok": False, "message": "Netlify token is required."}
+
+        status, body = self._netlify_request(token, "GET", "/user")
+        if status != 200:
+            raw_message = body.get("message") or body.get("error") or "Failed to verify Netlify token."
+            message = self._humanize_external_error(str(raw_message or ""), provider="Netlify")
+            return {
+                "status": "error",
+                "ok": False,
+                "site_ok": False if site_id else None,
+                "http_status": status,
+                "message": message,
+            }
+
+        account = {
+            "id": str(body.get("id", "") or "").strip(),
+            "email": str(body.get("email", "") or "").strip(),
+            "full_name": str(body.get("full_name", "") or "").strip(),
+        }
+
+        site_ok: bool | None = None
+        message = "Netlify token is valid."
+        if site_id:
+            site_status, site_body = self._netlify_request(token, "GET", f"/sites/{site_id}")
+            if site_status == 200:
+                site_ok = True
+                message = f"Netlify token and site access verified for {site_id}."
+            else:
+                site_ok = False
+                raw_message = site_body.get("message") or site_body.get("error") or f"Token verified, but site access failed for {site_id}."
+                message = self._humanize_external_error(str(raw_message or ""), provider="Netlify")
+
+        return {
+            "status": "ok",
+            "ok": True,
+            "account": account,
+            "site_ok": site_ok,
+            "team_id": team_id,
+            "message": message,
+        }
+
+    def netlify_deploy(
+        self,
+        token: str,
+        *,
+        site_id: str,
+        target: str = "preview",
+        team_id: str = "",
+    ) -> dict[str, Any]:
+        site_id = str(site_id or "").strip()
+        if not site_id:
+            return {"status": "error", "message": "Netlify site ID is required."}
+        normalized_target = str(target or "preview").strip().lower()
+        if normalized_target not in {"preview", "production"}:
+            normalized_target = "preview"
+
+        # Site-trigger deploy flow: trigger a new build on the configured site.
+        payload: dict[str, Any] = {"clear_cache": False}
+        if normalized_target == "production":
+            payload["trigger_title"] = "COMPaaS production deploy"
+        else:
+            payload["trigger_title"] = "COMPaaS preview deploy"
+        status, body = self._netlify_request(token, "POST", f"/sites/{site_id}/builds", payload)
+        if status not in (200, 201, 202):
+            return {
+                "status": "error",
+                "http_status": status,
+                "message": body.get("message") or body.get("error") or "Failed to trigger Netlify deploy.",
+            }
+
+        deployment_url = str(
+            body.get("deploy_ssl_url")
+            or body.get("ssl_url")
+            or body.get("url")
+            or ""
+        ).strip()
+        if not deployment_url:
+            # Best effort fallback by site info.
+            site_status, site_payload = self._netlify_request(token, "GET", f"/sites/{site_id}")
+            if site_status == 200:
+                deployment_url = str(
+                    site_payload.get("ssl_url")
+                    or site_payload.get("url")
+                    or site_payload.get("custom_domain")
+                    or ""
+                ).strip()
+        if deployment_url and not deployment_url.startswith(("http://", "https://")):
+            deployment_url = f"https://{deployment_url.lstrip('/')}"
+
+        return {
+            "status": "ok",
+            "target": normalized_target,
+            "deployment_url": deployment_url,
+            "team_id": str(team_id or "").strip(),
+            "deployment": body,
+        }
+
+    def netlify_assign_domain(
+        self,
+        token: str,
+        *,
+        site_id: str,
+        domain: str,
+        team_id: str = "",
+    ) -> dict[str, Any]:
+        site_id = str(site_id or "").strip()
+        domain = str(domain or "").strip()
+        if not site_id or not domain:
+            return {"status": "error", "message": "site_id and domain are required."}
+        status, body = self._netlify_request(
+            token,
+            "POST",
+            f"/sites/{site_id}/domains",
+            {"name": domain},
+        )
+        if status not in (200, 201, 202):
+            return {
+                "status": "error",
+                "http_status": status,
+                "message": body.get("message") or body.get("error") or "Failed to add Netlify domain.",
+            }
+        return {"status": "ok", "domain": body, "team_id": str(team_id or "").strip()}
+
+    def netlify_set_env(
+        self,
+        token: str,
+        *,
+        site_id: str,
+        key: str,
+        value: str,
+        target: list[str] | None = None,
+        team_id: str = "",
+    ) -> dict[str, Any]:
+        site_id = str(site_id or "").strip()
+        key = str(key or "").strip()
+        value = str(value or "")
+        if not site_id or not key:
+            return {"status": "error", "message": "site_id and key are required."}
+        contexts = target or ["preview", "production"]
+        payload = {
+            "key": key,
+            "values": [{"value": value, "context": contexts}],
+        }
+        status, body = self._netlify_request(
+            token,
+            "POST",
+            f"/sites/{site_id}/env",
+            payload,
+        )
+        if status not in (200, 201, 202):
+            return {
+                "status": "error",
+                "http_status": status,
+                "message": body.get("message") or body.get("error") or "Failed to set Netlify environment variable.",
+            }
+        return {"status": "ok", "result": body, "team_id": str(team_id or "").strip()}
 
     def stripe_verify_connection(self, secret_key: str) -> dict[str, Any]:
         token = (secret_key or "").strip()
@@ -693,3 +893,30 @@ class IntegrationService:
             "deployment_url": deployment_url,
             "deployment": deployment_body,
         }
+
+    def netlify_deploy_saved(
+        self,
+        integrations: dict[str, Any],
+        *,
+        target: str = "preview",
+    ) -> dict[str, Any]:
+        token = str(integrations.get("netlify_token", "") or "").strip()
+        site_id = str(integrations.get("netlify_site_id", "") or "").strip()
+        team_id = str(integrations.get("netlify_team_id", "") or "").strip()
+        normalized_target = str(target or "preview").strip().lower()
+        if normalized_target not in {"preview", "production"}:
+            normalized_target = "preview"
+        if not token or not site_id:
+            return {
+                "status": "error",
+                "message": "Netlify is not fully configured. Add token and site ID first.",
+            }
+        deployment = self.netlify_deploy(
+            token,
+            site_id=site_id,
+            target=normalized_target,
+            team_id=team_id,
+        )
+        if deployment.get("status") != "ok":
+            return deployment
+        return deployment

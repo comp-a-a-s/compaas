@@ -285,7 +285,7 @@ export default function App() {
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
-  const [settingsConnectorFocus, setSettingsConnectorFocus] = useState<'github' | 'vercel' | 'stripe' | null>(null);
+  const [settingsConnectorFocus, setSettingsConnectorFocus] = useState<'github' | 'vercel' | 'netlify' | 'stripe' | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStep, setTourStep] = useState(0);
 
@@ -300,7 +300,7 @@ export default function App() {
     setActiveProjectId(projectId);
   }, []);
 
-  const openConnectorSetup = useCallback((connector: 'github' | 'vercel' | 'stripe') => {
+  const openConnectorSetup = useCallback((connector: 'github' | 'vercel' | 'netlify' | 'stripe') => {
     setSettingsConnectorFocus(connector);
     setActiveTab('settings');
     setChatOpen(false);

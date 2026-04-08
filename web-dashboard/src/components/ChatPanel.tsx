@@ -30,7 +30,7 @@ import {
   clearMemory,
   fetchMemoryPolicy,
   updateMemoryPolicy,
-  deployProjectToVercel,
+  deployProject,
   fetchProjectReleaseNotes,
   applyStripeBillingPack,
 } from '../api/client';
@@ -1487,6 +1487,7 @@ interface WsMessage {
     project_id?: string;
     project_name?: string;
     target?: 'preview' | 'production';
+    provider?: 'vercel' | 'netlify';
   };
   auto_launch?: AutoLaunchStatus;
   run_status?: RunStatusEvent;
@@ -1609,7 +1610,7 @@ interface ChatPanelProps {
   microProjectMode?: boolean;
   onMicroProjectModeChange?: (enabled: boolean) => void;
   onNavigateToProject?: (projectId: string) => void;
-  onOpenSettings?: (connector?: 'github' | 'vercel' | 'stripe') => void;
+  onOpenSettings?: (connector?: 'github' | 'vercel' | 'netlify' | 'stripe') => void;
   onOpenEventLog?: () => void;
   pendingApprovalProjects?: Project[];
   onProjectApproved?: (projectId: string) => void;
@@ -1692,7 +1693,7 @@ export default function ChatPanel({
   const [liveRunIncident, setLiveRunIncident] = useState<RunIncidentEvent | null>(runIncident);
   const [planningPendingDecision, setPlanningPendingDecision] = useState<{ message: string; reason: string; missingItems?: string[] } | null>(null);
   const [dismissedProjectIds, setDismissedProjectIds] = useState<Set<string>>(new Set());
-  const [deployOffer, setDeployOffer] = useState<{ projectId: string; projectName: string; target: 'preview' | 'production' } | null>(null);
+  const [deployOffer, setDeployOffer] = useState<{ projectId: string; projectName: string; target: 'preview' | 'production'; provider: 'vercel' | 'netlify' } | null>(null);
   const [deployingVercel, setDeployingVercel] = useState(false);
   const [celebrationBurstId, setCelebrationBurstId] = useState('');
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
@@ -2148,20 +2149,24 @@ export default function ChatPanel({
     void safeMirrorTelegram(ceoNameRef.current, content, projectId);
   }, [safeMirrorTelegram]);
 
-  const handleDeployFromCompletion = useCallback((projectId: string, target: 'preview' | 'production') => {
+  const handleDeployFromCompletion = useCallback((
+    projectId: string,
+    target: 'preview' | 'production',
+    provider: 'vercel' | 'netlify' = 'vercel',
+  ) => {
     const pid = String(projectId || '').trim();
     if (!pid || deployingVercel) return;
     setDeployingVercel(true);
-    void deployProjectToVercel(pid, target).then((result) => {
+    void deployProject(pid, provider, target).then((result) => {
       setDeployingVercel(false);
       if (result.ok && result.deployment_url) {
         pushCeoMessage(
-          `${target === 'production' ? 'Production' : 'Preview'} deployment ready: ${result.deployment_url}`,
+          `${target === 'production' ? 'Production' : 'Preview'} deployment ready on ${provider === 'netlify' ? 'Netlify' : 'Vercel'}: ${result.deployment_url}`,
           pid,
         );
         return;
       }
-      const message = result.error?.message || 'Vercel deployment failed.';
+      const message = result.error?.message || `${provider === 'netlify' ? 'Netlify' : 'Vercel'} deployment failed.`;
       setMessages((prev) => [...prev, {
         role: 'ceo',
         content: `[Error] ${message}`,
@@ -2172,7 +2177,7 @@ export default function ChatPanel({
       setDeployingVercel(false);
       setMessages((prev) => [...prev, {
         role: 'ceo',
-        content: '[Error] Deployment failed due to a network error.',
+        content: `[Error] ${provider === 'netlify' ? 'Netlify' : 'Vercel'} deployment failed due to a network error.`,
         timestamp: new Date().toISOString(),
         project_id: pid,
       }]);
@@ -2553,10 +2558,12 @@ export default function ChatPanel({
               if (offer && typeof offer === 'object') {
                 const offerProjectId = String(offer.project_id || projectId || '').trim();
                 if (offerProjectId) {
+                  const offerProvider: 'vercel' | 'netlify' = offer.provider === 'netlify' ? 'netlify' : 'vercel';
                   setDeployOffer({
                     projectId: offerProjectId,
                     projectName: String(offer.project_name || projectsRef.current.find((project) => project.id === offerProjectId)?.name || 'Project'),
                     target: offer.target === 'production' ? 'production' : 'preview',
+                    provider: offerProvider,
                   });
                 }
               } else {
@@ -2896,8 +2903,8 @@ export default function ChatPanel({
     }
     if (kind === 'open_settings') {
       const connector = String(payload.connector || '').trim().toLowerCase();
-      if (connector === 'github' || connector === 'vercel' || connector === 'stripe') {
-        onOpenSettings?.(connector);
+      if (connector === 'github' || connector === 'vercel' || connector === 'netlify' || connector === 'stripe') {
+        onOpenSettings?.(connector as 'github' | 'vercel' | 'netlify' | 'stripe');
       } else {
         onOpenSettings?.();
       }
@@ -3617,10 +3624,10 @@ export default function ChatPanel({
                 }}
               >
                 <p className="text-xs font-semibold" style={{ color: 'var(--tf-accent-blue)' }}>
-                  Deploy to Vercel?
+                  Deploy to {deployOffer.provider === 'netlify' ? 'Netlify' : 'Vercel'}?
                 </p>
                 <p className="text-xs mt-1.5" style={{ color: 'var(--tf-text-secondary)', lineHeight: 1.5 }}>
-                  {deployOffer.projectName} looks ready. Deploy a {deployOffer.target} build to Vercel now?
+                  {deployOffer.projectName} looks ready. Deploy a {deployOffer.target} build to {deployOffer.provider === 'netlify' ? 'Netlify' : 'Vercel'} now?
                 </p>
                 <div className="flex items-center gap-2 mt-3 flex-wrap">
                   <button
@@ -3628,27 +3635,28 @@ export default function ChatPanel({
                       const activeOffer = deployOffer;
                       if (!activeOffer) return;
                       setDeployingVercel(true);
-                      void deployProjectToVercel(activeOffer.projectId, activeOffer.target).then((result) => {
+                      void deployProject(activeOffer.projectId, activeOffer.provider, activeOffer.target).then((result) => {
                         setDeployingVercel(false);
                         if (result.ok && result.deployment_url) {
+                          const providerLabel = activeOffer.provider === 'netlify' ? 'Netlify' : 'Vercel';
                           pushCeoMessage(
-                            `Deployment complete. ${activeOffer.target === 'production' ? 'Production' : 'Preview'} URL: ${result.deployment_url}`,
+                            `${providerLabel} deployment complete. ${activeOffer.target === 'production' ? 'Production' : 'Preview'} URL: ${result.deployment_url}`,
                             activeOffer.projectId,
                           );
                           setDeployOffer(null);
                           return;
                         }
-                        const message = result.error?.message || 'Vercel deployment failed.';
+                        const message = result.error?.message || `${activeOffer.provider === 'netlify' ? 'Netlify' : 'Vercel'} deployment failed.`;
                         setMessages((prev) => [...prev, {
                           role: 'ceo',
                           content: `[Error] ${message}`,
                           timestamp: new Date().toISOString(),
                           project_id: activeOffer.projectId,
                         }]);
-                        if (result.error?.settings_target === 'vercel') {
+                        if (result.error?.settings_target === 'vercel' || result.error?.settings_target === 'netlify') {
                           setMessages((prev) => [...prev, {
                             role: 'ceo',
-                            content: 'Open Settings → Integrations and verify the Vercel connector, then retry deployment.',
+                            content: `Open Settings → Integrations and verify the ${result.error?.settings_target === 'netlify' ? 'Netlify' : 'Vercel'} connector, then retry deployment.`,
                             timestamp: new Date().toISOString(),
                             project_id: activeOffer.projectId,
                           }]);
@@ -3657,7 +3665,7 @@ export default function ChatPanel({
                         setDeployingVercel(false);
                         setMessages((prev) => [...prev, {
                           role: 'ceo',
-                          content: '[Error] Vercel deployment failed due to a network error.',
+                          content: `[Error] ${activeOffer.provider === 'netlify' ? 'Netlify' : 'Vercel'} deployment failed due to a network error.`,
                           timestamp: new Date().toISOString(),
                           project_id: activeOffer.projectId,
                         }]);
@@ -3690,8 +3698,16 @@ export default function ChatPanel({
                   searchQuery={searchQuery}
                   onCopyPath={handleCopyPath}
                   onCopyCommand={handleCopyCommand}
-                  onDeployPreview={(projectId) => handleDeployFromCompletion(projectId, 'preview')}
-                  onPromoteProduction={(projectId) => handleDeployFromCompletion(projectId, 'production')}
+                  onDeployPreview={(projectId) => handleDeployFromCompletion(
+                    projectId,
+                    'preview',
+                    deployOffer && deployOffer.projectId === projectId ? deployOffer.provider : 'vercel',
+                  )}
+                  onPromoteProduction={(projectId) => handleDeployFromCompletion(
+                    projectId,
+                    'production',
+                    deployOffer && deployOffer.projectId === projectId ? deployOffer.provider : 'vercel',
+                  )}
                   onGenerateReleaseNotes={handleGenerateReleaseNotes}
                   onStartReview={handleStartReviewFromCompletion}
                   onAddBillingPack={handleAddBillingPack}
@@ -3852,8 +3868,16 @@ export default function ChatPanel({
                 userName={userName}
                 onCopyPath={handleCopyPath}
                 onCopyCommand={handleCopyCommand}
-                onDeployPreview={(projectId) => handleDeployFromCompletion(projectId, 'preview')}
-                onPromoteProduction={(projectId) => handleDeployFromCompletion(projectId, 'production')}
+                onDeployPreview={(projectId) => handleDeployFromCompletion(
+                  projectId,
+                  'preview',
+                  deployOffer && deployOffer.projectId === projectId ? deployOffer.provider : 'vercel',
+                )}
+                onPromoteProduction={(projectId) => handleDeployFromCompletion(
+                  projectId,
+                  'production',
+                  deployOffer && deployOffer.projectId === projectId ? deployOffer.provider : 'vercel',
+                )}
                 onGenerateReleaseNotes={handleGenerateReleaseNotes}
                 onStartReview={handleStartReviewFromCompletion}
                 onAddBillingPack={handleAddBillingPack}

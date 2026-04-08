@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { saveSetupConfig, testLlmConnection, githubVerifyIntegration, vercelVerifyIntegration } from '../api/client';
+import { saveSetupConfig, testLlmConnection, githubVerifyIntegration, vercelVerifyIntegration, netlifyVerifyIntegration } from '../api/client';
 import type { AppConfig, LlmConfig } from '../types';
 import { useThemeSwitch } from '../hooks/useTheme';
 import type { ThemeName } from '../hooks/useTheme';
@@ -112,6 +112,7 @@ const ICON_PATHS = {
   monitor: 'M4 18h16M7 14l3-4 3 2 4-6',
   anthropic: 'M12 3l7 4v10l-7 4-7-4V7l7-4z',
   openai: 'M12 4l3 2 3 0 2 3-1 3 1 3-2 3-3 0-3 2-3-2-3 0-2-3 1-3-1-3 2-3 3 0 3-2z',
+  gemini: 'M12 2l2.6 5.4L20 10l-5.4 2.6L12 18l-2.6-5.4L4 10l5.4-2.6L12 2z',
   local: 'M5 18h14M6 6h12l2 8H4l2-8z',
 } as const;
 
@@ -244,7 +245,7 @@ function StepWelcome() {
 
 // ---- AI Provider presets ----
 
-type LlmProvider = 'anthropic' | 'openai' | 'openai_compat';
+type LlmProvider = 'anthropic' | 'openai' | 'gemini' | 'openai_compat';
 type AnthropicMode = 'cli' | 'apikey';
 type OpenaiMode    = 'apikey' | 'codex';
 type LocalPreset   = 'ollama' | 'lmstudio' | 'llamacpp' | 'jan' | 'vllm' | 'custom';
@@ -267,6 +268,7 @@ const ANTHROPIC_MODELS = [
 ];
 
 const OPENAI_MODELS = ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'o1', 'o1-mini', 'custom'];
+const GEMINI_MODELS = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'];
 
 const LOCAL_MODEL_SUGGESTIONS: Record<LocalPreset, string[]> = {
   ollama:    ['llama3.3', 'llama3.2', 'deepseek-r1', 'qwen2.5-coder', 'mistral', 'gemma3', 'phi4'],
@@ -450,6 +452,9 @@ function StepAiProvider({
     if (llmProvider === 'openai') {
       if (openaiMode === 'codex') return null;
       return { base_url: 'https://api.openai.com/v1', model: openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel, api_key: llmApiKey };
+    }
+    if (llmProvider === 'gemini') {
+      return { base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: llmModel || 'gemini-2.5-pro', api_key: llmApiKey };
     }
     return { base_url: llmBaseUrl, model: llmModel, api_key: llmApiKey };
   };
@@ -766,13 +771,77 @@ function StepAiProvider({
         </div>
       </ProviderCard>
 
+      {/* ── Gemini ── */}
+      <ProviderCard
+        icon={<MaterialIcon path={ICON_PATHS.gemini} />} selected={llmProvider === 'gemini'}
+        title="Google Gemini"
+        description="Gemini API via AI Studio key (OpenAI-compatible endpoint)."
+        onClick={() => {
+          setLlmProvider('gemini');
+          setLlmBaseUrl('https://generativelanguage.googleapis.com/v1beta/openai');
+          if (!llmModel || llmModel === 'codex' || !llmModel.toLowerCase().includes('gemini')) {
+            setLlmModel('gemini-2.5-pro');
+          }
+        }}
+        order={3}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Model
+            </label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {GEMINI_MODELS.map((m) => (
+                <button key={m} onClick={() => setLlmModel(m)} style={{
+                  padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+                  border: `1px solid ${llmModel === m ? C.accent : C.border}`,
+                  backgroundColor: llmModel === m ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
+                  color: llmModel === m ? C.accent : C.textSecondary,
+                }}>
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: C.textSecondary, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Gemini API Key
+            </label>
+            <input
+              type="password"
+              value={llmApiKey}
+              onChange={(e) => setLlmApiKey(e.target.value)}
+              placeholder="AIza..."
+              style={{ width: '100%', padding: '7px 10px', backgroundColor: C.surface, border: `1px solid ${C.border}`, borderRadius: '6px', color: C.textPrimary, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+          </div>
+          <TestConnectionButton status={testStatus} message={testMessage} onTest={handleTest} />
+          <GuideBox>
+            <strong style={{ color: C.textPrimary }}>Setting up Gemini API key</strong>
+            <ol style={{ margin: '8px 0 0 16px', padding: 0 }}>
+              <li style={{ marginBottom: '6px' }}>
+                Open{' '}
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={guideLink}>
+                  AI Studio key settings
+                </a>
+                {' '}and create a key.
+              </li>
+              <li style={{ marginBottom: '6px' }}>Paste your key above (starts with <Code>AIza</Code>).</li>
+              <li>Keep base URL as <Code>https://generativelanguage.googleapis.com/v1beta/openai</Code>.</li>
+            </ol>
+          </GuideBox>
+        </div>
+      </ProviderCard>
+
       {/* ── Local Model ── */}
       <ProviderCard
         icon={<MaterialIcon path={ICON_PATHS.local} />} selected={llmProvider === 'openai_compat'}
         title="Local / Self-Hosted"
         description="Ollama, LM Studio, llama.cpp, Jan, vLLM — supported for self-hosting, but generally less recommended for orchestration reliability."
         onClick={() => setLlmProvider('openai_compat')}
-        order={3}
+        order={4}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {/* Preset tabs */}
@@ -1487,6 +1556,11 @@ function StepConnectors({
   vercelTeamId,
   vercelVerified,
   vercelStatus,
+  netlifyToken,
+  netlifySiteId,
+  netlifyTeamId,
+  netlifyVerified,
+  netlifyStatus,
   busyConnector,
   onGithubTokenChange,
   onGithubRepoChange,
@@ -1494,8 +1568,12 @@ function StepConnectors({
   onVercelTokenChange,
   onVercelProjectNameChange,
   onVercelTeamIdChange,
+  onNetlifyTokenChange,
+  onNetlifySiteIdChange,
+  onNetlifyTeamIdChange,
   onVerifyGithub,
   onVerifyVercel,
+  onVerifyNetlify,
 }: {
   githubToken: string;
   githubRepo: string;
@@ -1507,15 +1585,24 @@ function StepConnectors({
   vercelTeamId: string;
   vercelVerified: boolean;
   vercelStatus: string;
-  busyConnector: '' | 'github' | 'vercel';
+  netlifyToken: string;
+  netlifySiteId: string;
+  netlifyTeamId: string;
+  netlifyVerified: boolean;
+  netlifyStatus: string;
+  busyConnector: '' | 'github' | 'vercel' | 'netlify';
   onGithubTokenChange: (value: string) => void;
   onGithubRepoChange: (value: string) => void;
   onGithubBranchChange: (value: string) => void;
   onVercelTokenChange: (value: string) => void;
   onVercelProjectNameChange: (value: string) => void;
   onVercelTeamIdChange: (value: string) => void;
+  onNetlifyTokenChange: (value: string) => void;
+  onNetlifySiteIdChange: (value: string) => void;
+  onNetlifyTeamIdChange: (value: string) => void;
   onVerifyGithub: () => void;
   onVerifyVercel: () => void;
+  onVerifyNetlify: () => void;
 }) {
   const guideCardStyle: React.CSSProperties = {
     marginTop: '10px',
@@ -1540,7 +1627,7 @@ function StepConnectors({
           Connectors (Optional)
         </h2>
         <p style={{ fontSize: '13px', color: C.textSecondary }}>
-          Connect GitHub and Vercel now for one-click project setup and deployment. You can skip and configure later in Settings.
+          Connect GitHub, Vercel, and Netlify now for one-click project setup and deployment. You can skip and configure later in Settings.
         </p>
       </div>
 
@@ -1738,8 +1825,96 @@ function StepConnectors({
         </div>
       </div>
 
+      <div style={{ backgroundColor: C.surfaceRaised, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <strong style={{ color: C.textPrimary, fontSize: '13px' }}>Netlify</strong>
+          <span style={{ fontSize: '11px', color: netlifyVerified ? C.success : C.textMuted }}>
+            {netlifyVerified ? 'Verified' : 'Not verified'}
+          </span>
+        </div>
+        <div style={{ display: 'grid', gap: '8px' }}>
+          <input
+            type="text"
+            value={netlifySiteId}
+            onChange={(e) => onNetlifySiteIdChange(e.target.value)}
+            placeholder="Site ID"
+            style={inputStyle({ maxWidth: '420px' })}
+          />
+          <input
+            type="text"
+            value={netlifyTeamId}
+            onChange={(e) => onNetlifyTeamIdChange(e.target.value)}
+            placeholder="Team ID (optional)"
+            style={inputStyle({ maxWidth: '420px' })}
+          />
+          <input
+            type="password"
+            value={netlifyToken}
+            onChange={(e) => onNetlifyTokenChange(e.target.value)}
+            placeholder="nfp_xxx"
+            style={inputStyle({ maxWidth: '420px' })}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={onVerifyNetlify}
+              disabled={busyConnector.length > 0}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
+                border: `1px solid ${netlifyVerified ? C.success : C.accent}`,
+                backgroundColor: netlifyVerified ? 'rgba(63,185,80,0.12)' : C.accentDim,
+                color: netlifyVerified ? C.success : C.accent,
+                fontSize: '12px',
+                cursor: busyConnector.length > 0 ? 'wait' : 'pointer',
+              }}
+            >
+              {busyConnector === 'netlify' ? 'Verifying…' : netlifyVerified ? 'Verified' : 'Connect & Verify'}
+            </button>
+            {netlifyStatus && (
+              <span style={{ fontSize: '11px', color: netlifyVerified ? C.success : C.textMuted }}>{netlifyStatus}</span>
+            )}
+          </div>
+          <details style={guideCardStyle}>
+            <summary style={{ cursor: 'pointer', fontSize: '11px', fontWeight: 600, color: C.accent }}>
+              Full Netlify setup guide
+            </summary>
+            <ol style={guideListStyle}>
+              <li style={{ marginBottom: '4px' }}>
+                Generate a personal access token in Netlify:
+                {' '}
+                <a href="https://app.netlify.com/user/applications#personal-access-tokens" target="_blank" rel="noreferrer" style={guideLink}>
+                  app.netlify.com/user/applications
+                </a>
+                .
+              </li>
+              <li style={{ marginBottom: '4px' }}>
+                Open your site dashboard and copy the
+                {' '}
+                <strong>Site ID</strong>
+                {' '}
+                from site settings.
+              </li>
+              <li style={{ marginBottom: '4px' }}>
+                Team ID is optional. Add it when the site belongs to a team scope.
+              </li>
+              <li style={{ marginBottom: '4px' }}>
+                Click
+                {' '}
+                <strong>Connect &amp; Verify</strong>
+                {' '}
+                to validate token + site access.
+              </li>
+              <li>
+                After verification, COMPaaS can trigger preview/production deploys to Netlify directly from completion actions.
+              </li>
+            </ol>
+          </details>
+        </div>
+      </div>
+
       <p style={{ fontSize: '11px', color: C.textMuted }}>
-        This step is skippable. If you skip now, you can configure both connectors later in Settings → Integrations.
+        This step is skippable. If you skip now, you can configure all connectors later in Settings → Integrations.
       </p>
     </div>
   );
@@ -1757,6 +1932,7 @@ function StepComplete({
   anthropicModelPreset,
   openaiMode,
   openaiModelPreset,
+  netlifyConfigured,
   githubConfigured,
   vercelConfigured,
 }: {
@@ -1772,6 +1948,7 @@ function StepComplete({
   anthropicModelPreset: string;
   openaiMode: OpenaiMode;
   openaiModelPreset: string;
+  netlifyConfigured: boolean;
   githubConfigured: boolean;
   vercelConfigured: boolean;
 }) {
@@ -1784,6 +1961,7 @@ function StepComplete({
     llmProvider === 'anthropic' && anthropicMode === 'apikey' ? `Anthropic — API Key (${anthropicModelPreset})` :
     llmProvider === 'openai'    && openaiMode === 'codex'     ? 'OpenAI — Codex CLI' :
     llmProvider === 'openai'                                  ? `OpenAI — API Key (${openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel})` :
+    llmProvider === 'gemini'                                  ? `Google Gemini (${llmModel})` :
                                                                 `Local Model (${llmModel})`;
 
   const rows = [
@@ -1794,6 +1972,7 @@ function StepComplete({
     { label: 'Auto-open browser', value: autoOpenBrowser ? 'Enabled' : 'Disabled' },
     { label: 'GitHub', value: githubConfigured ? 'Verified' : 'Not configured' },
     { label: 'Vercel', value: vercelConfigured ? 'Verified' : 'Not configured' },
+    { label: 'Netlify', value: netlifyConfigured ? 'Verified' : 'Not configured' },
     { label: 'Telegram', value: telegramConfigured ? 'Configured' : 'Not configured' },
   ];
 
@@ -1834,7 +2013,8 @@ function StepComplete({
               color:
                 ((row.label === 'Telegram' && !telegramConfigured)
                   || (row.label === 'GitHub' && !githubConfigured)
-                  || (row.label === 'Vercel' && !vercelConfigured))
+                  || (row.label === 'Vercel' && !vercelConfigured)
+                  || (row.label === 'Netlify' && !netlifyConfigured))
                   ? C.textMuted
                   : C.textPrimary,
             }}>
@@ -2049,8 +2229,13 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [vercelTeamId, setVercelTeamId] = useState('');
   const [vercelVerified, setVercelVerified] = useState(false);
   const [vercelVerifyStatus, setVercelVerifyStatus] = useState('');
+  const [netlifyToken, setNetlifyToken] = useState('');
+  const [netlifySiteId, setNetlifySiteId] = useState('');
+  const [netlifyTeamId, setNetlifyTeamId] = useState('');
+  const [netlifyVerified, setNetlifyVerified] = useState(false);
+  const [netlifyVerifyStatus, setNetlifyVerifyStatus] = useState('');
 
-  const [connectorBusy, setConnectorBusy] = useState<'' | 'github' | 'vercel'>('');
+  const [connectorBusy, setConnectorBusy] = useState<'' | 'github' | 'vercel' | 'netlify'>('');
 
   // Step 7 — Telegram
   const [telegramBotToken, setTelegramBotToken] = useState('');
@@ -2124,6 +2309,31 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setConnectorBusy('');
   };
 
+  const handleVerifyNetlify = async () => {
+    const token = netlifyToken.trim();
+    const siteId = netlifySiteId.trim();
+    if (!token || !siteId) {
+      setNetlifyVerified(false);
+      setNetlifyVerifyStatus('Add both token and site ID to verify Netlify.');
+      return;
+    }
+    setConnectorBusy('netlify');
+    const result = await netlifyVerifyIntegration({
+      token,
+      site_id: siteId,
+      team_id: netlifyTeamId.trim(),
+    });
+    if (!result) {
+      setNetlifyVerified(false);
+      setNetlifyVerifyStatus('Netlify verification failed (network error).');
+      setConnectorBusy('');
+      return;
+    }
+    setNetlifyVerified(Boolean(result.ok));
+    setNetlifyVerifyStatus(result.message || (result.ok ? 'Netlify verified.' : 'Netlify verification failed.'));
+    setConnectorBusy('');
+  };
+
   const handleLaunch = async () => {
     setSubmitting(true);
     setSubmitError(null);
@@ -2154,6 +2364,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         : (openaiModelPreset !== 'custom' ? openaiModelPreset : llmModel);
       resolvedBaseUrl = 'https://api.openai.com/v1';
       resolvedApiKey = openaiMode === 'codex' ? '' : llmApiKey;
+    } else if (llmProvider === 'gemini') {
+      resolvedModel = llmModel || 'gemini-2.5-pro';
+      resolvedBaseUrl = 'https://generativelanguage.googleapis.com/v1beta/openai';
+      resolvedApiKey = llmApiKey;
     }
 
     const llmConfig: LlmConfig = {
@@ -2196,6 +2410,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         vercel_verified: vercelVerified,
         vercel_verified_at: vercelVerified ? new Date().toISOString() : '',
         vercel_last_error: vercelVerified ? '' : vercelVerifyStatus,
+        netlify_token: netlifyToken.trim(),
+        netlify_site_id: netlifySiteId.trim(),
+        netlify_team_id: netlifyTeamId.trim(),
+        netlify_default_target: 'preview',
+        netlify_verified: netlifyVerified,
+        netlify_verified_at: netlifyVerified ? new Date().toISOString() : '',
+        netlify_last_error: netlifyVerified ? '' : netlifyVerifyStatus,
+        deploy_provider_preference: netlifyVerified && !vercelVerified ? 'netlify' : 'vercel',
       },
       llm: llmConfig,
     };
@@ -2329,6 +2551,11 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 vercelTeamId={vercelTeamId}
                 vercelVerified={vercelVerified}
                 vercelStatus={vercelVerifyStatus}
+                netlifyToken={netlifyToken}
+                netlifySiteId={netlifySiteId}
+                netlifyTeamId={netlifyTeamId}
+                netlifyVerified={netlifyVerified}
+                netlifyStatus={netlifyVerifyStatus}
                 busyConnector={connectorBusy}
                 onGithubTokenChange={setGithubToken}
                 onGithubRepoChange={setGithubRepo}
@@ -2336,8 +2563,12 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 onVercelTokenChange={setVercelToken}
                 onVercelProjectNameChange={setVercelProjectName}
                 onVercelTeamIdChange={setVercelTeamId}
+                onNetlifyTokenChange={setNetlifyToken}
+                onNetlifySiteIdChange={setNetlifySiteId}
+                onNetlifyTeamIdChange={setNetlifyTeamId}
                 onVerifyGithub={() => { void handleVerifyGithub(); }}
                 onVerifyVercel={() => { void handleVerifyVercel(); }}
+                onVerifyNetlify={() => { void handleVerifyNetlify(); }}
               />
             )}
             {step === 7 && (
@@ -2364,6 +2595,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 openaiModelPreset={openaiModelPreset}
                 githubConfigured={githubVerified}
                 vercelConfigured={vercelVerified}
+                netlifyConfigured={netlifyVerified}
               />
             )}
 

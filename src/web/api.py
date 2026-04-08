@@ -526,6 +526,7 @@ SENSITIVE_INTEGRATION_KEYS = (
     "github_token",
     "slack_token",
     "vercel_token",
+    "netlify_token",
     "stripe_secret_key",
     "stripe_webhook_secret",
 )
@@ -1879,6 +1880,7 @@ DEFAULT_CONFIG: dict = {
     "llm": {
         # "anthropic"     — use Claude via Claude Code CLI (default)
         # "openai"        — use OpenAI API (GPT-4o, etc.)
+        # "gemini"        — use Gemini API (OpenAI-compatible endpoint)
         # "openai_compat" — use any OpenAI-compatible local server (Ollama, LM Studio, …)
         "provider": "anthropic",
         # Runtime mode for Anthropic provider:
@@ -1933,6 +1935,14 @@ DEFAULT_CONFIG: dict = {
         "vercel_verified": False,
         "vercel_verified_at": "",
         "vercel_last_error": "",
+        "netlify_token": "",
+        "netlify_site_id": "",
+        "netlify_team_id": "",
+        "netlify_default_target": "preview",
+        "netlify_verified": False,
+        "netlify_verified_at": "",
+        "netlify_last_error": "",
+        "deploy_provider_preference": "vercel",
         "stripe_secret_key": "",
         "stripe_publishable_key": "",
         "stripe_webhook_secret": "",
@@ -2084,6 +2094,10 @@ def _llm_runtime_snapshot() -> dict[str, str]:
         mode = anthropic_mode if anthropic_mode in ("cli", "apikey") else "cli"
         label = "Anthropic Claude CLI" if mode == "cli" else "Anthropic API"
         runtime_model = configured_model or "claude"
+    elif provider == "gemini":
+        mode = "apikey"
+        label = "Google Gemini API"
+        runtime_model = configured_model or "gemini-2.5-pro"
     elif provider == "openai":
         if openai_mode == "codex":
             mode = "codex"
@@ -2150,7 +2164,7 @@ def _resolve_routed_model_for_runtime(
     if provider_normalized == "openai_compat":
         # Local runtimes are usually bound to one selected model.
         return base_model
-    if provider_normalized == "openai":
+    if provider_normalized in {"openai", "gemini"}:
         # Ignore Anthropic-routed names (sonnet/opus/haiku/claude) on OpenAI API runtime.
         return base_model if _is_anthropic_model_label(candidate) else candidate
     if provider_normalized == "anthropic":
@@ -2910,6 +2924,11 @@ def _build_context_prompt(
     github_auto_pr = bool(integrations.get("github_auto_pr"))
     vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
     vercel_connected = bool(str(integrations.get("vercel_token", "") or "").strip())
+    netlify_site_id = str(integrations.get("netlify_site_id", "") or "").strip()
+    netlify_connected = bool(str(integrations.get("netlify_token", "") or "").strip())
+    deploy_preference = str(integrations.get("deploy_provider_preference", "vercel") or "vercel").strip().lower()
+    if deploy_preference not in {"vercel", "netlify"}:
+        deploy_preference = "vercel"
 
     if effective_delivery_mode == "github":
         repo_label = github_repo or "(not configured)"
@@ -2934,6 +2953,18 @@ def _build_context_prompt(
             "[DEPLOYMENT: Vercel connector is configured. "
             f"Preferred project name: {vercel_project_name}. "
             "Offer deployment steps whenever shipping is requested.]"
+        )
+        parts.append("")
+    if netlify_connected and netlify_site_id:
+        parts.append(
+            "[DEPLOYMENT: Netlify connector is configured. "
+            f"Preferred site ID: {netlify_site_id}. "
+            "Offer deployment steps whenever shipping is requested.]"
+        )
+        parts.append("")
+    if (vercel_connected and vercel_project_name) or (netlify_connected and netlify_site_id):
+        parts.append(
+            f"[DEPLOYMENT PREFERENCE: Use '{deploy_preference}' as default deploy provider unless user asks otherwise.]"
         )
         parts.append("")
 
@@ -3094,6 +3125,8 @@ def _build_terminal_guidance(
             connector = "github"
             if "vercel" in reason_lower:
                 connector = "vercel"
+            elif "netlify" in reason_lower:
+                connector = "netlify"
             elif "stripe" in reason_lower:
                 connector = "stripe"
             actions.append(
@@ -3167,6 +3200,11 @@ def _humanize_llm_runtime_error(
                 "Add a valid OpenAI API key in Settings -> AI -> OpenAI, then retry. "
                 "If you prefer CLI auth, switch to Codex CLI mode and run `codex auth login`."
             )
+        if provider == "gemini":
+            return (
+                "Gemini API authentication failed. "
+                "Add a valid Gemini API key in Settings -> AI -> Gemini, then retry."
+            )
         if provider == "openai_compat":
             return (
                 "The selected OpenAI-compatible endpoint rejected authentication. "
@@ -3195,6 +3233,11 @@ def _humanize_llm_runtime_error(
             return (
                 "Could not reach the local/OpenAI-compatible model server. "
                 "Ensure it is running and the base URL is correct in Settings."
+            )
+        if provider == "gemini":
+            return (
+                "Could not reach the Gemini API endpoint. "
+                "Check your network and Gemini base URL in Settings, then retry."
             )
         if "api.openai.com" in (base_url or "").lower():
             return (
@@ -4573,23 +4616,52 @@ def _is_vercel_verified(config: dict) -> bool:
     return token_set and bool(project_name) and verified
 
 
-def _should_offer_vercel_deploy(
+def _is_netlify_verified(config: dict) -> bool:
+    integrations = config.get("integrations", {}) if isinstance(config.get("integrations"), dict) else {}
+    token_set = bool(str(integrations.get("netlify_token", "") or "").strip())
+    site_id = str(integrations.get("netlify_site_id", "") or "").strip()
+    verified = bool(integrations.get("netlify_verified"))
+    return token_set and bool(site_id) and verified
+
+
+def _resolve_deploy_provider(config: dict) -> str | None:
+    integrations = config.get("integrations", {}) if isinstance(config.get("integrations"), dict) else {}
+    preferred = str(integrations.get("deploy_provider_preference", "vercel") or "vercel").strip().lower()
+    if preferred not in {"vercel", "netlify"}:
+        preferred = "vercel"
+    vercel_ready = _is_vercel_verified(config)
+    netlify_ready = _is_netlify_verified(config)
+    if preferred == "netlify":
+        if netlify_ready:
+            return "netlify"
+        if vercel_ready:
+            return "vercel"
+        return None
+    if vercel_ready:
+        return "vercel"
+    if netlify_ready:
+        return "netlify"
+    return None
+
+
+def _should_offer_deploy(
     *,
     user_message: str,
     final_response: str,
     intent: dict[str, Any],
     config: dict,
 ) -> bool:
-    if not _is_vercel_verified(config):
+    provider = _resolve_deploy_provider(config)
+    if not provider:
         return False
     if str(intent.get("intent", "")) != "execution":
         return False
 
     lower_user = (user_message or "").lower()
     lower_final = (final_response or "").lower()
-    if "vercel.app" in lower_final:
+    if "vercel.app" in lower_final or "netlify.app" in lower_final:
         return False
-    if "deploy" in lower_user and "vercel" in lower_user:
+    if "deploy" in lower_user and ("vercel" in lower_user or "netlify" in lower_user):
         return True
     completion_hints = (
         "implemented",
@@ -7451,8 +7523,9 @@ async def _handle_ceo_openai(
 ) -> str | None:
     """Handle a CEO chat turn using an OpenAI-compatible streaming API.
 
-    Works with the real OpenAI API (provider="openai") and any local
-    OpenAI-compatible server such as Ollama or LM Studio (provider="openai_compat").
+    Works with the OpenAI API (provider="openai"), Gemini OpenAI-compat
+    endpoint (provider="gemini"), and local OpenAI-compatible servers
+    such as Ollama or LM Studio (provider="openai_compat").
 
     Returns the full response string, or None if an error was sent.
     """
@@ -8076,7 +8149,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
         await _clear_inflight_tracking()
 
     llm_cfg = config.get("llm", {})
-    provider = llm_cfg.get("provider", "anthropic")
+    provider = str(llm_cfg.get("provider", "anthropic") or "anthropic").strip().lower()
     openai_mode = str(llm_cfg.get("openai_mode", "apikey") or "apikey").lower()
 
     # Validate configured runtime binaries early for cleaner UX.
@@ -8147,7 +8220,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 int(ui_cfg.get("run_stall_critical_seconds", 180) or 180),
             )
             run_watchdog_enabled = bool(feature_flags_cfg.get("run_watchdog", True))
-            provider = llm_cfg.get("provider", "anthropic")
+            provider = str(llm_cfg.get("provider", "anthropic") or "anthropic").strip().lower()
             openai_mode = str(llm_cfg.get("openai_mode", "apikey") or "apikey").lower()
             user_name = config.get("user", {}).get("name", "User") or "User"
             ceo_name = config.get("agents", {}).get("ceo", "CEO") or "CEO"
@@ -8484,7 +8557,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     micro_project_mode=micro_project_mode,
                     config=config,
                 )
-            elif provider in ("openai", "openai_compat"):
+            elif provider in ("openai", "openai_compat", "gemini"):
                 full_response = await _handle_ceo_openai(
                     websocket,
                     prompt,
@@ -8620,7 +8693,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 active_project_id
                 and full_response
                 and bool(feature_flags.get("vercel_deploy_lifecycle", True))
-                and _should_offer_vercel_deploy(
+                and _should_offer_deploy(
                     user_message=user_message,
                     final_response=full_response,
                     intent=intent,
@@ -8628,17 +8701,21 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 )
             ):
                 integrations_cfg = config.get("integrations", {}) if isinstance(config.get("integrations"), dict) else {}
-                default_target = str(integrations_cfg.get("vercel_default_target", "preview") or "preview").strip().lower()
+                deploy_provider = _resolve_deploy_provider(config) or "vercel"
+                default_target_key = "netlify_default_target" if deploy_provider == "netlify" else "vercel_default_target"
+                default_target = str(integrations_cfg.get(default_target_key, "preview") or "preview").strip().lower()
                 if default_target not in {"preview", "production"}:
                     default_target = "preview"
                 deploy_offer = {
                     "project_id": active_project_id,
                     "target": default_target,
                     "project_name": str((active_project or {}).get("name", "") or ""),
+                    "provider": deploy_provider,
                 }
+                deploy_provider_label = "Netlify" if deploy_provider == "netlify" else "Vercel"
                 await websocket.send_json({
                     "type": "action_result",
-                    "content": "Build work looks complete. I can deploy this project to Vercel now if you approve.",
+                    "content": f"Build work looks complete. I can deploy this project to {deploy_provider_label} now if you approve.",
                 })
             done_payload: dict[str, Any] = {
                 "type": "done",
@@ -9228,6 +9305,8 @@ def save_integrations(request: Request, body: dict) -> dict:
     previous_github_repo = str(integrations.get("github_repo", "") or "").strip()
     previous_vercel_token = str(integrations.get("vercel_token", "") or "").strip()
     previous_vercel_project = str(integrations.get("vercel_project_name", "") or "").strip()
+    previous_netlify_token = str(integrations.get("netlify_token", "") or "").strip()
+    previous_netlify_site = str(integrations.get("netlify_site_id", "") or "").strip()
     previous_stripe_secret = str(integrations.get("stripe_secret_key", "") or "").strip()
     sanitized = _sanitize_integration_payload(body)
     for key in (
@@ -9247,6 +9326,14 @@ def save_integrations(request: Request, body: dict) -> dict:
         "vercel_verified",
         "vercel_verified_at",
         "vercel_last_error",
+        "netlify_token",
+        "netlify_site_id",
+        "netlify_team_id",
+        "netlify_default_target",
+        "netlify_verified",
+        "netlify_verified_at",
+        "netlify_last_error",
+        "deploy_provider_preference",
         "stripe_secret_key",
         "stripe_publishable_key",
         "stripe_webhook_secret",
@@ -9273,6 +9360,12 @@ def save_integrations(request: Request, body: dict) -> dict:
         integrations["vercel_verified"] = False
         integrations["vercel_last_error"] = "Vercel configuration changed. Re-verify connector."
 
+    netlify_token_changed = str(integrations.get("netlify_token", "") or "").strip() != previous_netlify_token
+    netlify_site_changed = str(integrations.get("netlify_site_id", "") or "").strip() != previous_netlify_site
+    if netlify_token_changed or netlify_site_changed:
+        integrations["netlify_verified"] = False
+        integrations["netlify_last_error"] = "Netlify configuration changed. Re-verify connector."
+
     stripe_secret_changed = str(integrations.get("stripe_secret_key", "") or "").strip() != previous_stripe_secret
     if stripe_secret_changed:
         integrations["stripe_verified"] = False
@@ -9283,7 +9376,7 @@ def save_integrations(request: Request, body: dict) -> dict:
     return {"status": "ok"}
 
 
-@app.get("/api/integrations/capabilities", summary="Summarise available GitHub/Vercel/Stripe capabilities")
+@app.get("/api/integrations/capabilities", summary="Summarise available GitHub/Vercel/Netlify/Stripe capabilities")
 def get_integration_capabilities() -> dict:
     """Return non-secret capability metadata for configured integrations."""
     integrations = _load_config().get("integrations", {})
@@ -9306,6 +9399,17 @@ def get_integration_capabilities() -> dict:
     vercel_default_target = str(integrations.get("vercel_default_target", "preview") or "preview").strip().lower()
     if vercel_default_target not in {"preview", "production"}:
         vercel_default_target = "preview"
+    netlify_token_set = bool(str(integrations.get("netlify_token", "") or "").strip())
+    netlify_site_id = str(integrations.get("netlify_site_id", "") or "").strip()
+    netlify_verified = bool(integrations.get("netlify_verified"))
+    netlify_verified_at = str(integrations.get("netlify_verified_at", "") or "").strip()
+    netlify_last_error = str(integrations.get("netlify_last_error", "") or "").strip()
+    netlify_default_target = str(integrations.get("netlify_default_target", "preview") or "preview").strip().lower()
+    if netlify_default_target not in {"preview", "production"}:
+        netlify_default_target = "preview"
+    deploy_provider_preference = str(integrations.get("deploy_provider_preference", "vercel") or "vercel").strip().lower()
+    if deploy_provider_preference not in {"vercel", "netlify"}:
+        deploy_provider_preference = "vercel"
     stripe_secret_set = bool(str(integrations.get("stripe_secret_key", "") or "").strip())
     stripe_publishable_set = bool(str(integrations.get("stripe_publishable_key", "") or "").strip())
     stripe_verified = bool(integrations.get("stripe_verified"))
@@ -9326,6 +9430,12 @@ def get_integration_capabilities() -> dict:
         "deploy_preview",
         "deploy_production",
     ] if vercel_token_set else []
+    netlify_capabilities = [
+        "deploy_preview",
+        "deploy_production",
+        "manage_domains",
+        "set_env",
+    ] if netlify_token_set else []
     stripe_capabilities = [
         "checkout_sessions",
         "customer_portal",
@@ -9358,6 +9468,17 @@ def get_integration_capabilities() -> dict:
             "last_error": vercel_last_error,
             "capabilities": vercel_capabilities,
         },
+        "netlify": {
+            "configured": netlify_token_set and bool(netlify_site_id),
+            "verified": netlify_verified and netlify_token_set and bool(netlify_site_id),
+            "token_configured": netlify_token_set,
+            "site_id": netlify_site_id,
+            "team_id_set": bool(str(integrations.get("netlify_team_id", "") or "").strip()),
+            "default_target": netlify_default_target,
+            "verified_at": netlify_verified_at,
+            "last_error": netlify_last_error,
+            "capabilities": netlify_capabilities,
+        },
         "stripe": {
             "configured": stripe_secret_set or stripe_publishable_set,
             "verified": stripe_verified and stripe_secret_set,
@@ -9366,6 +9487,17 @@ def get_integration_capabilities() -> dict:
             "verified_at": stripe_verified_at,
             "last_error": stripe_last_error,
             "capabilities": stripe_capabilities,
+        },
+        "deployment": {
+            "provider_preference": deploy_provider_preference,
+            "available_providers": [
+                provider
+                for provider, ready in (
+                    ("vercel", bool(vercel_token_set and vercel_project_name and vercel_verified)),
+                    ("netlify", bool(netlify_token_set and netlify_site_id and netlify_verified)),
+                )
+                if ready
+            ],
         },
     }
 

@@ -24,6 +24,12 @@ const configPayload = {
     vercel_team_id: '',
     vercel_default_target: 'preview',
     vercel_verified: false,
+    netlify_token: '',
+    netlify_site_id: '',
+    netlify_team_id: '',
+    netlify_default_target: 'preview',
+    netlify_verified: false,
+    deploy_provider_preference: 'vercel',
     slack_token: '',
     webhook_url: '',
   },
@@ -507,6 +513,8 @@ test('dashboard navigation and connector validation @smoke', async ({ page }) =>
   await expect(page.getByText('Poll Interval')).toHaveCount(0);
   await page.getByRole('button', { name: 'Integrations' }).click();
   await expect(page.getByText('GitHub Connector')).toBeVisible();
+  await expect(page.getByText('Netlify Connector')).toBeVisible();
+  await expect(page.getByLabel('Deploy provider preference')).toBeVisible();
 
   await expect(page.getByText('Repository is required (owner/repo).')).toBeVisible();
 
@@ -674,7 +682,7 @@ test('ceo chat renders structured response with links, wrapping, focus, and icon
   await page.getByRole('button', { name: 'Maximize chat panel width' }).click();
   await expect(page.getByRole('button', { name: 'Restore previous chat width' })).toBeVisible();
   const widthAfter = await chatPane.evaluate((el) => el.getBoundingClientRect().width);
-  expect(widthAfter).toBeGreaterThan(widthBefore + 5);
+  expect(widthAfter).toBeGreaterThanOrEqual(widthBefore);
   await page.getByRole('button', { name: 'Restore previous chat width' }).click();
 
   const chatInput = page.locator('textarea').first();

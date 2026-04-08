@@ -7,6 +7,7 @@ import {
   saveIntegrationsResult,
   githubVerifyIntegration,
   vercelVerifyIntegration,
+  netlifyVerifyIntegration,
   stripeVerifyIntegration,
   fetchGithubRepos,
   createGithubRepo,
@@ -20,6 +21,9 @@ import {
   vercelDeploy,
   vercelAssignDomain,
   vercelSetEnv,
+  netlifyDeploy,
+  netlifyAssignDomain,
+  netlifySetEnv,
   fetchUpdateStatus,
   checkForUpdates,
   applyManualUpdate,
@@ -36,7 +40,7 @@ import InlineActionCard from './InlineActionCard';
 interface SettingsPanelProps {
   onConfigUpdated?: () => void;
   initialTab?: SettingsTab;
-  focusConnector?: 'github' | 'vercel' | 'stripe' | null;
+  focusConnector?: 'github' | 'vercel' | 'netlify' | 'stripe' | null;
 }
 
 // ---- CSS variable colour references (no hard-coded hex) ----
@@ -89,7 +93,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string
   { id: 'general', label: 'General', description: 'Core dashboard and identity settings.' },
   { id: 'ai', label: 'AI', description: 'Model provider and runtime selection.' },
   { id: 'agents', label: 'Agents', description: 'Names, model overrides, and agent personas.' },
-  { id: 'integrations', label: 'Integrations', description: 'Workspace mode, GitHub, Vercel, Telegram, Slack, and webhooks.' },
+  { id: 'integrations', label: 'Integrations', description: 'Workspace mode, GitHub, Vercel, Netlify, Telegram, Slack, and webhooks.' },
   { id: 'appearance', label: 'Appearance', description: 'Theme and density preferences.' },
 ];
 
@@ -110,6 +114,14 @@ interface IntegrationSettings {
   vercel_verified: boolean;
   vercel_verified_at: string;
   vercel_last_error: string;
+  netlify_token: string;
+  netlify_site_id: string;
+  netlify_team_id: string;
+  netlify_default_target: 'preview' | 'production';
+  netlify_verified: boolean;
+  netlify_verified_at: string;
+  netlify_last_error: string;
+  deploy_provider_preference: 'vercel' | 'netlify';
   stripe_secret_key: string;
   stripe_publishable_key: string;
   stripe_webhook_secret: string;
@@ -142,6 +154,14 @@ function integrationsFromConfig(config: AppConfig | null): IntegrationSettings {
     vercel_verified: Boolean(config?.integrations?.vercel_verified),
     vercel_verified_at: config?.integrations?.vercel_verified_at ?? '',
     vercel_last_error: config?.integrations?.vercel_last_error ?? '',
+    netlify_token: config?.integrations?.netlify_token ?? '',
+    netlify_site_id: config?.integrations?.netlify_site_id ?? '',
+    netlify_team_id: config?.integrations?.netlify_team_id ?? '',
+    netlify_default_target: config?.integrations?.netlify_default_target === 'production' ? 'production' : 'preview',
+    netlify_verified: Boolean(config?.integrations?.netlify_verified),
+    netlify_verified_at: config?.integrations?.netlify_verified_at ?? '',
+    netlify_last_error: config?.integrations?.netlify_last_error ?? '',
+    deploy_provider_preference: config?.integrations?.deploy_provider_preference === 'netlify' ? 'netlify' : 'vercel',
     stripe_secret_key: config?.integrations?.stripe_secret_key ?? '',
     stripe_publishable_key: config?.integrations?.stripe_publishable_key ?? '',
     stripe_webhook_secret: config?.integrations?.stripe_webhook_secret ?? '',
@@ -703,6 +723,7 @@ const LOCAL_PRESETS_SETTINGS = [
 ] as const;
 
 const OPENAI_MODEL_PRESETS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'custom'];
+const GEMINI_MODEL_PRESETS = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'custom'];
 
 function detectLocalPreset(baseUrl: string): (typeof LOCAL_PRESETS_SETTINGS)[number]['id'] {
   const match = LOCAL_PRESETS_SETTINGS.find((preset) => preset.baseUrl === baseUrl);
@@ -730,6 +751,10 @@ function AiProviderSection({
     if (!llm || llm.provider !== 'openai') return 'gpt-4o';
     return OPENAI_MODEL_PRESETS.includes(llm.model) ? llm.model : 'custom';
   });
+  const [geminiPreset, setGeminiPreset] = useState(() => {
+    if (!llm || llm.provider !== 'gemini') return 'gemini-2.5-pro';
+    return GEMINI_MODEL_PRESETS.includes(llm.model) ? llm.model : 'custom';
+  });
 
   const [testStatus, setTestStatus]   = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
@@ -738,7 +763,7 @@ function AiProviderSection({
   const [saveError, setSaveError]     = useState<string | null>(null);
 
   const showApiProbe =
-    provider === 'openai_compat' || (provider === 'openai' && openaiMode === 'apikey');
+    provider === 'openai_compat' || provider === 'gemini' || (provider === 'openai' && openaiMode === 'apikey');
 
   const handlePreset = (presetId: string) => {
     const p = LOCAL_PRESETS_SETTINGS.find((x) => x.id === presetId);
@@ -751,6 +776,10 @@ function AiProviderSection({
 
   const handleOpenaiPreset = (m: string) => {
     setOpenaiPreset(m);
+    if (m !== 'custom') setModel(m);
+  };
+  const handleGeminiPreset = (m: string) => {
+    setGeminiPreset(m);
     if (m !== 'custom') setModel(m);
   };
 
@@ -778,14 +807,21 @@ function AiProviderSection({
     setSaving(true);
     const resolvedModel = provider === 'openai'
       ? (openaiMode === 'codex' ? 'codex' : (openaiPreset !== 'custom' ? openaiPreset : model))
+      : provider === 'gemini'
+        ? (geminiPreset !== 'custom' ? geminiPreset : model)
       : model;
     const resolvedApiKey = provider === 'openai' && openaiMode === 'codex' ? '' : apiKey;
+    const resolvedBaseUrl = provider === 'openai'
+      ? 'https://api.openai.com/v1'
+      : provider === 'gemini'
+        ? 'https://generativelanguage.googleapis.com/v1beta/openai'
+        : baseUrl;
     const patch: Partial<AppConfig> = {
       llm: {
         provider,
         anthropic_mode: anthropicMode,
         openai_mode: openaiMode,
-        base_url: provider === 'openai' ? 'https://api.openai.com/v1' : baseUrl,
+        base_url: resolvedBaseUrl,
         model: resolvedModel,
         api_key: resolvedApiKey,
         system_prompt: systemPrompt,
@@ -821,10 +857,11 @@ function AiProviderSection({
   return (
     <div>
       {/* Provider radio cards */}
-      {(['openai', 'anthropic', 'openai_compat'] as LlmConfig['provider'][]).map((p) => {
+      {(['openai', 'anthropic', 'gemini', 'openai_compat'] as LlmConfig['provider'][]).map((p) => {
         const meta: Record<string, { icon: string; title: string; desc: string }> = {
           anthropic:    { icon: 'AN', title: 'Anthropic Cloud', desc: 'Claude Code CLI (recommended) or API key mode.' },
           openai:       { icon: 'OA', title: 'OpenAI',          desc: 'Codex CLI (recommended) or API key mode.' },
+          gemini:       { icon: 'GM', title: 'Google Gemini',   desc: 'Gemini API (AI Studio key via OpenAI-compatible endpoint).' },
           openai_compat:{ icon: 'LM', title: 'Local Model',     desc: 'OpenAI-compatible local server (less recommended for orchestration reliability).' },
         };
         const m = meta[p];
@@ -836,7 +873,7 @@ function AiProviderSection({
             aria-checked={selected}
             onClick={() => {
               setProvider(p);
-              if (p === 'openai') {
+              if (p === 'openai' || p === 'gemini') {
                 setApiKey('');
               }
               clearTestStatus();
@@ -1024,6 +1061,49 @@ function AiProviderSection({
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Gemini fields */}
+      {provider === 'gemini' && (
+        <div style={{ ...rowStyle, marginTop: '4px' }}>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={labelStyle}>Model</label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: geminiPreset === 'custom' ? '6px' : 0 }}>
+              {GEMINI_MODEL_PRESETS.map((m) => (
+                <button key={m} onClick={() => handleGeminiPreset(m)} style={{
+                  padding: '4px 10px', borderRadius: '5px', fontSize: '12px', cursor: 'pointer',
+                  border: `1px solid ${geminiPreset === m ? C.accent : C.border}`,
+                  backgroundColor: geminiPreset === m ? 'color-mix(in srgb, var(--tf-accent-blue) 20%, transparent)' : C.surface,
+                  color: geminiPreset === m ? C.accent : C.textSecondary, outline: 'none',
+                }}>
+                  {m}
+                </button>
+              ))}
+            </div>
+            {geminiPreset === 'custom' && (
+              <input type="text" value={model} onChange={(e) => setModel(e.target.value)}
+                placeholder="gemini-2.5-pro" style={inputStyle({ maxWidth: '320px' })}
+                onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              />
+            )}
+          </div>
+          <div>
+            <label style={labelStyle}>Gemini API Key</label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="AIza..."
+              style={inputStyle({ maxWidth: '420px' })}
+              onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+            />
+            <p style={{ marginTop: '6px', fontSize: '11px', color: C.textMuted }}>
+              AI Studio key is used with Gemini OpenAI-compatible endpoint.
+            </p>
+          </div>
         </div>
       )}
 
@@ -1247,6 +1327,9 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [vercelToken, setVercelToken] = useState('');
   const [vercelTeamId, setVercelTeamId] = useState('');
   const [vercelProjectName, setVercelProjectName] = useState('');
+  const [netlifyToken, setNetlifyToken] = useState('');
+  const [netlifySiteId, setNetlifySiteId] = useState('');
+  const [netlifyTeamId, setNetlifyTeamId] = useState('');
   const [stripeSecretKey, setStripeSecretKey] = useState('');
   const [stripePublishableKey, setStripePublishableKey] = useState('');
   const [stripeWebhookSecret, setStripeWebhookSecret] = useState('');
@@ -1256,6 +1339,7 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [webhookUrl, setWebhookUrl] = useState('');
   const [githubTokenMasked, setGithubTokenMasked] = useState(false);
   const [vercelTokenMasked, setVercelTokenMasked] = useState(false);
+  const [netlifyTokenMasked, setNetlifyTokenMasked] = useState(false);
   const [stripeSecretKeyMasked, setStripeSecretKeyMasked] = useState(false);
   const [stripeWebhookSecretMasked, setStripeWebhookSecretMasked] = useState(false);
   const [slackTokenMasked, setSlackTokenMasked] = useState(false);
@@ -1265,17 +1349,23 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [vercelVerified, setVercelVerified] = useState(false);
   const [vercelVerifiedAt, setVercelVerifiedAt] = useState('');
   const [vercelLastError, setVercelLastError] = useState('');
+  const [netlifyVerified, setNetlifyVerified] = useState(false);
+  const [netlifyVerifiedAt, setNetlifyVerifiedAt] = useState('');
+  const [netlifyLastError, setNetlifyLastError] = useState('');
   const [stripeVerified, setStripeVerified] = useState(false);
   const [stripeVerifiedAt, setStripeVerifiedAt] = useState('');
   const [stripeLastError, setStripeLastError] = useState('');
   const [vercelDefaultTarget, setVercelDefaultTarget] = useState<'preview' | 'production'>('preview');
+  const [netlifyDefaultTarget, setNetlifyDefaultTarget] = useState<'preview' | 'production'>('preview');
+  const [deployProviderPreference, setDeployProviderPreference] = useState<'vercel' | 'netlify'>('vercel');
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [githubRepoOptions, setGithubRepoOptions] = useState<Array<{ full_name: string; default_branch: string }>>([]);
   const [integrationOpsStatus, setIntegrationOpsStatus] = useState('');
   const [integrationOpsBusy, setIntegrationOpsBusy] = useState(false);
-  const [quickVerifyBusy, setQuickVerifyBusy] = useState<'' | 'github' | 'vercel' | 'stripe'>('');
+  const [quickVerifyBusy, setQuickVerifyBusy] = useState<'' | 'github' | 'vercel' | 'netlify' | 'stripe'>('');
   const [githubInlineStatus, setGithubInlineStatus] = useState('');
   const [vercelInlineStatus, setVercelInlineStatus] = useState('');
+  const [netlifyInlineStatus, setNetlifyInlineStatus] = useState('');
   const [stripeInlineStatus, setStripeInlineStatus] = useState('');
   const [showAdvancedIntegrationControls, setShowAdvancedIntegrationControls] = useState(false);
   const [repoPathForOps, setRepoPathForOps] = useState('');
@@ -1283,6 +1373,9 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
   const [vercelDomain, setVercelDomain] = useState('');
   const [vercelEnvKey, setVercelEnvKey] = useState('');
   const [vercelEnvValue, setVercelEnvValue] = useState('');
+  const [netlifyDomain, setNetlifyDomain] = useState('');
+  const [netlifyEnvKey, setNetlifyEnvKey] = useState('');
+  const [netlifyEnvValue, setNetlifyEnvValue] = useState('');
   const [prQualityProfile, setPrQualityProfile] = useState<'strict' | 'balanced' | 'fast'>('balanced');
   const [prProfileStatus, setPrProfileStatus] = useState('');
   const stripeBillingEnabled = config?.feature_flags?.stripe_billing_pack !== false;
@@ -1465,6 +1558,58 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     );
   };
 
+  const handleNetlifyOp = async (mode: 'preview' | 'production' | 'domain' | 'env') => {
+    const token = netlifyTokenMasked ? '' : netlifyToken.trim();
+    if (!token && !netlifyTokenMasked) {
+      setIntegrationOpsStatus('Set Netlify token first.');
+      return;
+    }
+    if (!netlifySiteId.trim()) {
+      setIntegrationOpsStatus('Set Netlify site ID first.');
+      return;
+    }
+    if (mode === 'preview' || mode === 'production') {
+      await runIntegrationOp(`Netlify ${mode} deploy`, async () =>
+        netlifyDeploy({
+          token,
+          site_id: netlifySiteId.trim(),
+          team_id: netlifyTeamId.trim(),
+          target: mode,
+        }),
+      );
+      return;
+    }
+    if (mode === 'domain') {
+      if (!netlifyDomain.trim()) {
+        setIntegrationOpsStatus('Set Netlify domain before assigning.');
+        return;
+      }
+      await runIntegrationOp('Netlify domain assignment', async () =>
+        netlifyAssignDomain({
+          token,
+          site_id: netlifySiteId.trim(),
+          team_id: netlifyTeamId.trim(),
+          domain: netlifyDomain.trim(),
+        }),
+      );
+      return;
+    }
+    if (!netlifyEnvKey.trim() || !netlifyEnvValue.trim()) {
+      setIntegrationOpsStatus('Set Netlify env key and value before sync.');
+      return;
+    }
+    await runIntegrationOp('Netlify env sync', async () =>
+      netlifySetEnv({
+        token,
+        site_id: netlifySiteId.trim(),
+        team_id: netlifyTeamId.trim(),
+        key: netlifyEnvKey.trim(),
+        value: netlifyEnvValue,
+        target: ['preview', 'production'],
+      }),
+    );
+  };
+
   const handleQuickVerifyGithub = async () => {
     const repo = githubRepo.trim();
     const tokenForVerify = githubTokenMasked ? undefined : githubToken.trim();
@@ -1579,6 +1724,63 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     setQuickVerifyBusy('');
   };
 
+  const handleQuickVerifyNetlify = async () => {
+    const siteId = netlifySiteId.trim();
+    const tokenForVerify = netlifyTokenMasked ? undefined : netlifyToken.trim();
+    setNetlifyInlineStatus('');
+    if (!siteId) {
+      setNetlifyInlineStatus('Site ID is required.');
+      setIntegrationOpsStatus('Netlify verification requires a site ID.');
+      return;
+    }
+    if (!tokenForVerify && !netlifyTokenMasked) {
+      setNetlifyInlineStatus('Token is required for verification.');
+      setIntegrationOpsStatus('Netlify verification requires a token.');
+      return;
+    }
+    setQuickVerifyBusy('netlify');
+    setNetlifyInlineStatus('Saving connector settings...');
+    setIntegrationOpsStatus('Saving Netlify connector settings...');
+    const saved = await saveIntegrationsResult({
+      netlify_token: netlifyTokenMasked ? REDACTED_SECRET : netlifyToken.trim(),
+      netlify_site_id: siteId,
+      netlify_team_id: netlifyTeamId.trim(),
+      netlify_default_target: netlifyDefaultTarget,
+      deploy_provider_preference: deployProviderPreference,
+    });
+    if (!saved.ok) {
+      setQuickVerifyBusy('');
+      setNetlifyVerified(false);
+      const detail = saved.detail || 'Failed to save settings before verification.';
+      setNetlifyInlineStatus(detail);
+      setIntegrationOpsStatus(detail);
+      return;
+    }
+    setNetlifyInlineStatus('Verifying connector...');
+    setIntegrationOpsStatus('Verifying Netlify connector...');
+    const result = await netlifyVerifyIntegration({
+      token: tokenForVerify,
+      site_id: siteId,
+      team_id: netlifyTeamId.trim(),
+    });
+    if (!result) {
+      setQuickVerifyBusy('');
+      setNetlifyVerified(false);
+      setNetlifyLastError('Network error during Netlify verification.');
+      setNetlifyInlineStatus('Verification failed due to a network error.');
+      setIntegrationOpsStatus('Netlify verification failed due to a network error.');
+      return;
+    }
+    const verified = Boolean(result.ok);
+    const verifiedAt = verified ? new Date().toISOString() : '';
+    setNetlifyVerified(verified);
+    setNetlifyVerifiedAt(verifiedAt);
+    setNetlifyLastError(verified ? '' : result.message || 'Netlify verification failed.');
+    setNetlifyInlineStatus(result.message || (verified ? 'Netlify connector verified.' : 'Netlify verification failed.'));
+    setIntegrationOpsStatus(result.message || (verified ? 'Netlify connector verified.' : 'Netlify verification failed.'));
+    setQuickVerifyBusy('');
+  };
+
   const handleQuickVerifyStripe = async () => {
     const secretForVerify = stripeSecretKeyMasked ? undefined : stripeSecretKey.trim();
     setStripeInlineStatus('');
@@ -1673,6 +1875,20 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         setVercelVerified(Boolean(integrationCfg.vercel_verified));
         setVercelVerifiedAt(integrationCfg.vercel_verified_at || '');
         setVercelLastError(integrationCfg.vercel_last_error || '');
+        if (integrationCfg.netlify_token === REDACTED_SECRET) {
+          setNetlifyToken('');
+          setNetlifyTokenMasked(true);
+        } else {
+          setNetlifyToken(integrationCfg.netlify_token);
+          setNetlifyTokenMasked(false);
+        }
+        setNetlifySiteId(integrationCfg.netlify_site_id);
+        setNetlifyTeamId(integrationCfg.netlify_team_id);
+        setNetlifyDefaultTarget(integrationCfg.netlify_default_target === 'production' ? 'production' : 'preview');
+        setNetlifyVerified(Boolean(integrationCfg.netlify_verified));
+        setNetlifyVerifiedAt(integrationCfg.netlify_verified_at || '');
+        setNetlifyLastError(integrationCfg.netlify_last_error || '');
+        setDeployProviderPreference(integrationCfg.deploy_provider_preference === 'netlify' ? 'netlify' : 'vercel');
         if (integrationCfg.stripe_secret_key === REDACTED_SECRET) {
           setStripeSecretKey('');
           setStripeSecretKeyMasked(true);
@@ -1719,6 +1935,8 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       setIntegrationOpsStatus('GitHub setup is required before creating GitHub projects. Connect and verify below.');
     } else if (focusConnector === 'vercel') {
       setIntegrationOpsStatus('Vercel setup is required for deployments. Connect and verify below.');
+    } else if (focusConnector === 'netlify') {
+      setIntegrationOpsStatus('Netlify setup is required for deployments. Connect and verify below.');
     } else if (focusConnector === 'stripe') {
       setIntegrationOpsStatus('Stripe setup is required for billing scaffolds. Connect and verify below.');
     }
@@ -1783,6 +2001,14 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         vercel_verified: vercelVerified,
         vercel_verified_at: vercelVerifiedAt,
         vercel_last_error: vercelLastError,
+        netlify_token: netlifyTokenMasked ? REDACTED_SECRET : netlifyToken.trim(),
+        netlify_site_id: netlifySiteId.trim(),
+        netlify_team_id: netlifyTeamId.trim(),
+        netlify_default_target: netlifyDefaultTarget,
+        netlify_verified: netlifyVerified,
+        netlify_verified_at: netlifyVerifiedAt,
+        netlify_last_error: netlifyLastError,
+        deploy_provider_preference: deployProviderPreference,
         stripe_secret_key: stripeSecretKeyMasked ? REDACTED_SECRET : stripeSecretKey.trim(),
         stripe_publishable_key: stripePublishableKey.trim(),
         stripe_webhook_secret: stripeWebhookSecretMasked ? REDACTED_SECRET : stripeWebhookSecret.trim(),
@@ -1801,6 +2027,9 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       const vercelConfigChanged =
         nextIntegrations.vercel_project_name !== currentIntegrations.vercel_project_name
         || nextIntegrations.vercel_token !== currentIntegrations.vercel_token;
+      const netlifyConfigChanged =
+        nextIntegrations.netlify_site_id !== currentIntegrations.netlify_site_id
+        || nextIntegrations.netlify_token !== currentIntegrations.netlify_token;
       const stripeConfigChanged =
         nextIntegrations.stripe_secret_key !== currentIntegrations.stripe_secret_key;
       if (githubConfigChanged) {
@@ -1812,6 +2041,11 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
         nextIntegrations.vercel_verified = false;
         nextIntegrations.vercel_verified_at = '';
         nextIntegrations.vercel_last_error = 'Vercel configuration changed. Re-verify connector.';
+      }
+      if (netlifyConfigChanged) {
+        nextIntegrations.netlify_verified = false;
+        nextIntegrations.netlify_verified_at = '';
+        nextIntegrations.netlify_last_error = 'Netlify configuration changed. Re-verify connector.';
       }
       if (stripeConfigChanged) {
         nextIntegrations.stripe_verified = false;
@@ -1846,6 +2080,9 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
       setVercelVerified(nextIntegrations.vercel_verified);
       setVercelVerifiedAt(nextIntegrations.vercel_verified_at);
       setVercelLastError(nextIntegrations.vercel_last_error);
+      setNetlifyVerified(nextIntegrations.netlify_verified);
+      setNetlifyVerifiedAt(nextIntegrations.netlify_verified_at);
+      setNetlifyLastError(nextIntegrations.netlify_last_error);
       setStripeVerified(nextIntegrations.stripe_verified);
       setStripeVerifiedAt(nextIntegrations.stripe_verified_at);
       setStripeLastError(nextIntegrations.stripe_last_error);
@@ -1881,6 +2118,11 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
     : (!vercelProjectName.trim()
       ? 'Project name is required.'
       : ((!vercelTokenMasked && !vercelToken.trim()) ? 'Token is required for verification.' : ''));
+  const netlifyVerifyDisabledReason = (quickVerifyBusy.length > 0 && quickVerifyBusy !== 'netlify')
+    ? 'Another connector verification is in progress.'
+    : (!netlifySiteId.trim()
+      ? 'Site ID is required.'
+      : ((!netlifyTokenMasked && !netlifyToken.trim()) ? 'Token is required for verification.' : ''));
   const stripeVerifyDisabledReason = (quickVerifyBusy.length > 0 && quickVerifyBusy !== 'stripe')
     ? 'Another connector verification is in progress.'
     : ((!stripeSecretKeyMasked && !stripeSecretKey.trim())
@@ -2537,6 +2779,114 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                 </div>
               </div>
 
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Netlify Connector</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>Token + site + verify</div>
+                  </div>
+                  <span style={{ fontSize: '11px', color: netlifyVerified ? C.success : C.textMuted }}>
+                    {netlifyVerified ? 'Verified' : 'Not verified'}
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: '1fr' }}>
+                  <input
+                    type="text"
+                    value={netlifySiteId}
+                    onChange={(e) => setNetlifySiteId(e.target.value)}
+                    placeholder="Netlify site ID"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                  />
+                  <input
+                    type="text"
+                    value={netlifyTeamId}
+                    onChange={(e) => setNetlifyTeamId(e.target.value)}
+                    placeholder="Team ID (optional)"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                  />
+                  <input
+                    type="password"
+                    value={netlifyToken}
+                    onChange={(e) => { setNetlifyToken(e.target.value); }}
+                    placeholder={netlifyTokenMasked ? 'Saved (hidden). Type to replace.' : 'nfp_...'}
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onInput={() => { setNetlifyTokenMasked(false); }}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <label style={{ fontSize: '11px', color: C.textSecondary }}>Default deploy target</label>
+                    <FloatingSelect
+                      value={netlifyDefaultTarget}
+                      options={[
+                        { value: 'preview', label: 'Preview' },
+                        { value: 'production', label: 'Production' },
+                      ]}
+                      onChange={(nextValue) => setNetlifyDefaultTarget(nextValue === 'production' ? 'production' : 'preview')}
+                      ariaLabel="Default Netlify deploy target"
+                      variant="input"
+                      size="sm"
+                      style={{ maxWidth: '150px' }}
+                    />
+                    <button
+                      onClick={() => { void handleQuickVerifyNetlify(); }}
+                      disabled={quickVerifyBusy.length > 0 || Boolean(netlifyVerifyDisabledReason)}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '7px',
+                        border: `1px solid ${netlifyVerified ? C.success : C.accent}`,
+                        backgroundColor: netlifyVerified ? 'rgba(63,185,80,0.12)' : C.accentDim,
+                        color: netlifyVerified ? C.success : C.accent,
+                        fontSize: '12px',
+                        cursor: (quickVerifyBusy.length > 0 || netlifyVerifyDisabledReason) ? 'not-allowed' : 'pointer',
+                        opacity: (quickVerifyBusy.length > 0 || netlifyVerifyDisabledReason) ? 0.75 : 1,
+                      }}
+                    >
+                      {quickVerifyBusy === 'netlify' ? 'Verifying…' : netlifyVerified ? 'Verified' : 'Connect & Verify'}
+                    </button>
+                    {netlifyVerifiedAt && (
+                      <span style={{ fontSize: '11px', color: C.textMuted }}>
+                        Verified {new Date(netlifyVerifiedAt).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                  {netlifyVerifyDisabledReason && (
+                    <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>
+                      {netlifyVerifyDisabledReason}
+                    </p>
+                  )}
+                  {!netlifyVerifyDisabledReason && netlifyInlineStatus && (
+                    <p style={{ margin: 0, fontSize: '11px', color: netlifyVerified ? C.success : C.textSecondary }}>
+                      {netlifyInlineStatus}
+                    </p>
+                  )}
+                  {!netlifyVerified && netlifyLastError && (
+                    <p style={{ margin: 0, fontSize: '11px', color: C.warning }}>{netlifyLastError}</p>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Default Deployment Provider</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>
+                      Used by one-click deploy actions when both connectors are verified.
+                    </div>
+                  </div>
+                  <FloatingSelect
+                    value={deployProviderPreference}
+                    options={[
+                      { value: 'vercel', label: 'Vercel' },
+                      { value: 'netlify', label: 'Netlify' },
+                    ]}
+                    onChange={(nextValue) => setDeployProviderPreference(nextValue === 'netlify' ? 'netlify' : 'vercel')}
+                    ariaLabel="Deploy provider preference"
+                    variant="input"
+                    size="sm"
+                    style={{ maxWidth: '170px' }}
+                  />
+                </div>
+              </div>
+
               {stripeBillingEnabled && (
                 <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
@@ -2966,6 +3316,104 @@ export default function SettingsPanel({ onConfigUpdated, initialTab = 'general',
                     />
                     <button
                       onClick={() => handleVercelOp('env')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Sync env
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ padding: '12px', backgroundColor: C.surfaceRaised, borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: C.textPrimary }}>Netlify Connector</div>
+                    <div style={{ fontSize: '11px', color: C.textSecondary }}>Deploy generated apps directly to Netlify from the same workflow</div>
+                  </div>
+                  <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', backgroundColor: 'rgba(59,142,255,0.14)', color: C.accent, border: `1px solid rgba(59,142,255,0.32)` }}>Deployment ready</span>
+                </div>
+
+                <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: '1fr' }}>
+                  <input
+                    type="password"
+                    value={netlifyToken}
+                    onChange={(e) => { setNetlifyToken(e.target.value); }}
+                    placeholder={netlifyTokenMasked ? 'Saved (hidden). Type to replace.' : 'Netlify token (nfp_...)'}
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onInput={() => { setNetlifyTokenMasked(false); }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                  <input
+                    type="text"
+                    value={netlifyTeamId}
+                    onChange={(e) => setNetlifyTeamId(e.target.value)}
+                    placeholder="Team ID (optional)"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                  <input
+                    type="text"
+                    value={netlifySiteId}
+                    onChange={(e) => setNetlifySiteId(e.target.value)}
+                    placeholder="Site ID"
+                    style={{ ...inputStyle({ maxWidth: '420px', fontSize: '12px' }) }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = C.accent; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = C.border; }}
+                  />
+                </div>
+                <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => handleNetlifyOp('preview')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Preview deploy
+                    </button>
+                    <button
+                      onClick={() => handleNetlifyOp('production')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.warning}`, backgroundColor: 'transparent', color: C.warning, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Production deploy
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={netlifyDomain}
+                      onChange={(e) => setNetlifyDomain(e.target.value)}
+                      placeholder="example.com"
+                      style={{ ...inputStyle({ maxWidth: '220px', fontSize: '12px' }) }}
+                    />
+                    <button
+                      onClick={() => handleNetlifyOp('domain')}
+                      disabled={integrationOpsBusy}
+                      style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
+                    >
+                      Assign domain
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={netlifyEnvKey}
+                      onChange={(e) => setNetlifyEnvKey(e.target.value)}
+                      placeholder="ENV_KEY"
+                      style={{ ...inputStyle({ maxWidth: '160px', fontSize: '12px' }) }}
+                    />
+                    <input
+                      type="text"
+                      value={netlifyEnvValue}
+                      onChange={(e) => setNetlifyEnvValue(e.target.value)}
+                      placeholder="ENV_VALUE"
+                      style={{ ...inputStyle({ maxWidth: '220px', fontSize: '12px' }) }}
+                    />
+                    <button
+                      onClick={() => handleNetlifyOp('env')}
                       disabled={integrationOpsBusy}
                       style={{ padding: '6px 10px', borderRadius: '7px', border: `1px solid ${C.border}`, backgroundColor: C.surface, color: C.textSecondary, fontSize: '12px', cursor: 'pointer' }}
                     >

@@ -125,6 +125,39 @@ class ProjectVercelDeployRequest(BaseModel):
     target: str = Field(default="preview")
 
 
+class NetlifyVerifyRequest(BaseModel):
+    token: str = ""
+    site_id: str = ""
+    team_id: str = ""
+
+
+class NetlifyDeployRequest(BaseModel):
+    token: str = Field(min_length=8)
+    site_id: str = Field(min_length=1)
+    team_id: str = ""
+    target: str = Field(default="preview")
+
+
+class NetlifyDomainRequest(BaseModel):
+    token: str = Field(min_length=8)
+    site_id: str = Field(min_length=1)
+    domain: str = Field(min_length=3)
+    team_id: str = ""
+
+
+class NetlifyEnvRequest(BaseModel):
+    token: str = Field(min_length=8)
+    site_id: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    target: list[str] = Field(default_factory=lambda: ["preview", "production"])
+    team_id: str = ""
+
+
+class ProjectNetlifyDeployRequest(BaseModel):
+    target: str = Field(default="preview")
+
+
 class UpdateApplyRequest(BaseModel):
     version: str = Field(default="")
 
@@ -331,8 +364,14 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
         vercel_token = str(integrations.get("vercel_token", "") or "").strip()
         vercel_verified = bool(integrations.get("vercel_verified"))
+        netlify_site_id = str(integrations.get("netlify_site_id", "") or "").strip()
+        netlify_token = str(integrations.get("netlify_token", "") or "").strip()
+        netlify_verified = bool(integrations.get("netlify_verified"))
         stripe_secret = str(integrations.get("stripe_secret_key", "") or "").strip()
         stripe_verified = bool(integrations.get("stripe_verified"))
+        deploy_preference = str(integrations.get("deploy_provider_preference", "vercel") or "vercel").strip().lower()
+        if deploy_preference not in {"vercel", "netlify"}:
+            deploy_preference = "vercel"
 
         warning_seconds = max(30, int(ui_cfg.get("run_stall_warning_seconds", 90) or 90))
         critical_seconds = max(warning_seconds, int(ui_cfg.get("run_stall_critical_seconds", 180) or 180))
@@ -393,9 +432,17 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
                 "verified": vercel_verified,
                 "project_name": vercel_project_name,
             },
+            "netlify": {
+                "configured": bool(netlify_token and netlify_site_id),
+                "verified": netlify_verified,
+                "site_id": netlify_site_id,
+            },
             "stripe": {
                 "configured": bool(stripe_secret),
                 "verified": stripe_verified,
+            },
+            "deployment": {
+                "provider_preference": deploy_preference,
             },
         }
 
@@ -412,7 +459,13 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             "provider": {
                 "name": provider,
                 "model": model,
-                "mode": anthropic_mode if provider == "anthropic" else openai_mode if provider == "openai" else "apikey",
+                "mode": (
+                    anthropic_mode
+                    if provider == "anthropic"
+                    else openai_mode
+                    if provider == "openai"
+                    else "apikey"
+                ),
                 "ready": provider_ready,
                 "reason": provider_reason,
             },
@@ -1687,6 +1740,20 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             team_id.strip() or str(integrations.get("vercel_team_id", "") or "").strip(),
         )
 
+    def _resolve_netlify_creds(
+        token: str = "",
+        site_id: str = "",
+        team_id: str = "",
+    ) -> tuple[str, str, str]:
+        """Resolve Netlify credentials from request body, falling back to saved config."""
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        return (
+            token.strip() or str(integrations.get("netlify_token", "") or "").strip(),
+            site_id.strip() or str(integrations.get("netlify_site_id", "") or "").strip(),
+            team_id.strip() or str(integrations.get("netlify_team_id", "") or "").strip(),
+        )
+
     @router.post("/vercel/link")
     def v1_vercel_link(request: Request, body: VercelLinkRequest) -> dict[str, Any]:
         _require_mutation_auth(request)
@@ -1726,6 +1793,40 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             "ok": verified,
             "account": account if isinstance(account, dict) else {},
             "project_ok": bool(result.get("project_ok")),
+            "message": result.get("message", ""),
+        }
+
+    @router.post("/netlify/verify")
+    def v1_netlify_verify(request: Request, body: NetlifyVerifyRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token, site_id, team_id = _resolve_netlify_creds(body.token, body.site_id, body.team_id)
+        result = ctx.integration_service.netlify_verify_connection(
+            token,
+            site_id=site_id,
+            team_id=team_id,
+        )
+        if token:
+            integrations["netlify_token"] = token
+        if site_id:
+            integrations["netlify_site_id"] = site_id
+        if team_id:
+            integrations["netlify_team_id"] = team_id
+
+        verified = bool(result.get("ok")) and bool(result.get("site_ok"))
+        integrations["netlify_verified"] = verified
+        integrations["netlify_last_error"] = "" if verified else str(result.get("message", "") or "Netlify verification failed.")
+        if verified:
+            integrations["netlify_verified_at"] = datetime.now(timezone.utc).isoformat()
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+
+        account = result.get("account", {})
+        return {
+            "ok": verified,
+            "account": account if isinstance(account, dict) else {},
+            "site_ok": bool(result.get("site_ok")),
             "message": result.get("message", ""),
         }
 
@@ -1787,6 +1888,44 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         return ctx.integration_service.vercel_set_env(
             token,
             project_name=project_name,
+            key=body.key,
+            value=body.value,
+            target=body.target,
+            team_id=team_id,
+        )
+
+    @router.post("/netlify/deploy")
+    def v1_netlify_deploy(request: Request, body: NetlifyDeployRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        token, site_id, team_id = _resolve_netlify_creds(body.token, body.site_id, body.team_id)
+        target = body.target.lower().strip() or "preview"
+        if target not in {"preview", "production"}:
+            raise HTTPException(status_code=400, detail="target must be preview or production")
+        return ctx.integration_service.netlify_deploy(
+            token,
+            site_id=site_id,
+            team_id=team_id,
+            target=target,
+        )
+
+    @router.post("/netlify/domain")
+    def v1_netlify_domain(request: Request, body: NetlifyDomainRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        token, site_id, team_id = _resolve_netlify_creds(body.token, body.site_id, body.team_id)
+        return ctx.integration_service.netlify_assign_domain(
+            token,
+            site_id=site_id,
+            domain=body.domain,
+            team_id=team_id,
+        )
+
+    @router.post("/netlify/env")
+    def v1_netlify_env(request: Request, body: NetlifyEnvRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        token, site_id, team_id = _resolve_netlify_creds(body.token, body.site_id, body.team_id)
+        return ctx.integration_service.netlify_set_env(
+            token,
+            site_id=site_id,
             key=body.key,
             value=body.value,
             target=body.target,
@@ -1867,6 +2006,87 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
 
         return {
             "ok": True,
+            "provider": "vercel",
+            "target": target,
+            "deployment_url": deployment_url,
+        }
+
+    @router.post("/projects/{project_id}/deploy/netlify")
+    def v1_project_netlify_deploy(request: Request, project_id: str, body: ProjectNetlifyDeployRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        project = ctx.project_service.state_manager.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        netlify_token = str(integrations.get("netlify_token", "") or "").strip()
+        netlify_site_id = str(integrations.get("netlify_site_id", "") or "").strip()
+        netlify_verified = bool(integrations.get("netlify_verified"))
+
+        if not netlify_token or not netlify_site_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "netlify_not_configured",
+                    "message": "Netlify is not configured yet. Open Settings → Integrations and connect Netlify.",
+                    "settings_target": "netlify",
+                },
+            )
+        if not netlify_verified:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "netlify_not_verified",
+                    "message": "Netlify is configured but not verified yet. Verify the connector in Settings.",
+                    "settings_target": "netlify",
+                },
+            )
+
+        target = (body.target or str(integrations.get("netlify_default_target", "preview") or "preview")).strip().lower()
+        if target not in {"preview", "production"}:
+            target = "preview"
+
+        deploy_result = ctx.integration_service.netlify_deploy_saved(integrations, target=target)
+        if deploy_result.get("status") != "ok":
+            raise HTTPException(
+                status_code=502,
+                detail=deploy_result.get("message", "Failed to deploy project to Netlify."),
+            )
+
+        deployment_url = str(deploy_result.get("deployment_url", "") or "").strip()
+        deployment_payload = deploy_result.get("deployment")
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "DEPLOY_PREVIEW" if target == "preview" else "DEPLOY_PRODUCTION",
+            f"Netlify deployment created for {project.get('name', project_id)}",
+            project_id=project_id,
+            metadata={
+                "target": target,
+                "deployment_url": deployment_url,
+                "provider": "netlify",
+                "deployment": deployment_payload if isinstance(deployment_payload, dict) else {},
+            },
+        )
+
+        metadata = ctx.project_service.get_metadata(project_id)
+        deployments = metadata.get("deployments", [])
+        if not isinstance(deployments, list):
+            deployments = []
+        deployments.append(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "target": target,
+                "url": deployment_url,
+                "provider": "netlify",
+            }
+        )
+        ctx.project_service.update_metadata(project_id, {"deployments": deployments[-50:]})
+
+        return {
+            "ok": True,
+            "provider": "netlify",
             "target": target,
             "deployment_url": deployment_url,
         }
