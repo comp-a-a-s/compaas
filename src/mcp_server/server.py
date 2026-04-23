@@ -2,7 +2,7 @@
 COMPaaS MCP Server.
 
 Provides tools for project management, task tracking, memory, company operations,
-token metrics, and micro-agent lifecycle management.
+token metrics, connector operations, and micro-agent lifecycle management.
 Launched by the CEO agent via mcpServers config in .claude/agents/ceo.md.
 
 Usage:
@@ -12,6 +12,7 @@ Usage:
     python -m src.mcp_server.server --scope memory
     python -m src.mcp_server.server --scope company
     python -m src.mcp_server.server --scope metrics
+    python -m src.mcp_server.server --scope integrations
     python -m src.mcp_server.server --scope micro_agents
 """
 
@@ -25,13 +26,14 @@ from src.mcp_server.task_board_tools import register_task_tools
 from src.mcp_server.memory_tools import register_memory_tools
 from src.mcp_server.company_tools import register_company_tools
 from src.mcp_server.metrics_tools import register_metrics_tools
+from src.mcp_server.integrations_tools import register_integrations_tools
 from src.mcp_server.micro_agent_tools import register_micro_agent_tools
 from src.utils import resolve_data_dir
 
 
 DATA_DIR = resolve_data_dir()
 
-VALID_SCOPES = ("all", "project", "tasks", "memory", "company", "metrics", "micro_agents")
+VALID_SCOPES = ("all", "project", "tasks", "memory", "company", "metrics", "integrations", "micro_agents")
 
 
 def create_server(scope: str = "all", data_dir: str | None = None) -> FastMCP:
@@ -46,6 +48,7 @@ def create_server(scope: str = "all", data_dir: str | None = None) -> FastMCP:
         "memory": register_memory_tools,
         "company": register_company_tools,
         "metrics": register_metrics_tools,
+        "integrations": register_integrations_tools,
         "micro_agents": register_micro_agent_tools,
     }
 

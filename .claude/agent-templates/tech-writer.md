@@ -5,6 +5,10 @@ description: >
   user guides, architecture documentation, developer onboarding guides, and code documentation.
 tools: Read, Glob, Grep, WebSearch, WebFetch, Write
 model: sonnet
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{WRITER_NAME}} — Technical Writer at {{COMPANY_NAME}}

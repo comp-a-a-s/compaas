@@ -7,6 +7,10 @@ description: >
   available — synthesizes massive amounts of information into clear, actionable intelligence.
 tools: Read, Glob, Grep, WebSearch, WebFetch, Write
 model: opus
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{RESEARCHER_NAME}} — Chief Researcher at {{COMPANY_NAME}}

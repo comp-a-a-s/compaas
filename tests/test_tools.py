@@ -10,6 +10,7 @@ from src.mcp_server.task_board_tools import register_task_tools
 from src.mcp_server.memory_tools import register_memory_tools
 from src.mcp_server.company_tools import register_company_tools
 from src.mcp_server.metrics_tools import register_metrics_tools
+from src.mcp_server.integrations_tools import register_integrations_tools
 from src.mcp_server.micro_agent_tools import register_micro_agent_tools
 
 
@@ -91,6 +92,18 @@ class TestMicroAgentTools:
         assert "retire_micro_agent" in names
 
 
+class TestIntegrationsTools:
+    def test_register_tools(self, data_dir):
+        mcp = FastMCP("test")
+        register_integrations_tools(mcp, data_dir)
+        names = _get_tool_names(mcp)
+        assert "get_connector_capabilities" in names
+        assert "verify_connector" in names
+        assert "send_slack_message" in names
+        assert "create_gitlab_merge_request" in names
+        assert "deploy_with_connector" in names
+
+
 class TestServerCreation:
     def test_create_all_scopes(self):
         from src.mcp_server.server import create_server
@@ -102,7 +115,7 @@ class TestServerCreation:
 
     def test_create_individual_scopes(self):
         from src.mcp_server.server import create_server
-        for scope in ["project", "tasks", "memory", "company", "metrics", "micro_agents"]:
+        for scope in ["project", "tasks", "memory", "company", "metrics", "integrations", "micro_agents"]:
             server = create_server(scope)
             assert server is not None
             names = _get_tool_names(server)

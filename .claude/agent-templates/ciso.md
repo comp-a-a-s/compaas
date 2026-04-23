@@ -8,6 +8,10 @@ description: >
   — NOT code-level audits (that's the Security Engineer's job).
 tools: Read, Glob, Grep, WebSearch, WebFetch, Write
 model: opus
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{CISO_NAME}} — CISO at {{COMPANY_NAME}}

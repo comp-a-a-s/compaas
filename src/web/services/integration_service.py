@@ -1,4 +1,4 @@
-"""Service helpers for GitHub, Vercel, Netlify, and Stripe integration workflows."""
+"""Service helpers for external connector workflows."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import os
 import re
 import ssl
 import subprocess
+import base64
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,7 +25,7 @@ def _utcnow_iso() -> str:
 
 
 class IntegrationService:
-    """Best-effort integration actions for GitHub/Vercel/Netlify/Stripe workflows."""
+    """Best-effort integration actions for connector workflows."""
 
     def __init__(self, data_dir: str, workspace_root: str = ""):
         self.data_dir = data_dir
@@ -138,7 +139,7 @@ class IntegrationService:
                     {
                         "full_name": repo.get("full_name", ""),
                         "private": bool(repo.get("private")),
-                        "default_branch": repo.get("default_branch", "master"),
+                        "default_branch": repo.get("default_branch", "main"),
                         "permissions": repo.get("permissions", {}),
                     }
                 )
@@ -158,7 +159,7 @@ class IntegrationService:
             "status": "ok",
             "repo": {
                 "full_name": body.get("full_name", ""),
-                "default_branch": body.get("default_branch", "master"),
+                "default_branch": body.get("default_branch", "main"),
                 "html_url": body.get("html_url", ""),
                 "clone_url": body.get("clone_url", ""),
             },
@@ -295,7 +296,7 @@ class IntegrationService:
                         break
         return {"status": "ok", "findings": findings, "clean": len(findings) == 0}
 
-    def sync_remote(self, repo_path: str, default_branch: str = "master") -> dict[str, Any]:
+    def sync_remote(self, repo_path: str, default_branch: str = "main") -> dict[str, Any]:
         valid, message, normalized_path = self._validate_repo_path(repo_path)
         if not valid:
             return {"status": "error", "code": "invalid_repo_path", "message": message}
@@ -313,7 +314,7 @@ class IntegrationService:
             "reconcile_output": rebase_out,
         }
 
-    def detect_drift(self, repo_path: str, default_branch: str = "master") -> dict[str, Any]:
+    def detect_drift(self, repo_path: str, default_branch: str = "main") -> dict[str, Any]:
         valid, message, normalized_path = self._validate_repo_path(repo_path)
         if not valid:
             return {"status": "error", "code": "invalid_repo_path", "message": message}
@@ -445,6 +446,45 @@ class IntegrationService:
         except Exception as exc:
             return 0, {"message": str(exc)}
 
+    @staticmethod
+    def _json_request(
+        url: str,
+        method: str,
+        *,
+        headers: dict[str, str] | None = None,
+        payload: dict[str, Any] | list[Any] | None = None,
+        timeout: int = 20,
+    ) -> tuple[int, dict[str, Any]]:
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            url,
+            data=data,
+            method=method.upper(),
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "COMPaaS",
+                **(headers or {}),
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=IntegrationService._request_ssl_context()) as resp:
+                body = resp.read().decode("utf-8")
+                parsed: Any = json.loads(body) if body else {}
+                if isinstance(parsed, dict):
+                    return resp.getcode(), parsed
+                return resp.getcode(), {"data": parsed}
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            try:
+                parsed = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                parsed = {"message": body}
+            if isinstance(parsed, dict):
+                return exc.code, parsed
+            return exc.code, {"data": parsed}
+        except Exception as exc:
+            return 0, {"message": str(exc)}
+
     def vercel_link_project(self, token: str, *, name: str, team_id: str = "") -> dict[str, Any]:
         path = f"/v10/projects{f'?teamId={team_id}' if team_id else ''}"
         status, body = self._vercel_request(token, "POST", path, {"name": name})
@@ -569,6 +609,40 @@ class IntegrationService:
         if status not in (200, 201):
             return {"status": "error", "http_status": status, "message": body.get("error", {}).get("message") or body.get("message", "Failed to set environment variable")}
         return {"status": "ok", "result": body}
+
+    def vercel_list_projects(self, token: str, *, team_id: str = "") -> dict[str, Any]:
+        token = str(token or "").strip()
+        if not token:
+            return {"status": "error", "message": "Vercel token is required."}
+        query = urllib.parse.urlencode({"teamId": team_id, "limit": 100}) if team_id else "limit=100"
+        status, body = self._vercel_request(token, "GET", f"/v9/projects?{query}")
+        if status != 200:
+            raw_message = (
+                body.get("error", {}).get("message")
+                or body.get("message")
+                or "Failed to list Vercel projects."
+            )
+            return {
+                "status": "error",
+                "http_status": status,
+                "message": self._humanize_external_error(str(raw_message or ""), provider="Vercel"),
+            }
+        projects_raw = body.get("projects")
+        projects: list[dict[str, Any]] = []
+        if isinstance(projects_raw, list):
+            for project in projects_raw:
+                if not isinstance(project, dict):
+                    continue
+                projects.append(
+                    {
+                        "id": str(project.get("id", "") or "").strip(),
+                        "name": str(project.get("name", "") or "").strip(),
+                        "framework": str(project.get("framework", "") or "").strip(),
+                        "updated_at": int(project.get("updatedAt", 0) or 0),
+                    }
+                )
+        projects.sort(key=lambda row: (row.get("name", "") or "").lower())
+        return {"status": "ok", "projects": projects}
 
     def netlify_verify_connection(self, token: str, *, site_id: str = "", team_id: str = "") -> dict[str, Any]:
         token = (token or "").strip()
@@ -732,6 +806,42 @@ class IntegrationService:
             }
         return {"status": "ok", "result": body, "team_id": str(team_id or "").strip()}
 
+    def netlify_list_sites(self, token: str, *, team_id: str = "") -> dict[str, Any]:
+        token = str(token or "").strip()
+        if not token:
+            return {"status": "error", "message": "Netlify token is required."}
+        status, body = self._netlify_request(token, "GET", "/sites?per_page=200")
+        if status != 200:
+            raw_message = body.get("message") or body.get("error") or "Failed to list Netlify sites."
+            return {
+                "status": "error",
+                "http_status": status,
+                "message": self._humanize_external_error(str(raw_message or ""), provider="Netlify"),
+            }
+        raw_sites = body.get("data")
+        if not isinstance(raw_sites, list):
+            raw_sites = body if isinstance(body, list) else []
+        sites: list[dict[str, Any]] = []
+        team_filter = str(team_id or "").strip()
+        for site in raw_sites:
+            if not isinstance(site, dict):
+                continue
+            account_id = str(site.get("account_id", "") or "").strip()
+            account_slug = str(site.get("account_slug", "") or "").strip()
+            if team_filter and team_filter not in {account_id, account_slug}:
+                continue
+            sites.append(
+                {
+                    "id": str(site.get("id", "") or "").strip(),
+                    "name": str(site.get("name", "") or "").strip(),
+                    "url": str(site.get("ssl_url") or site.get("url") or "").strip(),
+                    "account_id": account_id,
+                    "account_slug": account_slug,
+                }
+            )
+        sites.sort(key=lambda row: (row.get("name", "") or "").lower())
+        return {"status": "ok", "sites": sites}
+
     def stripe_verify_connection(self, secret_key: str) -> dict[str, Any]:
         token = (secret_key or "").strip()
         if not token:
@@ -762,6 +872,455 @@ class IntegrationService:
             "account": account,
             "message": "Stripe key is valid.",
         }
+
+    def slack_send_message(
+        self,
+        token: str,
+        *,
+        channel: str,
+        text: str,
+        thread_ts: str = "",
+    ) -> dict[str, Any]:
+        token = str(token or "").strip()
+        channel = str(channel or "").strip()
+        text = str(text or "").strip()
+        thread_ts = str(thread_ts or "").strip()
+        if not token:
+            return {"status": "error", "message": "Slack bot token is required."}
+        if not channel:
+            return {"status": "error", "message": "Slack channel is required."}
+        if not text:
+            return {"status": "error", "message": "Slack message text is required."}
+        payload: dict[str, Any] = {"channel": channel, "text": text[:4000], "mrkdwn": True}
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        status, body = self._json_request(
+            "https://slack.com/api/chat.postMessage",
+            "POST",
+            headers={"Authorization": f"Bearer {token}"},
+            payload=payload,
+        )
+        ok = bool(body.get("ok"))
+        if status != 200 or not ok:
+            raw_message = body.get("error") or body.get("message") or "Failed to send Slack message."
+            return {
+                "status": "error",
+                "http_status": status,
+                "message": self._humanize_external_error(str(raw_message or ""), provider="Slack"),
+            }
+        return {"status": "ok", "message": body}
+
+    def linear_verify_connection(self, api_key: str) -> dict[str, Any]:
+        token = str(api_key or "").strip()
+        if not token:
+            return {"status": "error", "ok": False, "message": "Linear API key is required."}
+        query = {"query": "query { viewer { id name email } }"}
+        status, body = self._json_request(
+            "https://api.linear.app/graphql",
+            "POST",
+            headers={"Authorization": token},
+            payload=query,
+        )
+        errors = body.get("errors")
+        if status != 200 or errors:
+            message = ""
+            if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+                message = str(errors[0].get("message", "") or "").strip()
+            if not message:
+                message = str(body.get("message", "") or "Failed to verify Linear key.").strip()
+            return {"status": "error", "ok": False, "http_status": status, "message": message}
+        viewer = body.get("data", {}).get("viewer") if isinstance(body.get("data"), dict) else {}
+        if not isinstance(viewer, dict):
+            viewer = {}
+        return {
+            "status": "ok",
+            "ok": True,
+            "account": {
+                "id": str(viewer.get("id", "") or "").strip(),
+                "name": str(viewer.get("name", "") or "").strip(),
+                "email": str(viewer.get("email", "") or "").strip(),
+            },
+            "message": "Linear key is valid.",
+        }
+
+    def linear_create_issue(
+        self,
+        api_key: str,
+        *,
+        team_id: str,
+        title: str,
+        description: str = "",
+        priority: int | None = None,
+    ) -> dict[str, Any]:
+        token = str(api_key or "").strip()
+        team_id = str(team_id or "").strip()
+        title = str(title or "").strip()
+        description = str(description or "").strip()
+        if not token:
+            return {"status": "error", "message": "Linear API key is required."}
+        if not team_id:
+            return {"status": "error", "message": "Linear team_id is required."}
+        if not title:
+            return {"status": "error", "message": "Linear issue title is required."}
+        input_payload: dict[str, Any] = {
+            "teamId": team_id,
+            "title": title[:240],
+            "description": description[:10000] if description else "",
+        }
+        if isinstance(priority, int):
+            input_payload["priority"] = max(0, min(4, priority))
+        mutation = {
+            "query": "mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title url state { name } } } }",
+            "variables": {"input": input_payload},
+        }
+        status, body = self._json_request(
+            "https://api.linear.app/graphql",
+            "POST",
+            headers={"Authorization": token},
+            payload=mutation,
+        )
+        errors = body.get("errors")
+        if status != 200 or errors:
+            message = ""
+            if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+                message = str(errors[0].get("message", "") or "").strip()
+            if not message:
+                message = str(body.get("message", "") or "Failed to create Linear issue.").strip()
+            return {"status": "error", "http_status": status, "message": message}
+        result = body.get("data", {}).get("issueCreate") if isinstance(body.get("data"), dict) else {}
+        if not isinstance(result, dict) or not bool(result.get("success")):
+            return {"status": "error", "http_status": status, "message": "Linear rejected the issue create request."}
+        issue = result.get("issue") if isinstance(result.get("issue"), dict) else {}
+        return {"status": "ok", "issue": issue}
+
+    def notion_verify_connection(self, token: str) -> dict[str, Any]:
+        api_token = str(token or "").strip()
+        if not api_token:
+            return {"status": "error", "ok": False, "message": "Notion token is required."}
+        status, body = self._json_request(
+            "https://api.notion.com/v1/users/me",
+            "GET",
+            headers={
+                "Authorization": f"Bearer {api_token}",
+                "Notion-Version": "2022-06-28",
+            },
+            payload=None,
+        )
+        if status != 200:
+            raw_message = body.get("message") or body.get("code") or "Failed to verify Notion token."
+            return {"status": "error", "ok": False, "http_status": status, "message": str(raw_message or "")}
+        user = body if isinstance(body, dict) else {}
+        return {
+            "status": "ok",
+            "ok": True,
+            "account": {
+                "id": str(user.get("id", "") or "").strip(),
+                "name": str(user.get("name", "") or "").strip(),
+                "type": str(user.get("type", "") or "").strip(),
+            },
+            "message": "Notion token is valid.",
+        }
+
+    def notion_upsert_page(
+        self,
+        token: str,
+        *,
+        parent_page_id: str,
+        title: str,
+        markdown: str = "",
+        page_id: str = "",
+    ) -> dict[str, Any]:
+        api_token = str(token or "").strip()
+        parent_page_id = str(parent_page_id or "").strip()
+        title = str(title or "").strip()
+        markdown = str(markdown or "").strip()
+        page_id = str(page_id or "").strip()
+        if not api_token:
+            return {"status": "error", "message": "Notion token is required."}
+        if not title:
+            return {"status": "error", "message": "Notion page title is required."}
+        headers = {
+            "Authorization": f"Bearer {api_token}",
+            "Notion-Version": "2022-06-28",
+        }
+        blocks: list[dict[str, Any]] = []
+        if markdown:
+            for line in markdown.splitlines()[:80]:
+                text = line.strip()
+                if not text:
+                    continue
+                blocks.append(
+                    {
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {"rich_text": [{"type": "text", "text": {"content": text[:1900]}}]},
+                    }
+                )
+        if page_id:
+            payload: dict[str, Any] = {
+                "properties": {
+                    "title": {
+                        "title": [
+                            {"type": "text", "text": {"content": title[:200]}},
+                        ]
+                    }
+                }
+            }
+            status, body = self._json_request(
+                f"https://api.notion.com/v1/pages/{urllib.parse.quote(page_id, safe='')}",
+                "PATCH",
+                headers=headers,
+                payload=payload,
+            )
+            if status != 200:
+                raw_message = body.get("message") or body.get("code") or "Failed to update Notion page."
+                return {"status": "error", "http_status": status, "message": str(raw_message or "")}
+            if blocks:
+                self._json_request(
+                    f"https://api.notion.com/v1/blocks/{urllib.parse.quote(page_id, safe='')}/children",
+                    "PATCH",
+                    headers=headers,
+                    payload={"children": blocks},
+                )
+            return {"status": "ok", "page": body}
+        if not parent_page_id:
+            return {"status": "error", "message": "parent_page_id is required when creating a Notion page."}
+        payload = {
+            "parent": {"page_id": parent_page_id},
+            "properties": {
+                "title": {
+                    "title": [
+                        {"type": "text", "text": {"content": title[:200]}},
+                    ]
+                }
+            },
+            "children": blocks,
+        }
+        status, body = self._json_request(
+            "https://api.notion.com/v1/pages",
+            "POST",
+            headers=headers,
+            payload=payload,
+        )
+        if status != 200:
+            raw_message = body.get("message") or body.get("code") or "Failed to create Notion page."
+            return {"status": "error", "http_status": status, "message": str(raw_message or "")}
+        return {"status": "ok", "page": body}
+
+    def jira_verify_connection(self, *, base_url: str, email: str, api_token: str) -> dict[str, Any]:
+        root = str(base_url or "").strip().rstrip("/")
+        user_email = str(email or "").strip()
+        token = str(api_token or "").strip()
+        if not root or not user_email or not token:
+            return {"status": "error", "ok": False, "message": "jira_base_url, jira_email, and jira_api_token are required."}
+        auth_header = "Basic " + base64.b64encode(f"{user_email}:{token}".encode("utf-8")).decode("utf-8")
+        status, body = self._json_request(
+            f"{root}/rest/api/3/myself",
+            "GET",
+            headers={"Authorization": auth_header, "Accept": "application/json"},
+            payload=None,
+        )
+        if status != 200:
+            raw_message = body.get("errorMessages") or body.get("message") or "Failed to verify Jira credentials."
+            message = str(raw_message[0] if isinstance(raw_message, list) and raw_message else raw_message)
+            return {"status": "error", "ok": False, "http_status": status, "message": message}
+        account = {
+            "account_id": str(body.get("accountId", "") or "").strip(),
+            "display_name": str(body.get("displayName", "") or "").strip(),
+            "email": str(body.get("emailAddress", "") or "").strip(),
+        }
+        return {"status": "ok", "ok": True, "account": account, "message": "Jira credentials are valid."}
+
+    def jira_create_issue(
+        self,
+        *,
+        base_url: str,
+        email: str,
+        api_token: str,
+        project_key: str,
+        summary: str,
+        description: str = "",
+        issue_type: str = "Task",
+    ) -> dict[str, Any]:
+        root = str(base_url or "").strip().rstrip("/")
+        user_email = str(email or "").strip()
+        token = str(api_token or "").strip()
+        project = str(project_key or "").strip()
+        issue_summary = str(summary or "").strip()
+        if not root or not user_email or not token:
+            return {"status": "error", "message": "jira_base_url, jira_email, and jira_api_token are required."}
+        if not project:
+            return {"status": "error", "message": "project_key is required."}
+        if not issue_summary:
+            return {"status": "error", "message": "summary is required."}
+        auth_header = "Basic " + base64.b64encode(f"{user_email}:{token}".encode("utf-8")).decode("utf-8")
+        payload = {
+            "fields": {
+                "project": {"key": project},
+                "summary": issue_summary[:255],
+                "description": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": str(description or "").strip()[:5000]}],
+                        }
+                    ],
+                },
+                "issuetype": {"name": str(issue_type or "Task").strip() or "Task"},
+            }
+        }
+        status, body = self._json_request(
+            f"{root}/rest/api/3/issue",
+            "POST",
+            headers={"Authorization": auth_header, "Accept": "application/json"},
+            payload=payload,
+        )
+        if status not in {200, 201}:
+            raw_message = body.get("errorMessages") or body.get("message") or "Failed to create Jira issue."
+            message = str(raw_message[0] if isinstance(raw_message, list) and raw_message else raw_message)
+            return {"status": "error", "http_status": status, "message": message}
+        return {"status": "ok", "issue": body}
+
+    def jira_transition_issue(
+        self,
+        *,
+        base_url: str,
+        email: str,
+        api_token: str,
+        issue_key: str,
+        transition_id: str,
+    ) -> dict[str, Any]:
+        root = str(base_url or "").strip().rstrip("/")
+        user_email = str(email or "").strip()
+        token = str(api_token or "").strip()
+        issue = str(issue_key or "").strip()
+        transition = str(transition_id or "").strip()
+        if not root or not user_email or not token:
+            return {"status": "error", "message": "jira_base_url, jira_email, and jira_api_token are required."}
+        if not issue or not transition:
+            return {"status": "error", "message": "issue_key and transition_id are required."}
+        auth_header = "Basic " + base64.b64encode(f"{user_email}:{token}".encode("utf-8")).decode("utf-8")
+        status, body = self._json_request(
+            f"{root}/rest/api/3/issue/{urllib.parse.quote(issue, safe='')}/transitions",
+            "POST",
+            headers={"Authorization": auth_header, "Accept": "application/json"},
+            payload={"transition": {"id": transition}},
+        )
+        if status not in {200, 204}:
+            raw_message = body.get("errorMessages") or body.get("message") or "Failed to transition Jira issue."
+            message = str(raw_message[0] if isinstance(raw_message, list) and raw_message else raw_message)
+            return {"status": "error", "http_status": status, "message": message}
+        return {"status": "ok", "issue_key": issue, "transition_id": transition}
+
+    def gitlab_verify_connection(self, *, base_url: str, token: str, project_id: str = "") -> dict[str, Any]:
+        root = str(base_url or "https://gitlab.com").strip().rstrip("/")
+        api_token = str(token or "").strip()
+        pid = str(project_id or "").strip()
+        if not api_token:
+            return {"status": "error", "ok": False, "message": "GitLab token is required."}
+        headers = {"PRIVATE-TOKEN": api_token}
+        status, body = self._json_request(
+            f"{root}/api/v4/user",
+            "GET",
+            headers=headers,
+            payload=None,
+        )
+        if status != 200:
+            raw_message = body.get("message") or "Failed to verify GitLab token."
+            return {"status": "error", "ok": False, "http_status": status, "message": str(raw_message or "")}
+        account = {
+            "id": body.get("id"),
+            "username": str(body.get("username", "") or "").strip(),
+            "name": str(body.get("name", "") or "").strip(),
+            "web_url": str(body.get("web_url", "") or "").strip(),
+        }
+        project_ok: bool | None = None
+        if pid:
+            project_status, _project_body = self._json_request(
+                f"{root}/api/v4/projects/{urllib.parse.quote(pid, safe='')}",
+                "GET",
+                headers=headers,
+                payload=None,
+            )
+            project_ok = project_status == 200
+        return {
+            "status": "ok",
+            "ok": True,
+            "account": account,
+            "project_ok": project_ok,
+            "message": "GitLab token is valid.",
+        }
+
+    def gitlab_create_branch(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        project_id: str,
+        branch: str,
+        ref: str = "main",
+    ) -> dict[str, Any]:
+        root = str(base_url or "https://gitlab.com").strip().rstrip("/")
+        api_token = str(token or "").strip()
+        pid = str(project_id or "").strip()
+        branch_name = str(branch or "").strip()
+        ref_name = str(ref or "main").strip() or "main"
+        if not api_token:
+            return {"status": "error", "message": "GitLab token is required."}
+        if not pid or not branch_name:
+            return {"status": "error", "message": "project_id and branch are required."}
+        query = urllib.parse.urlencode({"branch": branch_name, "ref": ref_name})
+        status, body = self._json_request(
+            f"{root}/api/v4/projects/{urllib.parse.quote(pid, safe='')}/repository/branches?{query}",
+            "POST",
+            headers={"PRIVATE-TOKEN": api_token},
+            payload=None,
+        )
+        if status not in {200, 201}:
+            raw_message = body.get("message") or "Failed to create GitLab branch."
+            return {"status": "error", "http_status": status, "message": str(raw_message or "")}
+        return {"status": "ok", "branch": body}
+
+    def gitlab_create_merge_request(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        project_id: str,
+        source_branch: str,
+        target_branch: str,
+        title: str,
+        description: str = "",
+    ) -> dict[str, Any]:
+        root = str(base_url or "https://gitlab.com").strip().rstrip("/")
+        api_token = str(token or "").strip()
+        pid = str(project_id or "").strip()
+        source = str(source_branch or "").strip()
+        target = str(target_branch or "").strip()
+        mr_title = str(title or "").strip()
+        if not api_token:
+            return {"status": "error", "message": "GitLab token is required."}
+        if not pid or not source or not target or not mr_title:
+            return {"status": "error", "message": "project_id, source_branch, target_branch, and title are required."}
+        payload = {
+            "source_branch": source,
+            "target_branch": target,
+            "title": mr_title[:255],
+            "description": str(description or "").strip()[:8000],
+            "remove_source_branch": False,
+        }
+        status, body = self._json_request(
+            f"{root}/api/v4/projects/{urllib.parse.quote(pid, safe='')}/merge_requests",
+            "POST",
+            headers={"PRIVATE-TOKEN": api_token},
+            payload=payload,
+        )
+        if status not in {200, 201}:
+            raw_message = body.get("message") or "Failed to create GitLab merge request."
+            return {"status": "error", "http_status": status, "message": str(raw_message or "")}
+        return {"status": "ok", "merge_request": body}
 
     @staticmethod
     def detect_project_stack(workspace_path: str) -> str:

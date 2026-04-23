@@ -17,6 +17,7 @@ from src.mcp_server.task_board_tools import register_task_tools
 from src.mcp_server.memory_tools import register_memory_tools
 from src.mcp_server.company_tools import register_company_tools
 from src.mcp_server.metrics_tools import register_metrics_tools
+from src.mcp_server.integrations_tools import register_integrations_tools
 from src.mcp_server.micro_agent_tools import register_micro_agent_tools
 
 
@@ -45,6 +46,7 @@ def tools(data_dir):
     register_memory_tools(mcp, data_dir)
     register_company_tools(mcp, data_dir)
     register_metrics_tools(mcp, data_dir)
+    register_integrations_tools(mcp, data_dir)
     register_micro_agent_tools(mcp, data_dir)
 
     # Extract the raw callables from the tool manager
@@ -612,6 +614,7 @@ class TestServerIntegration:
             "read_memory", "write_memory", "log_decision", "get_decisions",
             "get_org_chart", "get_roster", "hire_agent", "fire_agent",
             "log_token_usage", "get_token_report", "get_session_durations", "estimate_task_cost",
+            "get_connector_capabilities", "verify_connector", "send_slack_message", "deploy_with_connector",
             "spawn_micro_agent", "list_micro_agents", "retire_micro_agent",
         ]
         for tool_name in expected:
@@ -620,11 +623,15 @@ class TestServerIntegration:
     def test_individual_scopes_are_isolated(self):
         project_server = create_server("project")
         task_server = create_server("tasks")
+        integrations_server = create_server("integrations")
 
         project_tools = list(project_server._tool_manager._tools.keys())
         task_tools = list(task_server._tool_manager._tools.keys())
+        integrations_tools = list(integrations_server._tool_manager._tools.keys())
 
         assert "create_project" in project_tools
         assert "create_project" not in task_tools
         assert "create_task" in task_tools
         assert "create_task" not in project_tools
+        assert "get_connector_capabilities" in integrations_tools
+        assert "get_connector_capabilities" not in project_tools

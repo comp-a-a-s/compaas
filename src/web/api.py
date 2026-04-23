@@ -46,6 +46,11 @@ from src.agents import AGENT_REGISTRY, get_agent_display_name
 from src.validators import safe_path_join, validate_safe_id
 from src.utils import FileLock, atomic_yaml_write, emit_activity, resolve_data_dir, resolve_project_root
 from src.web.settings import get_runtime_settings
+from src.web.connector_state import (
+    normalize_connector_state as _shared_normalize_connector_state,
+    connector_health_row as _shared_connector_health_row,
+    set_connector_health as _shared_set_connector_health,
+)
 from src.web.services.run_service import RunService
 from src.web.services.project_service import ProjectService
 from src.web.services.integration_service import IntegrationService
@@ -525,11 +530,71 @@ REDACTED_SECRET = "__COMPAAS_REDACTED__"
 SENSITIVE_INTEGRATION_KEYS = (
     "github_token",
     "slack_token",
+    "telegram_bot_token",
     "vercel_token",
     "netlify_token",
+    "linear_api_key",
+    "notion_token",
+    "jira_api_token",
+    "gitlab_token",
     "stripe_secret_key",
     "stripe_webhook_secret",
 )
+
+CONNECTORS_WITH_HEALTH = (
+    "github",
+    "vercel",
+    "netlify",
+    "stripe",
+    "telegram",
+    "slack",
+    "linear",
+    "notion",
+    "jira",
+    "gitlab",
+)
+
+
+def _normalize_connector_state(value: Any) -> str:
+    """Normalize connector state values to the supported lifecycle enum."""
+    return _shared_normalize_connector_state(value)
+
+
+def _connector_health(
+    integrations: dict[str, Any],
+    connector: str,
+) -> dict[str, Any]:
+    """Return normalized health metadata for a connector prefix."""
+    row = _shared_connector_health_row(integrations, connector)
+    return {
+        "status": row["status"],
+        "verified_at": row["verified_at"],
+        "last_success_at": row["last_success_at"],
+        "last_error": row["last_error"],
+        "consecutive_failures": row["consecutive_failures"],
+    }
+
+
+def _set_connector_health(
+    integrations: dict[str, Any],
+    connector: str,
+    *,
+    configured: bool,
+    verified: bool,
+    error_message: str = "",
+    verified_at: str = "",
+    bump_failures: bool = True,
+) -> None:
+    """Persist normalized health metadata for a connector prefix."""
+    _shared_set_connector_health(
+        integrations,
+        connector,
+        configured=configured,
+        verified=verified,
+        error_message=error_message,
+        verified_at=verified_at,
+        bump_failures=bump_failures,
+    )
 
 
 def _redact_config_for_response(config: dict) -> dict:
@@ -1338,19 +1403,31 @@ def create_project(request: Request, body: dict | None = None) -> dict:
     requested_mode = str(payload.get("delivery_mode", "") or "").strip().lower()
     workspace_path = str(payload.get("workspace_path", "") or "").strip()
     github_repo = str(payload.get("github_repo", "") or "").strip()
-    github_branch = str(payload.get("github_branch", "") or "master").strip() or "master"
+    github_branch = str(payload.get("github_branch", "") or "main").strip() or "main"
+    gitlab_project_id = str(payload.get("gitlab_project_id", "") or "").strip()
+    gitlab_branch = str(payload.get("gitlab_branch", "") or "main").strip() or "main"
     tags = _normalize_project_tags(payload.get("tags"))
     cfg = _load_config()
     integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
-    if requested_mode in {"local", "github"}:
+    if requested_mode in {"local", "github", "gitlab"}:
         delivery_mode = requested_mode
     else:
-        delivery_mode = "github" if str(integrations.get("workspace_mode", "local") or "local").strip().lower() == "github" else "local"
+        workspace_mode = str(integrations.get("workspace_mode", "local") or "local").strip().lower()
+        if workspace_mode == "github":
+            delivery_mode = "github"
+        elif workspace_mode == "gitlab":
+            delivery_mode = "gitlab"
+        else:
+            delivery_mode = "local"
 
     if not github_repo:
         github_repo = str(integrations.get("github_repo", "") or "").strip()
-    if github_branch == "master" and "github_branch" not in payload:
-        github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
+    if github_branch == "main" and "github_branch" not in payload:
+        github_branch = str(integrations.get("github_default_branch", "main") or "main").strip() or "main"
+    if not gitlab_project_id:
+        gitlab_project_id = str(integrations.get("gitlab_project_id", "") or "").strip()
+    if gitlab_branch == "main" and "gitlab_branch" not in payload:
+        gitlab_branch = str(integrations.get("gitlab_default_branch", "main") or "main").strip() or "main"
 
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required.")
@@ -1367,6 +1444,18 @@ def create_project(request: Request, body: dict | None = None) -> dict:
                     "settings_target": "github",
                 },
             )
+    if delivery_mode == "gitlab":
+        gitlab_token = str(integrations.get("gitlab_token", "") or "").strip()
+        gitlab_verified = bool(integrations.get("gitlab_verified"))
+        if not gitlab_project_id or not gitlab_token or not gitlab_verified:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "gitlab_not_configured",
+                    "message": "GitLab mode requires a verified GitLab connector (token + project access). Open Settings → Integrations.",
+                    "settings_target": "gitlab",
+                },
+            )
 
     idempotency_key = (
         request.headers.get("Idempotency-Key", "").strip()
@@ -1378,9 +1467,11 @@ def create_project(request: Request, body: dict | None = None) -> dict:
         project_type=project_type,
         idempotency_key=idempotency_key,
         delivery_mode=delivery_mode,
-        github_repo=github_repo,
-        github_branch=github_branch,
+        github_repo=github_repo if delivery_mode == "github" else "",
+        github_branch=github_branch if delivery_mode == "github" else "main",
         workspace_path=workspace_path,
+        gitlab_project_id=gitlab_project_id if delivery_mode == "gitlab" else "",
+        gitlab_branch=gitlab_branch if delivery_mode == "gitlab" else "main",
     )
     project_id = str(project.get("id", "") or "")
     if project_id and tags:
@@ -1879,7 +1970,7 @@ DEFAULT_CONFIG: dict = {
     },
     "llm": {
         # "anthropic"     — use Claude via Claude Code CLI (default)
-        # "openai"        — use OpenAI API (GPT-4o, etc.)
+        # "openai"        — use OpenAI API (GPT-5 family, etc.)
         # "gemini"        — use Gemini API (OpenAI-compatible endpoint)
         # "openai_compat" — use any OpenAI-compatible local server (Ollama, LM Studio, …)
         "provider": "anthropic",
@@ -1892,7 +1983,7 @@ DEFAULT_CONFIG: dict = {
         # "codex"  — run Codex CLI locally and stream its result
         "openai_mode": "apikey",
         "base_url": "https://api.openai.com/v1",
-        "model": "gpt-4o",
+        "model": "claude-sonnet-4-0",
         "api_key": "",
         "claude_passive_retry_max": 3,
         "system_prompt": "",
@@ -1922,12 +2013,15 @@ DEFAULT_CONFIG: dict = {
         "workspace_mode": "local",
         "github_token": "",
         "github_repo": "",
-        "github_default_branch": "master",
+        "github_default_branch": "main",
         "github_auto_push": False,
         "github_auto_pr": False,
         "github_verified": False,
         "github_verified_at": "",
         "github_last_error": "",
+        "github_status": "disconnected",
+        "github_last_success_at": "",
+        "github_consecutive_failures": 0,
         "vercel_token": "",
         "vercel_team_id": "",
         "vercel_project_name": "",
@@ -1935,6 +2029,9 @@ DEFAULT_CONFIG: dict = {
         "vercel_verified": False,
         "vercel_verified_at": "",
         "vercel_last_error": "",
+        "vercel_status": "disconnected",
+        "vercel_last_success_at": "",
+        "vercel_consecutive_failures": 0,
         "netlify_token": "",
         "netlify_site_id": "",
         "netlify_team_id": "",
@@ -1942,6 +2039,9 @@ DEFAULT_CONFIG: dict = {
         "netlify_verified": False,
         "netlify_verified_at": "",
         "netlify_last_error": "",
+        "netlify_status": "disconnected",
+        "netlify_last_success_at": "",
+        "netlify_consecutive_failures": 0,
         "deploy_provider_preference": "vercel",
         "stripe_secret_key": "",
         "stripe_publishable_key": "",
@@ -1951,7 +2051,62 @@ DEFAULT_CONFIG: dict = {
         "stripe_verified": False,
         "stripe_verified_at": "",
         "stripe_last_error": "",
+        "stripe_status": "disconnected",
+        "stripe_last_success_at": "",
+        "stripe_consecutive_failures": 0,
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
+        "telegram_configured": False,
+        "telegram_poll_mode": "long_poll",
+        "telegram_cursor_map": {},
+        "telegram_status": "disconnected",
+        "telegram_verified_at": "",
+        "telegram_last_success_at": "",
+        "telegram_last_error": "",
+        "telegram_consecutive_failures": 0,
         "slack_token": "",
+        "slack_default_channel": "",
+        "slack_status": "disconnected",
+        "slack_verified_at": "",
+        "slack_last_success_at": "",
+        "slack_last_error": "",
+        "slack_consecutive_failures": 0,
+        "linear_api_key": "",
+        "linear_team_id": "",
+        "linear_verified": False,
+        "linear_verified_at": "",
+        "linear_last_error": "",
+        "linear_status": "disconnected",
+        "linear_last_success_at": "",
+        "linear_consecutive_failures": 0,
+        "notion_token": "",
+        "notion_parent_page_id": "",
+        "notion_verified": False,
+        "notion_verified_at": "",
+        "notion_last_error": "",
+        "notion_status": "disconnected",
+        "notion_last_success_at": "",
+        "notion_consecutive_failures": 0,
+        "jira_base_url": "",
+        "jira_email": "",
+        "jira_api_token": "",
+        "jira_project_key": "",
+        "jira_verified": False,
+        "jira_verified_at": "",
+        "jira_last_error": "",
+        "jira_status": "disconnected",
+        "jira_last_success_at": "",
+        "jira_consecutive_failures": 0,
+        "gitlab_base_url": "https://gitlab.com",
+        "gitlab_token": "",
+        "gitlab_project_id": "",
+        "gitlab_default_branch": "main",
+        "gitlab_verified": False,
+        "gitlab_verified_at": "",
+        "gitlab_last_error": "",
+        "gitlab_status": "disconnected",
+        "gitlab_last_success_at": "",
+        "gitlab_consecutive_failures": 0,
         "webhook_url": "",
     },
 }
@@ -1971,13 +2126,13 @@ def _deep_merge(base: dict, override: dict) -> dict:
 def _load_config() -> dict:
     """Load config merged with defaults."""
     if not os.path.exists(CONFIG_PATH):
-        return DEFAULT_CONFIG.copy()
+        return copy.deepcopy(DEFAULT_CONFIG)
     try:
         with open(CONFIG_PATH) as f:
             data = yaml.safe_load(f) or {}
-        return _deep_merge(DEFAULT_CONFIG, data)
+        return _deep_merge(copy.deepcopy(DEFAULT_CONFIG), data)
     except (yaml.YAMLError, OSError):
-        return DEFAULT_CONFIG.copy()
+        return copy.deepcopy(DEFAULT_CONFIG)
 
 
 def _save_config(config: dict) -> None:
@@ -2061,7 +2216,7 @@ async def test_llm_connection(body: dict) -> dict:
     """
     saved = _load_config().get("llm", {})
     base_url = body.get("base_url") or saved.get("base_url", "https://api.openai.com/v1")
-    model    = body.get("model")    or saved.get("model", "gpt-4o")
+    model    = body.get("model")    or saved.get("model", "gpt-5.2")
     api_key  = body.get("api_key")  or saved.get("api_key", "local")
     allowed, reason = _validate_llm_test_base_url(str(base_url))
     if not allowed:
@@ -2074,6 +2229,179 @@ async def test_llm_connection(body: dict) -> dict:
 
     ok, message = await probe_connection(base_url=base_url, model=model, api_key=api_key)
     return {"status": "ok" if ok else "error", "message": message}
+
+
+def _dedupe_model_names(models: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for raw in models:
+        name = str(raw or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(name)
+    return unique
+
+
+def _fallback_model_catalog(provider: str, openai_mode: str = "apikey") -> list[str]:
+    provider_name = str(provider or "anthropic").strip().lower()
+    if provider_name == "anthropic":
+        return [
+            "claude-sonnet-4-0",
+            "claude-opus-4-1",
+            "claude-opus-4-0",
+            "claude-3-7-sonnet-latest",
+            "claude-3-5-haiku-latest",
+        ]
+    if provider_name == "openai":
+        if str(openai_mode or "apikey").strip().lower() == "codex":
+            return ["codex"]
+        return [
+            "gpt-5.2",
+            "gpt-5.2-pro",
+            "gpt-5.2-codex",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-4.1",
+        ]
+    if provider_name == "gemini":
+        return [
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash",
+        ]
+    return [
+        "gpt-oss-120b",
+        "gpt-oss-20b",
+        "llama3.2",
+        "qwen3-coder",
+        "mistral-small3.1",
+    ]
+
+
+def _fetch_openai_compatible_models(base_url: str, api_key: str) -> list[str]:
+    allowed, reason = _validate_llm_test_base_url(str(base_url))
+    if not allowed:
+        raise ValueError(reason)
+    normalized_base = str(base_url or "").strip().rstrip("/")
+    if not normalized_base:
+        raise ValueError("base_url is required for model discovery.")
+    request_url = f"{normalized_base}/models"
+    headers = {"Accept": "application/json"}
+    token = str(api_key or "").strip()
+    if token and token.lower() not in {"none", "local", "ollama", "lm-studio", "jan", "vllm"}:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(request_url, headers=headers, method="GET")
+    with urllib.request.urlopen(req, timeout=8.0) as resp:  # nosec B310
+        payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    models: list[str] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        model_id = str(row.get("id", "") or "").strip()
+        if model_id:
+            models.append(model_id)
+    return _dedupe_model_names(models)
+
+
+def _fetch_anthropic_models(api_key: str) -> list[str]:
+    token = str(api_key or "").strip()
+    if not token:
+        raise ValueError("Anthropic API key is required for live model discovery.")
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/models",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "x-api-key": token,
+            "anthropic-version": "2023-06-01",
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=8.0) as resp:  # nosec B310
+        payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    models: list[str] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        model_id = str(row.get("id") or row.get("name") or "").strip()
+        if model_id:
+            models.append(model_id)
+    return _dedupe_model_names(models)
+
+
+@app.post("/api/llm/models", summary="Discover available models for selected provider")
+def list_llm_models(body: dict) -> dict:
+    saved = _load_config().get("llm", {})
+    provider = str(body.get("provider") or saved.get("provider", "anthropic") or "anthropic").strip().lower()
+    openai_mode = str(body.get("openai_mode") or saved.get("openai_mode", "apikey") or "apikey").strip().lower()
+    anthropic_mode = str(body.get("anthropic_mode") or saved.get("anthropic_mode", "cli") or "cli").strip().lower()
+    base_url = str(body.get("base_url") or saved.get("base_url", "http://localhost:11434/v1") or "http://localhost:11434/v1").strip()
+    api_key = str(body.get("api_key") or saved.get("api_key", "") or "").strip()
+
+    fallback_models = _fallback_model_catalog(provider, openai_mode=openai_mode)
+    if provider == "openai" and openai_mode == "codex":
+        fetched_at = datetime.now(timezone.utc).isoformat()
+        return {
+            "status": "ok",
+            "source": "runtime-fixed",
+            "catalog_source": "runtime-fixed",
+            "fetched_at": fetched_at,
+            "models": ["codex", "custom"],
+            "message": "Codex CLI mode uses a fixed model id.",
+        }
+
+    live_models: list[str] = []
+    source = "fallback"
+    message = "Using fallback model list."
+    try:
+        if provider == "anthropic":
+            key = api_key
+            if not key and anthropic_mode != "apikey":
+                key = str(os.environ.get("ANTHROPIC_API_KEY", "") or "").strip()
+            if not key:
+                raise ValueError("Add an Anthropic API key to fetch live models.")
+            live_models = _fetch_anthropic_models(key)
+        elif provider == "openai":
+            if openai_mode != "apikey":
+                live_models = ["codex"]
+            else:
+                if not api_key:
+                    raise ValueError("Add an OpenAI API key to fetch live models.")
+                live_models = _fetch_openai_compatible_models("https://api.openai.com/v1", api_key)
+        elif provider == "gemini":
+            if not api_key:
+                raise ValueError("Add a Gemini API key to fetch live models.")
+            live_models = _fetch_openai_compatible_models("https://generativelanguage.googleapis.com/v1beta/openai", api_key)
+        else:
+            live_models = _fetch_openai_compatible_models(base_url, api_key)
+    except (ValueError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError) as exc:
+        message = str(exc) or message
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        message = f"Could not fetch live model list: {exc}"
+
+    if live_models:
+        source = "live"
+        message = "Fetched live model catalog."
+    catalog = _dedupe_model_names(live_models or fallback_models)
+    if "custom" not in {entry.lower() for entry in catalog}:
+        catalog.append("custom")
+    fetched_at = datetime.now(timezone.utc).isoformat()
+
+    return {
+        "status": "ok",
+        "source": source,
+        "catalog_source": source,
+        "fetched_at": fetched_at,
+        "models": catalog,
+        "message": message,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2093,7 +2421,7 @@ def _llm_runtime_snapshot() -> dict[str, str]:
     if provider == "anthropic":
         mode = anthropic_mode if anthropic_mode in ("cli", "apikey") else "cli"
         label = "Anthropic Claude CLI" if mode == "cli" else "Anthropic API"
-        runtime_model = configured_model or "claude"
+        runtime_model = configured_model or "claude-sonnet-4-0"
     elif provider == "gemini":
         mode = "apikey"
         label = "Google Gemini API"
@@ -2106,12 +2434,12 @@ def _llm_runtime_snapshot() -> dict[str, str]:
         else:
             mode = "apikey"
             label = "OpenAI API"
-            runtime_model = configured_model or "gpt-4o"
+            runtime_model = configured_model or "gpt-5.2"
     else:
         provider = "openai_compat"
         mode = "local"
         label = "Local OpenAI-compatible"
-        runtime_model = configured_model or "llama3.2"
+        runtime_model = configured_model or "gpt-oss-20b"
 
     return {
         "provider": provider,
@@ -2797,11 +3125,22 @@ def _resolve_chat_project(project_id: str, user_message: str, user_name: str) ->
         project_desc = f"Auto-created from CEO chat request by {user_name}."
         cfg = _load_config()
         integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
-        delivery_mode = "github" if str(integrations.get("workspace_mode", "local") or "local").strip().lower() == "github" else "local"
+        workspace_mode = str(integrations.get("workspace_mode", "local") or "local").strip().lower()
+        if workspace_mode == "github":
+            delivery_mode = "github"
+        elif workspace_mode == "gitlab":
+            delivery_mode = "gitlab"
+        else:
+            delivery_mode = "local"
         github_repo = str(integrations.get("github_repo", "") or "").strip()
         github_verified = bool(integrations.get("github_verified"))
         github_token = bool(str(integrations.get("github_token", "") or "").strip())
+        gitlab_project_id = str(integrations.get("gitlab_project_id", "") or "").strip()
+        gitlab_verified = bool(integrations.get("gitlab_verified"))
+        gitlab_token = bool(str(integrations.get("gitlab_token", "") or "").strip())
         if delivery_mode == "github" and not (github_token and github_repo and github_verified):
+            delivery_mode = "local"
+        if delivery_mode == "gitlab" and not (gitlab_token and gitlab_project_id and gitlab_verified):
             delivery_mode = "local"
         new_project, _ = project_service.create_project(
             name=project_name,
@@ -2809,7 +3148,9 @@ def _resolve_chat_project(project_id: str, user_message: str, user_name: str) ->
             project_type="app",
             delivery_mode=delivery_mode,
             github_repo=github_repo if delivery_mode == "github" else "",
-            github_branch=str(integrations.get("github_default_branch", "master") or "master").strip() or "master",
+            github_branch=str(integrations.get("github_default_branch", "main") or "main").strip() or "main",
+            gitlab_project_id=gitlab_project_id if delivery_mode == "gitlab" else "",
+            gitlab_branch=str(integrations.get("gitlab_default_branch", "main") or "main").strip() or "main",
         )
         new_pid = str(new_project.get("id", ""))
         emit_activity(
@@ -2914,12 +3255,16 @@ def _build_context_prompt(
 
     workspace_mode = integrations.get("workspace_mode", "local")
     project_delivery_mode = str((active_project or {}).get("delivery_mode", "") or "").strip().lower()
-    effective_delivery_mode = project_delivery_mode if project_delivery_mode in {"local", "github"} else str(workspace_mode or "local").strip().lower()
+    effective_delivery_mode = project_delivery_mode if project_delivery_mode in {"local", "github", "gitlab"} else str(workspace_mode or "local").strip().lower()
     github_repo = str(integrations.get("github_repo", "") or "").strip()
-    github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
+    github_branch = str(integrations.get("github_default_branch", "main") or "main").strip() or "main"
+    gitlab_project_id = str(integrations.get("gitlab_project_id", "") or "").strip()
+    gitlab_branch = str(integrations.get("gitlab_default_branch", "main") or "main").strip() or "main"
     if active_project:
         github_repo = str(active_project.get("github_repo", github_repo) or github_repo).strip()
         github_branch = str(active_project.get("github_branch", github_branch) or github_branch).strip() or github_branch
+        gitlab_project_id = str(active_project.get("gitlab_project_id", gitlab_project_id) or gitlab_project_id).strip()
+        gitlab_branch = str(active_project.get("gitlab_branch", gitlab_branch) or gitlab_branch).strip() or gitlab_branch
     github_auto_push = bool(integrations.get("github_auto_push"))
     github_auto_pr = bool(integrations.get("github_auto_pr"))
     vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
@@ -2938,6 +3283,14 @@ def _build_context_prompt(
             f"Auto-push is {'enabled' if github_auto_push else 'disabled'}. "
             f"Auto-PR is {'enabled' if github_auto_pr else 'disabled'}. "
             "Provide concrete git commands, branch names, and PR summaries.]"
+        )
+        parts.append("")
+    elif effective_delivery_mode == "gitlab":
+        project_label = gitlab_project_id or "(not configured)"
+        parts.append(
+            "[DELIVERY MODE: GitLab. "
+            f"Target project: {project_label}. Default branch: {gitlab_branch}. "
+            "Prefer merge-request workflows with clear branch naming and rollout notes.]"
         )
         parts.append("")
     else:
@@ -5558,7 +5911,7 @@ def _generate_planning_packet(
     workspace_path = str(project.get("workspace_path", "") or "")
     delivery_mode = str(project.get("delivery_mode", "local") or "local")
     github_repo = str(project.get("github_repo", "") or "").strip()
-    github_branch = str(project.get("github_branch", "master") or "master").strip() or "master"
+    github_branch = str(project.get("github_branch", "main") or "main").strip() or "main"
     concise_request = re.sub(r"\s+", " ", (user_message or "").strip())
     now_label = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -5589,7 +5942,11 @@ def _generate_planning_packet(
     delivery_line = (
         f"- Delivery mode: GitHub (`{github_repo or 'repository not set'}` on `{github_branch}`)"
         if delivery_mode == "github"
-        else f"- Delivery mode: Local workspace (`{workspace_path}`)"
+        else (
+            f"- Delivery mode: GitLab (`{str(project.get('gitlab_project_id', '') or 'project not set')}` on `{str(project.get('gitlab_branch', 'main') or 'main')}`)"
+            if delivery_mode == "gitlab"
+            else f"- Delivery mode: Local workspace (`{workspace_path}`)"
+        )
     )
     execution_plan = (
         f"# Full Execution Plan: {project_name}\n\n"
@@ -6194,7 +6551,7 @@ async def _handle_ceo_claude(
         "provider": "anthropic",
         "mode": anthropic_mode if anthropic_mode in ("cli", "apikey") else "cli",
         "runtime": "claude_cli",
-        "model": str(llm_cfg.get("model", "claude") or "claude"),
+        "model": str(llm_cfg.get("model", "claude-sonnet-4-0") or "claude-sonnet-4-0"),
         "interactive_tools_blocked": interactive_tools_blocked,
         "execution_turn": is_execution_turn,
         "passive_retry_attempt": passive_retry_attempt,
@@ -7532,7 +7889,7 @@ async def _handle_ceo_openai(
     from src.llm_provider import stream_openai_compat
 
     base_url = llm_cfg.get("base_url", "https://api.openai.com/v1")
-    model = llm_cfg.get("model", "gpt-4o")
+    model = llm_cfg.get("model", "gpt-5.2")
     api_key = llm_cfg.get("api_key", "")
     system_prompt = llm_cfg.get("system_prompt") or None
     runtime_metadata = {
@@ -9080,11 +9437,13 @@ async def summarize_chat() -> dict:
 @app.post("/api/integrations/telegram/send", summary="Send a mirrored chat message to Telegram")
 def telegram_send_message(body: dict[str, Any]) -> dict[str, Any]:
     """Send a plain-text message to a Telegram bot chat."""
-    token = str(body.get("token", "") or "").strip()
-    chat_id = str(body.get("chat_id", "") or "").strip()
+    cfg = _load_config()
+    integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+    token = str(body.get("token", "") or "").strip() or str(integrations.get("telegram_bot_token", "") or "").strip()
+    chat_id = str(body.get("chat_id", "") or "").strip() or str(integrations.get("telegram_chat_id", "") or "").strip()
     text = str(body.get("text", "") or "").strip()
     if not token or not chat_id or not text:
-        raise HTTPException(status_code=400, detail="token, chat_id, and text are required.")
+        raise HTTPException(status_code=400, detail="token/chat_id and text are required.")
 
     payload = {
         "chat_id": chat_id,
@@ -9107,34 +9466,61 @@ def telegram_send_message(body: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Telegram send failed: {str(exc)[:220]}") from exc
 
-    if not bool(parsed.get("ok")):
+    ok = bool(parsed.get("ok"))
+    if not ok:
         detail = parsed.get("description") or parsed
+        _set_connector_health(
+            integrations,
+            "telegram",
+            configured=bool(token and chat_id),
+            verified=False,
+            error_message=f"Telegram rejected request: {str(detail)[:220]}",
+        )
+        cfg["integrations"] = integrations
+        _save_config(cfg)
         raise HTTPException(status_code=502, detail=f"Telegram rejected request: {str(detail)[:220]}")
+    integrations["telegram_bot_token"] = token
+    integrations["telegram_chat_id"] = chat_id
+    integrations["telegram_configured"] = True
+    _set_connector_health(integrations, "telegram", configured=True, verified=True)
+    cfg["integrations"] = integrations
+    _save_config(cfg)
     return {"status": "ok"}
 
 
-# Track last seen Telegram update_id to avoid duplicate messages
-_telegram_last_update_id: int = 0
+def _telegram_cursor_key(token: str, chat_id: str) -> str:
+    token_fragment = token[-8:] if len(token) > 8 else token
+    return f"{token_fragment}:{chat_id}"
 
 
 @app.post("/api/integrations/telegram/poll", summary="Poll for new Telegram messages")
 def telegram_poll_messages(body: dict[str, Any]) -> dict[str, Any]:
     """Poll the Telegram Bot API for new messages from the user.
 
-    The frontend sends the bot token so the backend can call getUpdates.
+    The frontend may send token/chat_id, but persisted integration config is preferred.
     Returns a list of new text messages since the last poll.
     """
-    global _telegram_last_update_id
-    token = str(body.get("token", "") or "").strip()
+    cfg = _load_config()
+    integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+    token = str(body.get("token", "") or "").strip() or str(integrations.get("telegram_bot_token", "") or "").strip()
+    chat_id_filter = str(body.get("chat_id", "") or "").strip() or str(integrations.get("telegram_chat_id", "") or "").strip()
     if not token:
         raise HTTPException(status_code=400, detail="token is required.")
+    timeout_seconds = int(body.get("timeout_seconds", 25) or 25)
+    timeout_seconds = max(0, min(50, timeout_seconds))
+
+    cursor_map = integrations.get("telegram_cursor_map")
+    if not isinstance(cursor_map, dict):
+        cursor_map = {}
+    cursor_key = _telegram_cursor_key(token, chat_id_filter or "*")
+    last_seen_update_id = int(cursor_map.get(cursor_key, 0) or 0)
 
     params: dict[str, Any] = {
-        "timeout": 0,
+        "timeout": timeout_seconds,
         "allowed_updates": json.dumps(["message"]),
     }
-    if _telegram_last_update_id:
-        params["offset"] = _telegram_last_update_id + 1
+    if last_seen_update_id:
+        params["offset"] = last_seen_update_id + 1
 
     qs = urllib.parse.urlencode(params)
     url = f"https://api.telegram.org/bot{token}/getUpdates?{qs}"
@@ -9145,30 +9531,77 @@ def telegram_poll_messages(body: dict[str, Any]) -> dict[str, Any]:
             parsed = json.loads(body_text) if body_text else {}
     except urllib.error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
+        _set_connector_health(
+            integrations,
+            "telegram",
+            configured=bool(token and chat_id_filter),
+            verified=False,
+            error_message=f"Telegram HTTP error: {body_text[:220]}",
+        )
+        cfg["integrations"] = integrations
+        _save_config(cfg)
         raise HTTPException(status_code=502, detail=f"Telegram HTTP error: {body_text[:220]}") from exc
     except Exception as exc:
+        _set_connector_health(
+            integrations,
+            "telegram",
+            configured=bool(token and chat_id_filter),
+            verified=False,
+            error_message=f"Telegram poll failed: {str(exc)[:220]}",
+        )
+        cfg["integrations"] = integrations
+        _save_config(cfg)
         raise HTTPException(status_code=502, detail=f"Telegram poll failed: {str(exc)[:220]}") from exc
 
-    if not bool(parsed.get("ok")):
+    ok = bool(parsed.get("ok"))
+    if not ok:
         detail = parsed.get("description") or parsed
+        _set_connector_health(
+            integrations,
+            "telegram",
+            configured=bool(token and chat_id_filter),
+            verified=False,
+            error_message=f"Telegram rejected request: {str(detail)[:220]}",
+        )
+        cfg["integrations"] = integrations
+        _save_config(cfg)
         raise HTTPException(status_code=502, detail=f"Telegram rejected request: {str(detail)[:220]}")
 
     results = parsed.get("result", [])
     messages: list[dict[str, Any]] = []
+    new_last_seen = last_seen_update_id
     for update in results:
-        uid = update.get("update_id", 0)
-        if uid > _telegram_last_update_id:
-            _telegram_last_update_id = uid
+        uid = int(update.get("update_id", 0) or 0)
+        if uid > new_last_seen:
+            new_last_seen = uid
         msg = update.get("message") or {}
         text = msg.get("text", "")
         sender = msg.get("from", {})
+        message_chat_id = str(msg.get("chat", {}).get("id", ""))
+        if chat_id_filter and message_chat_id and message_chat_id != chat_id_filter:
+            continue
         if text:
             messages.append({
                 "text": text,
                 "from": sender.get("first_name", "") or sender.get("username", "User"),
                 "date": msg.get("date", 0),
-                "chat_id": str(msg.get("chat", {}).get("id", "")),
+                "chat_id": message_chat_id,
             })
+
+    cursor_map[cursor_key] = new_last_seen
+    integrations["telegram_cursor_map"] = cursor_map
+    integrations["telegram_bot_token"] = token
+    if chat_id_filter:
+        integrations["telegram_chat_id"] = chat_id_filter
+    integrations["telegram_configured"] = bool(str(integrations.get("telegram_bot_token", "") or "").strip() and str(integrations.get("telegram_chat_id", "") or "").strip())
+    _set_connector_health(
+        integrations,
+        "telegram",
+        configured=bool(token and (chat_id_filter or str(integrations.get("telegram_chat_id", "") or "").strip())),
+        verified=True,
+    )
+    cfg["integrations"] = integrations
+    _save_config(cfg)
 
     return {"status": "ok", "messages": messages}
 
@@ -9288,6 +9721,118 @@ async def slack_events(request: Request) -> dict:
     return {"status": "ok"}
 
 
+@app.post("/api/integrations/slack/send", summary="Send outbound Slack message")
+def slack_send_message(body: dict[str, Any]) -> dict[str, Any]:
+    """Send a message to Slack via chat.postMessage."""
+    cfg = _load_config()
+    integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+    token = str(body.get("token", "") or "").strip() or str(integrations.get("slack_token", "") or "").strip()
+    channel = str(body.get("channel", "") or "").strip() or str(integrations.get("slack_default_channel", "") or "").strip()
+    text = str(body.get("text", "") or "").strip()
+    thread_ts = str(body.get("thread_ts", "") or "").strip()
+    if not token or not channel or not text:
+        raise HTTPException(status_code=400, detail="token/channel and text are required.")
+    result = integration_service.slack_send_message(
+        token,
+        channel=channel,
+        text=text,
+        thread_ts=thread_ts,
+    )
+    if result.get("status") != "ok":
+        _set_connector_health(
+            integrations,
+            "slack",
+            configured=bool(token),
+            verified=False,
+            error_message=str(result.get("message", "") or "Slack send failed."),
+        )
+        cfg["integrations"] = integrations
+        _save_config(cfg)
+        raise HTTPException(status_code=502, detail=result.get("message", "Slack send failed."))
+    integrations["slack_token"] = token
+    integrations["slack_default_channel"] = channel
+    _set_connector_health(integrations, "slack", configured=True, verified=True)
+    cfg["integrations"] = integrations
+    _save_config(cfg)
+    return {"status": "ok", "message": result.get("message", {})}
+
+
+def _connector_is_configured(integrations: dict[str, Any], connector: str) -> bool:
+    """Determine whether a connector has enough fields to be configured."""
+    if connector == "github":
+        return bool(str(integrations.get("github_token", "") or "").strip() and str(integrations.get("github_repo", "") or "").strip())
+    if connector == "vercel":
+        return bool(str(integrations.get("vercel_token", "") or "").strip() and str(integrations.get("vercel_project_name", "") or "").strip())
+    if connector == "netlify":
+        return bool(str(integrations.get("netlify_token", "") or "").strip() and str(integrations.get("netlify_site_id", "") or "").strip())
+    if connector == "stripe":
+        return bool(str(integrations.get("stripe_secret_key", "") or "").strip())
+    if connector == "telegram":
+        return bool(str(integrations.get("telegram_bot_token", "") or "").strip() and str(integrations.get("telegram_chat_id", "") or "").strip())
+    if connector == "slack":
+        return bool(str(integrations.get("slack_token", "") or "").strip())
+    if connector == "linear":
+        return bool(str(integrations.get("linear_api_key", "") or "").strip())
+    if connector == "notion":
+        return bool(str(integrations.get("notion_token", "") or "").strip())
+    if connector == "jira":
+        return bool(
+            str(integrations.get("jira_base_url", "") or "").strip()
+            and str(integrations.get("jira_email", "") or "").strip()
+            and str(integrations.get("jira_api_token", "") or "").strip()
+        )
+    if connector == "gitlab":
+        return bool(
+            str(integrations.get("gitlab_base_url", "") or "").strip()
+            and str(integrations.get("gitlab_token", "") or "").strip()
+            and str(integrations.get("gitlab_project_id", "") or "").strip()
+        )
+    return False
+
+
+def _connector_is_verified(integrations: dict[str, Any], connector: str) -> bool:
+    """Best-effort connector verification state fallback."""
+    if connector in {"github", "vercel", "netlify", "stripe", "linear", "notion", "jira", "gitlab"}:
+        raw_state = str(integrations.get(f"{connector}_status", "") or "").strip().lower()
+        if raw_state:
+            state = _normalize_connector_state(raw_state)
+            if state == "degraded":
+                return False
+            if state == "verified":
+                return True
+            if state == "disconnected" and not _connector_is_configured(integrations, connector):
+                return False
+        return bool(integrations.get(f"{connector}_verified"))
+    if connector == "telegram":
+        raw_state = str(integrations.get("telegram_status", "") or "").strip().lower()
+        if raw_state:
+            state = _normalize_connector_state(raw_state)
+            if state == "verified":
+                return True
+            if state in {"degraded", "disconnected"}:
+                return False
+        return bool(integrations.get("telegram_configured"))
+    if connector == "slack":
+        return _normalize_connector_state(integrations.get("slack_status", "")) == "verified"
+    return False
+
+
+def _normalize_connector_health(integrations: dict[str, Any]) -> None:
+    """Backfill health metadata for all connectors without bumping failure counters."""
+    for connector in CONNECTORS_WITH_HEALTH:
+        configured = _connector_is_configured(integrations, connector)
+        verified = _connector_is_verified(integrations, connector)
+        _set_connector_health(
+            integrations,
+            connector,
+            configured=configured,
+            verified=verified,
+            error_message=str(integrations.get(f"{connector}_last_error", "") or "").strip(),
+            verified_at=str(integrations.get(f"{connector}_verified_at", "") or "").strip(),
+            bump_failures=False,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Integration: save integration settings
 # ---------------------------------------------------------------------------
@@ -9308,6 +9853,15 @@ def save_integrations(request: Request, body: dict) -> dict:
     previous_netlify_token = str(integrations.get("netlify_token", "") or "").strip()
     previous_netlify_site = str(integrations.get("netlify_site_id", "") or "").strip()
     previous_stripe_secret = str(integrations.get("stripe_secret_key", "") or "").strip()
+    previous_telegram_token = str(integrations.get("telegram_bot_token", "") or "").strip()
+    previous_telegram_chat = str(integrations.get("telegram_chat_id", "") or "").strip()
+    previous_linear_key = str(integrations.get("linear_api_key", "") or "").strip()
+    previous_notion_token = str(integrations.get("notion_token", "") or "").strip()
+    previous_jira_token = str(integrations.get("jira_api_token", "") or "").strip()
+    previous_jira_base = str(integrations.get("jira_base_url", "") or "").strip()
+    previous_jira_email = str(integrations.get("jira_email", "") or "").strip()
+    previous_gitlab_token = str(integrations.get("gitlab_token", "") or "").strip()
+    previous_gitlab_project = str(integrations.get("gitlab_project_id", "") or "").strip()
     sanitized = _sanitize_integration_payload(body)
     for key in (
         "workspace_mode",
@@ -9342,11 +9896,73 @@ def save_integrations(request: Request, body: dict) -> dict:
         "stripe_verified",
         "stripe_verified_at",
         "stripe_last_error",
+        "telegram_bot_token",
+        "telegram_chat_id",
+        "telegram_configured",
+        "telegram_poll_mode",
+        "telegram_cursor_map",
+        "telegram_status",
+        "telegram_verified_at",
+        "telegram_last_success_at",
+        "telegram_last_error",
+        "telegram_consecutive_failures",
         "slack_token",
+        "slack_default_channel",
+        "slack_status",
+        "slack_verified_at",
+        "slack_last_success_at",
+        "slack_last_error",
+        "slack_consecutive_failures",
+        "linear_api_key",
+        "linear_team_id",
+        "linear_verified",
+        "linear_verified_at",
+        "linear_last_error",
+        "linear_status",
+        "linear_last_success_at",
+        "linear_consecutive_failures",
+        "notion_token",
+        "notion_parent_page_id",
+        "notion_verified",
+        "notion_verified_at",
+        "notion_last_error",
+        "notion_status",
+        "notion_last_success_at",
+        "notion_consecutive_failures",
+        "jira_base_url",
+        "jira_email",
+        "jira_api_token",
+        "jira_project_key",
+        "jira_verified",
+        "jira_verified_at",
+        "jira_last_error",
+        "jira_status",
+        "jira_last_success_at",
+        "jira_consecutive_failures",
+        "gitlab_base_url",
+        "gitlab_token",
+        "gitlab_project_id",
+        "gitlab_default_branch",
+        "gitlab_verified",
+        "gitlab_verified_at",
+        "gitlab_last_error",
+        "gitlab_status",
+        "gitlab_last_success_at",
+        "gitlab_consecutive_failures",
         "webhook_url",
     ):
         if key in sanitized:
             integrations[key] = sanitized[key]
+
+    workspace_mode = str(integrations.get("workspace_mode", "local") or "local").strip().lower()
+    integrations["workspace_mode"] = workspace_mode if workspace_mode in {"local", "github", "gitlab"} else "local"
+    integrations["github_default_branch"] = str(integrations.get("github_default_branch", "main") or "main").strip() or "main"
+    integrations["gitlab_default_branch"] = str(integrations.get("gitlab_default_branch", "main") or "main").strip() or "main"
+    telegram_token = str(integrations.get("telegram_bot_token", "") or "").strip()
+    telegram_chat = str(integrations.get("telegram_chat_id", "") or "").strip()
+    integrations["telegram_configured"] = bool(telegram_token and telegram_chat)
+    if not isinstance(integrations.get("telegram_cursor_map"), dict):
+        integrations["telegram_cursor_map"] = {}
 
     github_token_changed = str(integrations.get("github_token", "") or "").strip() != previous_github_token
     github_repo_changed = str(integrations.get("github_repo", "") or "").strip() != previous_github_repo
@@ -9371,29 +9987,70 @@ def save_integrations(request: Request, body: dict) -> dict:
         integrations["stripe_verified"] = False
         integrations["stripe_last_error"] = "Stripe configuration changed. Re-verify connector."
 
+    telegram_changed = (
+        str(integrations.get("telegram_bot_token", "") or "").strip() != previous_telegram_token
+        or str(integrations.get("telegram_chat_id", "") or "").strip() != previous_telegram_chat
+    )
+    if telegram_changed:
+        integrations["telegram_last_error"] = ""
+        integrations["telegram_consecutive_failures"] = 0
+        if isinstance(integrations.get("telegram_cursor_map"), dict):
+            integrations["telegram_cursor_map"] = {}
+
+    if str(integrations.get("linear_api_key", "") or "").strip() != previous_linear_key:
+        integrations["linear_verified"] = False
+        integrations["linear_last_error"] = "Linear configuration changed. Re-verify connector."
+    if str(integrations.get("notion_token", "") or "").strip() != previous_notion_token:
+        integrations["notion_verified"] = False
+        integrations["notion_last_error"] = "Notion configuration changed. Re-verify connector."
+    jira_changed = (
+        str(integrations.get("jira_api_token", "") or "").strip() != previous_jira_token
+        or str(integrations.get("jira_base_url", "") or "").strip() != previous_jira_base
+        or str(integrations.get("jira_email", "") or "").strip() != previous_jira_email
+    )
+    if jira_changed:
+        integrations["jira_verified"] = False
+        integrations["jira_last_error"] = "Jira configuration changed. Re-verify connector."
+    gitlab_changed = (
+        str(integrations.get("gitlab_token", "") or "").strip() != previous_gitlab_token
+        or str(integrations.get("gitlab_project_id", "") or "").strip() != previous_gitlab_project
+    )
+    if gitlab_changed:
+        integrations["gitlab_verified"] = False
+        integrations["gitlab_last_error"] = "GitLab configuration changed. Re-verify connector."
+
+    _normalize_connector_health(integrations)
+
     config["integrations"] = integrations
     _save_config(config)
     return {"status": "ok"}
 
 
-@app.get("/api/integrations/capabilities", summary="Summarise available GitHub/Vercel/Netlify/Stripe capabilities")
+@app.get("/api/integrations/capabilities", summary="Summarise configured integration capabilities and health")
 def get_integration_capabilities() -> dict:
     """Return non-secret capability metadata for configured integrations."""
     integrations = _load_config().get("integrations", {})
     if not isinstance(integrations, dict):
         integrations = {}
+    _normalize_connector_health(integrations)
 
-    workspace_mode = integrations.get("workspace_mode", "local")
+    workspace_mode = str(integrations.get("workspace_mode", "local") or "local").strip().lower()
+    if workspace_mode not in {"local", "github", "gitlab"}:
+        workspace_mode = "local"
     github_token_set = bool(str(integrations.get("github_token", "") or "").strip())
     github_repo = str(integrations.get("github_repo", "") or "").strip()
-    github_branch = str(integrations.get("github_default_branch", "master") or "master").strip() or "master"
-    github_verified = bool(integrations.get("github_verified"))
+    github_branch = str(integrations.get("github_default_branch", "main") or "main").strip() or "main"
+    github_health = _connector_health(integrations, "github")
+    github_verified = github_health["status"] == "verified" and github_token_set and bool(github_repo)
+    github_setup_complete = bool(github_token_set and github_repo and github_verified)
     github_verified_at = str(integrations.get("github_verified_at", "") or "").strip()
     github_last_error = str(integrations.get("github_last_error", "") or "").strip()
 
     vercel_token_set = bool(str(integrations.get("vercel_token", "") or "").strip())
     vercel_project_name = str(integrations.get("vercel_project_name", "") or "").strip()
-    vercel_verified = bool(integrations.get("vercel_verified"))
+    vercel_health = _connector_health(integrations, "vercel")
+    vercel_verified = vercel_health["status"] == "verified" and vercel_token_set and bool(vercel_project_name)
+    vercel_setup_complete = bool(vercel_token_set and vercel_project_name and vercel_verified)
     vercel_verified_at = str(integrations.get("vercel_verified_at", "") or "").strip()
     vercel_last_error = str(integrations.get("vercel_last_error", "") or "").strip()
     vercel_default_target = str(integrations.get("vercel_default_target", "preview") or "preview").strip().lower()
@@ -9401,7 +10058,9 @@ def get_integration_capabilities() -> dict:
         vercel_default_target = "preview"
     netlify_token_set = bool(str(integrations.get("netlify_token", "") or "").strip())
     netlify_site_id = str(integrations.get("netlify_site_id", "") or "").strip()
-    netlify_verified = bool(integrations.get("netlify_verified"))
+    netlify_health = _connector_health(integrations, "netlify")
+    netlify_verified = netlify_health["status"] == "verified" and netlify_token_set and bool(netlify_site_id)
+    netlify_setup_complete = bool(netlify_token_set and netlify_site_id and netlify_verified)
     netlify_verified_at = str(integrations.get("netlify_verified_at", "") or "").strip()
     netlify_last_error = str(integrations.get("netlify_last_error", "") or "").strip()
     netlify_default_target = str(integrations.get("netlify_default_target", "preview") or "preview").strip().lower()
@@ -9412,9 +10071,41 @@ def get_integration_capabilities() -> dict:
         deploy_provider_preference = "vercel"
     stripe_secret_set = bool(str(integrations.get("stripe_secret_key", "") or "").strip())
     stripe_publishable_set = bool(str(integrations.get("stripe_publishable_key", "") or "").strip())
-    stripe_verified = bool(integrations.get("stripe_verified"))
+    stripe_health = _connector_health(integrations, "stripe")
+    stripe_verified = stripe_health["status"] == "verified" and stripe_secret_set
+    stripe_setup_complete = bool(stripe_secret_set and stripe_verified)
     stripe_verified_at = str(integrations.get("stripe_verified_at", "") or "").strip()
     stripe_last_error = str(integrations.get("stripe_last_error", "") or "").strip()
+    telegram_token_set = bool(str(integrations.get("telegram_bot_token", "") or "").strip())
+    telegram_chat_set = bool(str(integrations.get("telegram_chat_id", "") or "").strip())
+    telegram_health = _connector_health(integrations, "telegram")
+    telegram_verified = telegram_health["status"] == "verified" and telegram_token_set and telegram_chat_set
+    telegram_setup_complete = bool(telegram_token_set and telegram_chat_set and telegram_verified)
+    slack_token_set = bool(str(integrations.get("slack_token", "") or "").strip())
+    slack_health = _connector_health(integrations, "slack")
+    slack_verified = slack_health["status"] == "verified" and slack_token_set
+    slack_setup_complete = bool(slack_token_set and slack_verified)
+    linear_key_set = bool(str(integrations.get("linear_api_key", "") or "").strip())
+    linear_health = _connector_health(integrations, "linear")
+    linear_verified = linear_health["status"] == "verified" and linear_key_set
+    linear_setup_complete = bool(linear_key_set and linear_verified)
+    notion_token_set = bool(str(integrations.get("notion_token", "") or "").strip())
+    notion_health = _connector_health(integrations, "notion")
+    notion_verified = notion_health["status"] == "verified" and notion_token_set
+    notion_setup_complete = bool(notion_token_set and notion_verified)
+    jira_set = bool(
+        str(integrations.get("jira_base_url", "") or "").strip()
+        and str(integrations.get("jira_email", "") or "").strip()
+        and str(integrations.get("jira_api_token", "") or "").strip()
+    )
+    jira_health = _connector_health(integrations, "jira")
+    jira_verified = jira_health["status"] == "verified" and jira_set
+    jira_setup_complete = bool(jira_set and jira_verified)
+    gitlab_token_set = bool(str(integrations.get("gitlab_token", "") or "").strip())
+    gitlab_project_id = str(integrations.get("gitlab_project_id", "") or "").strip()
+    gitlab_health = _connector_health(integrations, "gitlab")
+    gitlab_verified = gitlab_health["status"] == "verified" and gitlab_token_set and bool(gitlab_project_id)
+    gitlab_setup_complete = bool(gitlab_token_set and gitlab_project_id and gitlab_verified)
 
     github_capabilities = [
         "create_branch",
@@ -9441,12 +10132,25 @@ def get_integration_capabilities() -> dict:
         "customer_portal",
         "webhook_validation",
     ] if stripe_secret_set else []
+    telegram_capabilities = [
+        "mirror_chat_outbound",
+        "poll_updates",
+    ] if (telegram_token_set and telegram_chat_set) else []
+    slack_capabilities = [
+        "inbound_events",
+        "outbound_messages",
+    ] if slack_token_set else []
+    linear_capabilities = ["verify", "create_issue"] if linear_key_set else []
+    notion_capabilities = ["verify", "upsert_page"] if notion_token_set else []
+    jira_capabilities = ["verify", "create_issue", "transition_issue"] if jira_set else []
+    gitlab_capabilities = ["verify", "create_branch", "create_merge_request"] if gitlab_token_set else []
 
     return {
         "workspace_mode": workspace_mode,
         "github": {
             "configured": github_token_set and bool(github_repo),
-            "verified": github_verified and github_token_set and bool(github_repo),
+            "verified": github_verified,
+            "setup_complete": github_setup_complete,
             "token_configured": github_token_set,
             "repo": github_repo,
             "default_branch": github_branch,
@@ -9454,39 +10158,101 @@ def get_integration_capabilities() -> dict:
             "auto_pr": bool(integrations.get("github_auto_pr")),
             "verified_at": github_verified_at,
             "last_error": github_last_error,
+            "health": github_health,
             "capabilities": github_capabilities,
             "webhook_endpoint": "/api/integrations/github/webhook",
         },
         "vercel": {
             "configured": vercel_token_set and bool(vercel_project_name),
-            "verified": vercel_verified and vercel_token_set and bool(vercel_project_name),
+            "verified": vercel_verified,
+            "setup_complete": vercel_setup_complete,
             "token_configured": vercel_token_set,
             "project_name": vercel_project_name,
             "team_id_set": bool(str(integrations.get("vercel_team_id", "") or "").strip()),
             "default_target": vercel_default_target,
             "verified_at": vercel_verified_at,
             "last_error": vercel_last_error,
+            "health": vercel_health,
             "capabilities": vercel_capabilities,
         },
         "netlify": {
             "configured": netlify_token_set and bool(netlify_site_id),
-            "verified": netlify_verified and netlify_token_set and bool(netlify_site_id),
+            "verified": netlify_verified,
+            "setup_complete": netlify_setup_complete,
             "token_configured": netlify_token_set,
             "site_id": netlify_site_id,
             "team_id_set": bool(str(integrations.get("netlify_team_id", "") or "").strip()),
             "default_target": netlify_default_target,
             "verified_at": netlify_verified_at,
             "last_error": netlify_last_error,
+            "health": netlify_health,
             "capabilities": netlify_capabilities,
         },
         "stripe": {
             "configured": stripe_secret_set or stripe_publishable_set,
-            "verified": stripe_verified and stripe_secret_set,
+            "verified": stripe_verified,
+            "setup_complete": stripe_setup_complete,
             "secret_configured": stripe_secret_set,
             "publishable_configured": stripe_publishable_set,
             "verified_at": stripe_verified_at,
             "last_error": stripe_last_error,
+            "health": stripe_health,
             "capabilities": stripe_capabilities,
+        },
+        "telegram": {
+            "configured": telegram_token_set and telegram_chat_set,
+            "verified": telegram_verified,
+            "setup_complete": telegram_setup_complete,
+            "token_configured": telegram_token_set,
+            "chat_configured": telegram_chat_set,
+            "health": telegram_health,
+            "capabilities": telegram_capabilities,
+        },
+        "slack": {
+            "configured": slack_token_set,
+            "verified": slack_verified,
+            "setup_complete": slack_setup_complete,
+            "token_configured": slack_token_set,
+            "default_channel": str(integrations.get("slack_default_channel", "") or "").strip(),
+            "health": slack_health,
+            "capabilities": slack_capabilities,
+            "events_endpoint": "/api/integrations/slack/events",
+            "send_endpoint": "/api/integrations/slack/send",
+        },
+        "linear": {
+            "configured": linear_key_set,
+            "verified": linear_verified,
+            "setup_complete": linear_setup_complete,
+            "team_id": str(integrations.get("linear_team_id", "") or "").strip(),
+            "health": linear_health,
+            "capabilities": linear_capabilities,
+        },
+        "notion": {
+            "configured": notion_token_set,
+            "verified": notion_verified,
+            "setup_complete": notion_setup_complete,
+            "parent_page_id": str(integrations.get("notion_parent_page_id", "") or "").strip(),
+            "health": notion_health,
+            "capabilities": notion_capabilities,
+        },
+        "jira": {
+            "configured": jira_set,
+            "verified": jira_verified,
+            "setup_complete": jira_setup_complete,
+            "base_url": str(integrations.get("jira_base_url", "") or "").strip(),
+            "project_key": str(integrations.get("jira_project_key", "") or "").strip(),
+            "health": jira_health,
+            "capabilities": jira_capabilities,
+        },
+        "gitlab": {
+            "configured": gitlab_token_set and bool(gitlab_project_id),
+            "verified": gitlab_verified,
+            "setup_complete": gitlab_setup_complete,
+            "project_id": gitlab_project_id,
+            "base_url": str(integrations.get("gitlab_base_url", "https://gitlab.com") or "https://gitlab.com").strip(),
+            "default_branch": str(integrations.get("gitlab_default_branch", "main") or "main").strip() or "main",
+            "health": gitlab_health,
+            "capabilities": gitlab_capabilities,
         },
         "deployment": {
             "provider_preference": deploy_provider_preference,

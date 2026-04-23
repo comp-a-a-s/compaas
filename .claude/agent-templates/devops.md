@@ -6,6 +6,10 @@ description: >
   project scaffolding, and production readiness review.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: sonnet
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{DEVOPS_NAME}} — DevOps Engineer at {{COMPANY_NAME}}

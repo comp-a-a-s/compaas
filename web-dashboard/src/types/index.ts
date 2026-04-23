@@ -101,9 +101,11 @@ export interface Project {
   total_tasks?: number;
   plan_approved?: boolean;
   workspace_path?: string;
-  delivery_mode?: 'local' | 'github';
+  delivery_mode?: 'local' | 'github' | 'gitlab';
   github_repo?: string;
   github_branch?: string;
+  gitlab_project_id?: string;
+  gitlab_branch?: string;
   plan_packet?: PlanningPacketStatus;
   metadata?: ProjectMetadata;
   run_instructions?: string;
@@ -655,7 +657,7 @@ export interface LlmConfig {
   openai_mode?: 'apikey' | 'codex';
   /** Base URL for OpenAI-compatible endpoints (OpenAI, Ollama, LM Studio, …) */
   base_url: string;
-  /** Model identifier, e.g. "gpt-4o", "llama3.2", "opus" */
+  /** Model identifier, e.g. "gpt-5.2", "gemini-2.5-pro", "claude-sonnet-4-0" */
   model: string;
   /** API key — use a placeholder (e.g. "ollama") for local servers */
   api_key: string;
@@ -700,7 +702,7 @@ export interface AppConfig {
     github_verified?: boolean;
     github_verified_at?: string;
     github_last_error?: string;
-    workspace_mode?: 'local' | 'github';
+    workspace_mode?: 'local' | 'github' | 'gitlab';
     vercel_token?: string;
     vercel_team_id?: string;
     vercel_project_name?: string;
@@ -724,7 +726,58 @@ export interface AppConfig {
     stripe_verified?: boolean;
     stripe_verified_at?: string;
     stripe_last_error?: string;
+    telegram_bot_token?: string;
+    telegram_chat_id?: string;
+    telegram_configured?: boolean;
+    telegram_poll_mode?: 'long_poll' | 'short_poll' | string;
+    telegram_status?: 'disconnected' | 'configured' | 'verified' | 'degraded' | string;
+    telegram_verified_at?: string;
+    telegram_last_success_at?: string;
+    telegram_last_error?: string;
+    telegram_consecutive_failures?: number;
     slack_token?: string;
+    slack_default_channel?: string;
+    slack_status?: 'disconnected' | 'configured' | 'verified' | 'degraded' | string;
+    slack_verified_at?: string;
+    slack_last_success_at?: string;
+    slack_last_error?: string;
+    slack_consecutive_failures?: number;
+    linear_api_key?: string;
+    linear_team_id?: string;
+    linear_verified?: boolean;
+    linear_verified_at?: string;
+    linear_last_error?: string;
+    linear_status?: 'disconnected' | 'configured' | 'verified' | 'degraded' | string;
+    linear_last_success_at?: string;
+    linear_consecutive_failures?: number;
+    notion_token?: string;
+    notion_parent_page_id?: string;
+    notion_verified?: boolean;
+    notion_verified_at?: string;
+    notion_last_error?: string;
+    notion_status?: 'disconnected' | 'configured' | 'verified' | 'degraded' | string;
+    notion_last_success_at?: string;
+    notion_consecutive_failures?: number;
+    jira_base_url?: string;
+    jira_email?: string;
+    jira_api_token?: string;
+    jira_project_key?: string;
+    jira_verified?: boolean;
+    jira_verified_at?: string;
+    jira_last_error?: string;
+    jira_status?: 'disconnected' | 'configured' | 'verified' | 'degraded' | string;
+    jira_last_success_at?: string;
+    jira_consecutive_failures?: number;
+    gitlab_base_url?: string;
+    gitlab_token?: string;
+    gitlab_project_id?: string;
+    gitlab_default_branch?: string;
+    gitlab_verified?: boolean;
+    gitlab_verified_at?: string;
+    gitlab_last_error?: string;
+    gitlab_status?: 'disconnected' | 'configured' | 'verified' | 'degraded' | string;
+    gitlab_last_success_at?: string;
+    gitlab_consecutive_failures?: number;
     webhook_url?: string;
   };
   chat_policy?: {

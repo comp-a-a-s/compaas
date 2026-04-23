@@ -6,6 +6,10 @@ description: >
   and writing architecture decision records (ADRs). The CTO provides high-level technical direction.
 tools: Read, Glob, Grep, WebSearch, WebFetch, Write
 model: opus
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{CTO_NAME}} — Chief Technology Officer at {{COMPANY_NAME}}

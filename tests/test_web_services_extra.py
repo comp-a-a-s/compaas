@@ -573,6 +573,128 @@ def test_integration_service_helpers(monkeypatch, tmp_path):
     assert deploy_saved_netlify["status"] == "ok"
     assert deploy_saved_netlify["deployment_url"] == "https://demo.netlify.app"
 
+    monkeypatch.setattr(
+        IntegrationService,
+        "_vercel_request",
+        staticmethod(lambda *_args, **_kwargs: (200, {"projects": [{"id": "prj_1", "name": "compaas"}]})),
+    )
+    vercel_projects = service.vercel_list_projects("token")
+    assert vercel_projects["status"] == "ok"
+    assert vercel_projects["projects"][0]["name"] == "compaas"
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_netlify_request",
+        staticmethod(lambda *_args, **_kwargs: (200, {"data": [{"id": "site_1", "name": "compaas-site"}]})),
+    )
+    netlify_sites = service.netlify_list_sites("token")
+    assert netlify_sites["status"] == "ok"
+    assert netlify_sites["sites"][0]["name"] == "compaas-site"
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_json_request",
+        staticmethod(lambda *_args, **_kwargs: (200, {"ok": True, "channel": "C1"})),
+    )
+    slack_send = service.slack_send_message("xoxb_1", channel="C1", text="hello")
+    assert slack_send["status"] == "ok"
+
+    def fake_json_linear(_url, _method, headers=None, payload=None, timeout=20):
+        _ = headers, timeout
+        if isinstance(payload, dict) and str(payload.get("query", "")).startswith("query"):
+            return (200, {"data": {"viewer": {"id": "u1", "name": "Linear User", "email": "a@b.com"}}})
+        return (200, {"data": {"issueCreate": {"success": True, "issue": {"id": "iss_1", "title": "Task"}}}})
+
+    monkeypatch.setattr(IntegrationService, "_json_request", staticmethod(fake_json_linear))
+    linear_verify = service.linear_verify_connection("lin_api")
+    assert linear_verify["status"] == "ok"
+    linear_issue = service.linear_create_issue("lin_api", team_id="team_1", title="Task")
+    assert linear_issue["status"] == "ok"
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_json_request",
+        staticmethod(lambda *_args, **_kwargs: (200, {"id": "usr_1", "name": "Notion User", "type": "person"})),
+    )
+    notion_verify = service.notion_verify_connection("notion_secret")
+    assert notion_verify["status"] == "ok"
+
+    monkeypatch.setattr(
+        IntegrationService,
+        "_json_request",
+        staticmethod(lambda *_args, **_kwargs: (200, {"id": "page_1"})),
+    )
+    notion_page = service.notion_upsert_page(
+        "notion_secret",
+        parent_page_id="parent_1",
+        title="Handoff",
+        markdown="Line 1",
+    )
+    assert notion_page["status"] == "ok"
+
+    def fake_json_jira(url, _method, headers=None, payload=None, timeout=20):
+        _ = headers, payload, timeout
+        if url.endswith("/myself"):
+            return (200, {"accountId": "acc_1", "displayName": "Jira User"})
+        if url.endswith("/transitions"):
+            return (204, {})
+        if url.endswith("/issue"):
+            return (201, {"id": "10001", "key": "CMP-1"})
+        return (404, {"message": "Not found"})
+
+    monkeypatch.setattr(IntegrationService, "_json_request", staticmethod(fake_json_jira))
+    jira_verify = service.jira_verify_connection(base_url="https://jira.example.com", email="u@example.com", api_token="tok")
+    assert jira_verify["status"] == "ok"
+    jira_issue = service.jira_create_issue(
+        base_url="https://jira.example.com",
+        email="u@example.com",
+        api_token="tok",
+        project_key="CMP",
+        summary="Add API",
+    )
+    assert jira_issue["status"] == "ok"
+    jira_transition = service.jira_transition_issue(
+        base_url="https://jira.example.com",
+        email="u@example.com",
+        api_token="tok",
+        issue_key="CMP-1",
+        transition_id="31",
+    )
+    assert jira_transition["status"] == "ok"
+
+    def fake_json_gitlab(url, method, headers=None, payload=None, timeout=20):
+        _ = headers, payload, timeout
+        if url.endswith("/api/v4/user"):
+            return (200, {"id": 1, "username": "gitlab-user", "name": "GitLab User"})
+        if "/repository/branches" in url and method == "POST":
+            return (201, {"name": "feature/test"})
+        if "/merge_requests" in url and method == "POST":
+            return (201, {"iid": 7, "title": "MR title"})
+        if "/api/v4/projects/" in url and method == "GET":
+            return (200, {"id": 99})
+        return (404, {"message": "Not found"})
+
+    monkeypatch.setattr(IntegrationService, "_json_request", staticmethod(fake_json_gitlab))
+    gitlab_verify = service.gitlab_verify_connection(base_url="https://gitlab.com", token="glpat_1", project_id="99")
+    assert gitlab_verify["status"] == "ok"
+    assert gitlab_verify["project_ok"] is True
+    gitlab_branch = service.gitlab_create_branch(
+        base_url="https://gitlab.com",
+        token="glpat_1",
+        project_id="99",
+        branch="feature/test",
+    )
+    assert gitlab_branch["status"] == "ok"
+    gitlab_mr = service.gitlab_create_merge_request(
+        base_url="https://gitlab.com",
+        token="glpat_1",
+        project_id="99",
+        source_branch="feature/test",
+        target_branch="main",
+        title="MR title",
+    )
+    assert gitlab_mr["status"] == "ok"
+
 
 def test_integration_service_repo_path_guard_allows_valid_repo(monkeypatch, tmp_path):
     workspace_root = tmp_path / "workspace"

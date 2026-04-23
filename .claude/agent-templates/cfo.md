@@ -8,6 +8,10 @@ description: >
   always the top priority — never recommend cuts that hurt output.
 tools: Read, Glob, Grep, WebSearch, WebFetch, Write
 model: sonnet
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{CFO_NAME}} — CFO at {{COMPANY_NAME}}

@@ -65,19 +65,23 @@ const BOOTSTRAP_DIAGNOSTICS_SEEN_KEY = 'compaas_bootstrap_diagnostics_seen_v1';
 const TELEGRAM_KEYS = {
   token: 'compaas_telegram_token',
   chatId: 'compaas_telegram_chatid',
-  configured: 'compaas_telegram_configured',
   mirror: 'compaas_telegram_mirror_enabled',
 } as const;
 
-function readTelegramSnapshot(): { configured: boolean; mirrorEnabled: boolean } {
+function readTelegramSnapshot(config?: AppConfig | null): { configured: boolean; mirrorEnabled: boolean } {
+  const configuredFromConfig = Boolean(
+    config?.integrations?.telegram_bot_token
+    && config?.integrations?.telegram_chat_id,
+  );
   try {
     const token = localStorage.getItem(TELEGRAM_KEYS.token) ?? '';
     const chatId = localStorage.getItem(TELEGRAM_KEYS.chatId) ?? '';
-    const configured = localStorage.getItem(TELEGRAM_KEYS.configured) === 'true' && Boolean(token && chatId);
+    const configuredFromStorage = Boolean(token && chatId);
+    const configured = configuredFromConfig || configuredFromStorage;
     const mirrorEnabled = configured && localStorage.getItem(TELEGRAM_KEYS.mirror) === 'true';
     return { configured, mirrorEnabled };
   } catch {
-    return { configured: false, mirrorEnabled: false };
+    return { configured: configuredFromConfig, mirrorEnabled: false };
   }
 }
 
@@ -276,16 +280,16 @@ export default function App() {
   // Create-project modal state
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
-  const [newProjectMode, setNewProjectMode] = useState<'local' | 'github'>('local');
+  const [newProjectMode, setNewProjectMode] = useState<'local' | 'github' | 'gitlab'>('local');
   const [newProjectRepo, setNewProjectRepo] = useState('');
-  const [newProjectBranch, setNewProjectBranch] = useState('master');
+  const [newProjectBranch, setNewProjectBranch] = useState('main');
   const [creatingProject, setCreatingProject] = useState(false);
   const [createProjectError, setCreateProjectError] = useState('');
 
   // Project navigation from CEO chat
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
-  const [settingsConnectorFocus, setSettingsConnectorFocus] = useState<'github' | 'vercel' | 'netlify' | 'stripe' | null>(null);
+  const [settingsConnectorFocus, setSettingsConnectorFocus] = useState<'github' | 'gitlab' | 'vercel' | 'netlify' | 'stripe' | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStep, setTourStep] = useState(0);
 
@@ -300,7 +304,7 @@ export default function App() {
     setActiveProjectId(projectId);
   }, []);
 
-  const openConnectorSetup = useCallback((connector: 'github' | 'vercel' | 'netlify' | 'stripe') => {
+  const openConnectorSetup = useCallback((connector: 'github' | 'gitlab' | 'vercel' | 'netlify' | 'stripe') => {
     setSettingsConnectorFocus(connector);
     setActiveTab('settings');
     setChatOpen(false);
@@ -321,7 +325,7 @@ export default function App() {
   }, []);
 
   const handleTelegramMirrorChange = useCallback((enabled: boolean) => {
-    const snapshot = readTelegramSnapshot();
+    const snapshot = readTelegramSnapshot(config);
     const nextEnabled = enabled && snapshot.configured;
     setTelegramMirrorEnabled(nextEnabled);
     try {
@@ -329,10 +333,10 @@ export default function App() {
     } catch {
       // ignore localStorage failures
     }
-  }, []);
+  }, [config]);
 
   const handleToggleTelegramMirror = useCallback(() => {
-    const snapshot = readTelegramSnapshot();
+    const snapshot = readTelegramSnapshot(config);
     if (!snapshot.configured) {
       setActiveTab('settings');
       setChatOpen(false);
@@ -345,7 +349,7 @@ export default function App() {
       return;
     }
     handleTelegramMirrorChange(!telegramMirrorEnabled);
-  }, [handleTelegramMirrorChange, telegramMirrorEnabled]);
+  }, [config, handleTelegramMirrorChange, telegramMirrorEnabled]);
 
   // Shortcuts panel
   const { visible: shortcutsVisible, hide: hideShortcuts } = useShortcutsPanel();
@@ -709,7 +713,7 @@ export default function App() {
     setNewProjectName(`Project ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`);
     setNewProjectMode(defaultMode === 'github' ? 'github' : 'local');
     setNewProjectRepo(config?.integrations?.github_repo?.trim() || '');
-    setNewProjectBranch(config?.integrations?.github_default_branch?.trim() || 'master');
+    setNewProjectBranch(config?.integrations?.github_default_branch?.trim() || 'main');
     setCreateProjectError('');
     setShowCreateProject(true);
   }, [config?.integrations?.workspace_mode, config?.integrations?.github_repo, config?.integrations?.github_default_branch]);
@@ -728,13 +732,18 @@ export default function App() {
       type: 'app',
       delivery_mode: newProjectMode,
       github_repo: newProjectMode === 'github' ? newProjectRepo : '',
-      github_branch: newProjectMode === 'github' ? newProjectBranch : 'master',
+      github_branch: newProjectMode === 'github' ? newProjectBranch : 'main',
     });
     setCreatingProject(false);
     if (created.status !== 'ok' || !created.project?.id) {
       if (created.error?.settings_target === 'github' || created.error?.code === 'github_not_configured') {
         setShowCreateProject(false);
         openConnectorSetup('github');
+        return;
+      }
+      if (created.error?.settings_target === 'gitlab' || created.error?.code === 'gitlab_not_configured') {
+        setShowCreateProject(false);
+        openConnectorSetup('gitlab');
         return;
       }
       setCreateProjectError(created.error?.message || 'Unable to create project. Please try again.');
@@ -1189,7 +1198,7 @@ export default function App() {
 
   useEffect(() => {
     const syncTelegram = () => {
-      setTelegramMirrorEnabled(readTelegramSnapshot().mirrorEnabled);
+      setTelegramMirrorEnabled(readTelegramSnapshot(config).mirrorEnabled);
     };
     syncTelegram();
     window.addEventListener('storage', syncTelegram);
@@ -1198,7 +1207,7 @@ export default function App() {
       window.removeEventListener('storage', syncTelegram);
       window.removeEventListener('focus', syncTelegram);
     };
-  }, []);
+  }, [config]);
 
   const normalizedSearch = globalSearchQuery.trim().toLowerCase();
 
@@ -1399,7 +1408,7 @@ export default function App() {
               onRefresh={loadProjects}
               defaultWorkspaceMode={config?.integrations?.workspace_mode === 'github' ? 'github' : 'local'}
               defaultGithubRepo={config?.integrations?.github_repo || ''}
-              defaultGithubBranch={config?.integrations?.github_default_branch || 'master'}
+              defaultGithubBranch={config?.integrations?.github_default_branch || 'main'}
               githubConfigured={githubConfigured}
               onProjectCreated={(projectId) => {
                 setActiveProjectId(projectId);
@@ -1463,7 +1472,9 @@ export default function App() {
 
   const ceoName = config?.agents?.['ceo'] || 'CEO';
   const userName = config?.user?.name || 'You';
-  const telegramConfigured = readTelegramSnapshot().configured;
+  const telegramConfigured = readTelegramSnapshot(config).configured;
+  const telegramBotToken = String(config?.integrations?.telegram_bot_token || '').trim();
+  const telegramChatId = String(config?.integrations?.telegram_chat_id || '').trim();
   const previewReviewEnabled = config?.feature_flags?.preview_review_layer !== false;
   const contextPacksEnabled = config?.feature_flags?.context_packs !== false;
   const stripeBillingPackEnabled = config?.feature_flags?.stripe_billing_pack !== false;
@@ -1567,6 +1578,8 @@ export default function App() {
               onActiveProjectChange={handleActiveProjectChange}
               telegramMirrorEnabled={telegramMirrorEnabled}
               onTelegramMirrorChange={handleTelegramMirrorChange}
+              telegramBotToken={telegramBotToken}
+              telegramChatId={telegramChatId}
               microToggleRequestToken={microToggleRequestToken}
               onAgentActivity={handleAgentActivity}
               onAgentRemove={removeLiveAgent}
@@ -1683,7 +1696,7 @@ export default function App() {
                 <input
                   value={newProjectBranch}
                   onChange={(e) => setNewProjectBranch(e.target.value)}
-                  placeholder="master"
+                  placeholder="main"
                   style={{
                     width: '100%', padding: '8px 12px', borderRadius: '8px',
                     border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface-raised)',
@@ -1879,6 +1892,41 @@ export default function App() {
                       .slice(0, 4)
                       .join(' • ') || 'No tool details available.'}
                   </p>
+                </div>
+                <div style={{ border: '1px solid var(--tf-border)', borderRadius: '10px', padding: '10px' }}>
+                  <p style={{ fontSize: '12px', fontWeight: 600, color: 'var(--tf-text)' }}>Integration Coverage</p>
+                  {(() => {
+                    const integrations = (bootstrapDiagnostics?.integrations || {}) as Record<string, unknown>;
+                    const coverage = (integrations.coverage || {}) as Record<string, unknown>;
+                    const configured = Number(coverage.configured_connectors || 0) || 0;
+                    const verified = Number(coverage.verified_connectors || 0) || 0;
+                    const degraded = Number(coverage.degraded_connectors || 0) || 0;
+                    const total = Number(coverage.total_connectors || 0) || 0;
+                    const connectorRows = Object.entries(integrations)
+                      .filter(([key, value]) => key !== 'coverage' && key !== 'workspace_mode' && key !== 'deployment' && typeof value === 'object' && value !== null)
+                      .map(([key, value]) => {
+                        const row = value as Record<string, unknown>;
+                        const configuredState = Boolean(row.configured);
+                        const verifiedState = Boolean(row.verified);
+                        const statusText = String(row.status || '').trim().toLowerCase();
+                        const status = statusText || (verifiedState ? 'verified' : (configuredState ? 'configured' : 'disconnected'));
+                        return `${key}: ${status}`;
+                      });
+                    return (
+                      <>
+                        <p style={{ fontSize: '12px', color: 'var(--tf-text-secondary)', marginTop: '4px' }}>
+                          {total > 0
+                            ? `${verified}/${total} verified • ${configured}/${total} configured${degraded > 0 ? ` • ${degraded} degraded` : ''}`
+                            : 'No connector coverage details available.'}
+                        </p>
+                        {connectorRows.length > 0 && (
+                          <p style={{ fontSize: '11px', color: 'var(--tf-text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+                            {connectorRows.join(' • ')}
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 {bootstrapDiagnosticsError && (
                   <p style={{ fontSize: '12px', color: 'var(--tf-warning)' }}>

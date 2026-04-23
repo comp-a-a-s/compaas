@@ -6,6 +6,10 @@ description: >
   success metrics. Translates business goals into actionable product requirements.
 tools: Read, Glob, Grep, WebSearch, WebFetch, Write
 model: sonnet
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{VP_PRODUCT_NAME}} — Chief Product Officer at {{COMPANY_NAME}}

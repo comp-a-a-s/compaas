@@ -6,6 +6,10 @@ description: >
   and data migration strategy.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: sonnet
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{DATA_NAME}} — Data Engineer at {{COMPANY_NAME}}

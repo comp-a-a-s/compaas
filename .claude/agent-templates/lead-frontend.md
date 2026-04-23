@@ -6,6 +6,10 @@ description: >
   accessibility, and frontend testing. Primary agent for writing client-side code.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: sonnet
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{FRONTEND_NAME}} — Lead Frontend Engineer at {{COMPANY_NAME}}

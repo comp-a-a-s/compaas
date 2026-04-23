@@ -1145,6 +1145,79 @@ class TestIntegrationSecurity:
         assert response.json()["status"] == "ok"
         assert called["count"] == 1
 
+    def test_llm_models_openai_codex_returns_fixed_catalog(self, client):
+        response = client.post("/api/llm/models", json={
+            "provider": "openai",
+            "openai_mode": "codex",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["source"] == "runtime-fixed"
+        assert payload["catalog_source"] == "runtime-fixed"
+        assert payload.get("fetched_at")
+        assert payload["models"] == ["codex", "custom"]
+
+    def test_llm_models_openai_apikey_fetches_live_catalog(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "_fetch_openai_compatible_models",
+            lambda _base_url, _api_key: ["gpt-5.2", "gpt-5-mini"],
+        )
+
+        response = client.post("/api/llm/models", json={
+            "provider": "openai",
+            "openai_mode": "apikey",
+            "api_key": "sk-test",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["source"] == "live"
+        assert payload["catalog_source"] == "live"
+        assert payload.get("fetched_at")
+        assert payload["models"][:2] == ["gpt-5.2", "gpt-5-mini"]
+        assert "custom" in payload["models"]
+
+    def test_llm_models_gemini_without_key_uses_fallback(self, client):
+        response = client.post("/api/llm/models", json={
+            "provider": "gemini",
+            "api_key": "",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["source"] == "fallback"
+        assert payload["catalog_source"] == "fallback"
+        assert payload.get("fetched_at")
+        assert "gemini-2.5-pro" in payload["models"]
+        assert "custom" in payload["models"]
+
+    def test_llm_models_anthropic_apikey_fetches_live_catalog(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(
+            api_module,
+            "_fetch_anthropic_models",
+            lambda _api_key: ["claude-opus-4-1", "claude-sonnet-4-0"],
+        )
+
+        response = client.post("/api/llm/models", json={
+            "provider": "anthropic",
+            "anthropic_mode": "apikey",
+            "api_key": "sk-ant-test",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["source"] == "live"
+        assert payload["catalog_source"] == "live"
+        assert payload.get("fetched_at")
+        assert payload["models"][:2] == ["claude-opus-4-1", "claude-sonnet-4-0"]
+        assert "custom" in payload["models"]
+
     def test_setup_config_requires_auth_after_setup_complete(self, client, monkeypatch, temp_data_dir):
         import src.web.api as api_module
 
@@ -1273,21 +1346,45 @@ class TestIntegrationSecurity:
         assert data["workspace_mode"] == "github"
         assert data["github"]["configured"] is True
         assert data["github"]["verified"] is True
+        assert data["github"]["setup_complete"] is True
         assert data["github"]["verified_at"] == "2026-02-23T10:00:00Z"
         assert data["github"]["repo"] == "comp-a-a-s/compaas"
         assert "push_branch" in data["github"]["capabilities"]
         assert data["vercel"]["configured"] is True
         assert data["vercel"]["verified"] is True
+        assert data["vercel"]["setup_complete"] is True
         assert data["vercel"]["verified_at"] == "2026-02-23T10:01:00Z"
         assert data["vercel"]["default_target"] == "production"
         assert "deploy_preview" in data["vercel"]["capabilities"]
         assert data["netlify"]["configured"] is True
         assert data["netlify"]["verified"] is True
+        assert data["netlify"]["setup_complete"] is True
         assert data["netlify"]["site_id"] == "site_123"
         assert data["netlify"]["verified_at"] == "2026-02-23T10:02:00Z"
         assert data["netlify"]["default_target"] == "preview"
         assert "deploy_preview" in data["netlify"]["capabilities"]
         assert data["deployment"]["provider_preference"] == "netlify"
+
+    def test_integration_capabilities_clear_stale_verified_when_status_not_verified(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({
+                "integrations": {
+                    "github_token": "ghp_secret",
+                    "github_repo": "comp-a-a-s/compaas",
+                    "github_verified": True,
+                    "github_status": "degraded",
+                    "github_last_error": "auth failed",
+                }
+            }, f)
+
+        response = client.get("/api/integrations/capabilities")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["github"]["configured"] is True
+        assert data["github"]["verified"] is False
+        assert data["github"]["setup_complete"] is False
 
     def test_v1_github_verify_persists_verified_state(self, client, monkeypatch, temp_data_dir):
         import src.web.api as api_module
@@ -1849,3 +1946,435 @@ class TestReliabilityErrorContracts:
         assert "integrations" in payload
         assert "netlify" in payload["integrations"]
         assert "deployment" in payload["integrations"]
+
+
+class TestIntegrationEnhancements:
+    def test_telegram_poll_uses_persisted_credentials_and_cursor_map(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump(
+                {
+                    "integrations": {
+                        "telegram_bot_token": "bot_token_abc12345",
+                        "telegram_chat_id": "999",
+                        "telegram_cursor_map": {},
+                    }
+                },
+                f,
+            )
+
+        class _FakeResponse:
+            def __init__(self, payload: dict):
+                self._payload = payload
+
+            def read(self):
+                return json.dumps(self._payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        monkeypatch.setattr(
+            api_module.urllib.request,
+            "urlopen",
+            lambda *_args, **_kwargs: _FakeResponse(
+                {
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 101,
+                            "message": {
+                                "text": "ping",
+                                "date": 1700000000,
+                                "from": {"first_name": "Tester"},
+                                "chat": {"id": "999"},
+                            },
+                        }
+                    ],
+                }
+            ),
+        )
+
+        response = client.post("/api/integrations/telegram/poll", json={})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert len(payload["messages"]) == 1
+        assert payload["messages"][0]["chat_id"] == "999"
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        cursor_map = integrations.get("telegram_cursor_map", {})
+        assert isinstance(cursor_map, dict)
+        assert cursor_map
+        assert list(cursor_map.values())[0] == 101
+        assert integrations.get("telegram_configured") is True
+
+    def test_v1_vercel_projects_list_returns_projects(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump(
+                {
+                    "integrations": {
+                        "vercel_token": "vercel_abc",
+                        "vercel_project_name": "compaas-web",
+                        "vercel_verified": False,
+                        "vercel_status": "configured",
+                    }
+                },
+                f,
+                sort_keys=False,
+            )
+
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "vercel_list_projects",
+            lambda token, team_id="": {
+                "status": "ok",
+                "projects": [{"id": "prj_1", "name": "compaas-web"}],
+            },
+        )
+
+        response = client.post("/api/v1/vercel/projects/list", json={"token": "vercel_abc"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["projects"][0]["name"] == "compaas-web"
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations.get("vercel_verified") is False
+        assert integrations.get("vercel_status") == "configured"
+        assert integrations.get("vercel_last_success_at")
+
+    def test_v1_netlify_sites_list_returns_sites(self, client, monkeypatch):
+        import src.web.api as api_module
+
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump(
+                {
+                    "integrations": {
+                        "netlify_token": "nfp_abc",
+                        "netlify_site_id": "site_1",
+                        "netlify_verified": False,
+                        "netlify_status": "configured",
+                    }
+                },
+                f,
+                sort_keys=False,
+            )
+
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "netlify_list_sites",
+            lambda token, team_id="": {
+                "status": "ok",
+                "sites": [{"id": "site_1", "name": "compaas-site"}],
+            },
+        )
+
+        response = client.post("/api/v1/netlify/sites/list", json={"token": "nfp_abc"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["sites"][0]["name"] == "compaas-site"
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations.get("netlify_verified") is False
+        assert integrations.get("netlify_status") == "configured"
+        assert integrations.get("netlify_last_success_at")
+
+    def test_v1_slack_send_uses_saved_token_and_updates_health(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({"integrations": {"slack_token": "xoxb_saved"}}, f)
+
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "slack_send_message",
+            lambda token, channel, text, thread_ts="": {
+                "status": "ok",
+                "message": {"ok": True, "channel": channel, "text": text},
+            },
+        )
+
+        response = client.post("/api/v1/slack/send", json={"channel": "C123", "text": "hello"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations.get("slack_status") == "verified"
+        assert integrations.get("slack_consecutive_failures") == 0
+
+    def test_v1_linear_verify_persists_state(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "linear_verify_connection",
+            lambda api_key: {
+                "status": "ok",
+                "ok": True,
+                "account": {"id": "lin_1", "name": "Linear User"},
+                "message": "Linear key is valid.",
+            },
+        )
+
+        response = client.post("/api/v1/linear/verify", json={"api_key": "lin_api_123"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations.get("linear_api_key") == "lin_api_123"
+        assert integrations.get("linear_verified") is True
+        assert integrations.get("linear_status") == "verified"
+
+    def test_v1_notion_verify_persists_state(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "notion_verify_connection",
+            lambda token: {
+                "status": "ok",
+                "ok": True,
+                "account": {"id": "notion_1", "name": "Notion User"},
+                "message": "Notion token is valid.",
+            },
+        )
+
+        response = client.post("/api/v1/notion/verify", json={"token": "secret_notion"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations.get("notion_token") == "secret_notion"
+        assert integrations.get("notion_verified") is True
+        assert integrations.get("notion_status") == "verified"
+
+    def test_v1_jira_issue_create_uses_saved_credentials(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump(
+                {
+                    "integrations": {
+                        "jira_base_url": "https://jira.example.com",
+                        "jira_email": "ops@example.com",
+                        "jira_api_token": "jira_token_saved",
+                        "jira_project_key": "CORE",
+                    }
+                },
+                f,
+            )
+
+        captured: dict[str, str] = {}
+
+        def _fake_create_issue(*, base_url: str, email: str, api_token: str, project_key: str, summary: str, description: str = "", issue_type: str = "Task"):
+            captured["base_url"] = base_url
+            captured["email"] = email
+            captured["api_token"] = api_token
+            captured["project_key"] = project_key
+            return {"status": "ok", "issue": {"key": "CORE-42", "summary": summary, "description": description, "issue_type": issue_type}}
+
+        monkeypatch.setattr(api_module.integration_service, "jira_create_issue", _fake_create_issue)
+
+        response = client.post("/api/v1/jira/issues/create", json={"summary": "Ship rollout checklist"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["issue"]["key"] == "CORE-42"
+        assert captured["base_url"] == "https://jira.example.com"
+        assert captured["email"] == "ops@example.com"
+        assert captured["api_token"] == "jira_token_saved"
+        assert captured["project_key"] == "CORE"
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations.get("jira_status") == "verified"
+
+    def test_v1_gitlab_branch_create_uses_saved_credentials(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump(
+                {
+                    "integrations": {
+                        "gitlab_base_url": "https://gitlab.com",
+                        "gitlab_token": "glpat_saved",
+                        "gitlab_project_id": "77",
+                    }
+                },
+                f,
+            )
+
+        captured: dict[str, str] = {}
+
+        def _fake_create_branch(*, base_url: str, token: str, project_id: str, branch: str, ref: str = "main"):
+            captured["base_url"] = base_url
+            captured["token"] = token
+            captured["project_id"] = project_id
+            captured["branch"] = branch
+            captured["ref"] = ref
+            return {"status": "ok", "branch": {"name": branch, "ref": ref}}
+
+        monkeypatch.setattr(api_module.integration_service, "gitlab_create_branch", _fake_create_branch)
+
+        response = client.post("/api/v1/gitlab/branches/create", json={"branch": "feature/sprint6-readiness", "ref": "main"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["branch"]["name"] == "feature/sprint6-readiness"
+        assert captured["base_url"] == "https://gitlab.com"
+        assert captured["token"] == "glpat_saved"
+        assert captured["project_id"] == "77"
+
+        with open(api_module.CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+        integrations = cfg.get("integrations", {})
+        assert integrations.get("gitlab_status") == "verified"
+
+    def test_v1_system_readiness_includes_connector_coverage(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump(
+                {
+                    "llm": {
+                        "provider": "openai",
+                        "openai_mode": "apikey",
+                        "api_key": "sk-test",
+                        "base_url": "https://api.openai.com/v1",
+                        "model": "gpt-5.2",
+                    },
+                    "integrations": {
+                        "github_token": "ghp_x",
+                        "github_repo": "acme/compaas",
+                        "github_verified": True,
+                        "github_status": "verified",
+                        "linear_api_key": "lin_api_x",
+                        "linear_verified": True,
+                        "linear_status": "verified",
+                        "notion_token": "secret_x",
+                        "notion_status": "configured",
+                        "jira_base_url": "https://jira.example.com",
+                        "jira_email": "ops@example.com",
+                        "jira_api_token": "jira_x",
+                        "jira_status": "degraded",
+                        "slack_token": "xoxb_1",
+                        "slack_status": "verified",
+                    },
+                },
+                f,
+            )
+
+        response = client.get("/api/v1/system/readiness")
+        assert response.status_code == 200
+        payload = response.json()
+        integrations = payload.get("integrations", {})
+        assert "linear" in integrations
+        assert "notion" in integrations
+        assert "jira" in integrations
+        coverage = integrations.get("coverage", {})
+        assert coverage.get("total_connectors", 0) >= 10
+        assert coverage.get("configured_connectors", 0) >= 4
+        assert coverage.get("verified_connectors", 0) >= 2
+        assert coverage.get("degraded_connectors", 0) >= 1
+
+    def test_v1_linear_issue_create_emits_activity_event(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+        import src.web.routers.v1 as v1_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump(
+                {
+                    "integrations": {
+                        "linear_api_key": "lin_api_saved",
+                        "linear_team_id": "team_123",
+                    }
+                },
+                f,
+            )
+
+        monkeypatch.setattr(
+            api_module.integration_service,
+            "linear_create_issue",
+            lambda api_key, team_id, title, description="", priority=None: {
+                "status": "ok",
+                "issue": {"id": "lin_issue_1", "identifier": "ENG-101", "title": title},
+            },
+        )
+
+        events: list[dict[str, object]] = []
+
+        def _capture_emit(_data_dir, _actor, action, message, **kwargs):
+            events.append(
+                {
+                    "action": action,
+                    "message": message,
+                    "metadata": kwargs.get("metadata", {}),
+                }
+            )
+
+        monkeypatch.setattr(v1_module, "emit_activity", _capture_emit)
+
+        response = client.post(
+            "/api/v1/linear/issues/create",
+            json={"team_id": "team_123", "title": "Ship sprint report"},
+        )
+        assert response.status_code == 200
+
+        assert events, "Expected integration event to be emitted."
+        latest = events[-1]
+        assert latest["action"] == "INTEGRATION_EVENT"
+        metadata = latest["metadata"] if isinstance(latest["metadata"], dict) else {}
+        assert metadata.get("connector") == "linear"
+        assert metadata.get("action") == "create_issue"
+        assert metadata.get("ok") is True
+
+    def test_v1_jira_verify_respects_feature_flag(self, client, monkeypatch, temp_data_dir):
+        import src.web.api as api_module
+
+        monkeypatch.setattr(api_module, "CONFIG_PATH", os.path.join(temp_data_dir, "config.yaml"))
+        with open(api_module.CONFIG_PATH, "w") as f:
+            yaml.safe_dump({"feature_flags": {"jira_connector": False}}, f)
+
+        response = client.post(
+            "/api/v1/jira/verify",
+            json={
+                "base_url": "https://jira.example.com",
+                "email": "ops@example.com",
+                "api_token": "jira_token",
+            },
+        )
+        assert response.status_code == 404
+        payload = response.json()
+        detail = payload.get("detail", {})
+        assert isinstance(detail, dict)
+        assert detail.get("title") == "Jira connector"
+        assert "disabled by feature flag 'jira_connector'" in str(detail.get("detail", ""))

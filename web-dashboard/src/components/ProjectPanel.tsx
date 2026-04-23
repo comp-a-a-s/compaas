@@ -825,7 +825,7 @@ export default function ProjectPanel({
   onAskCEO,
   defaultWorkspaceMode = 'local',
   defaultGithubRepo = '',
-  defaultGithubBranch = 'master',
+  defaultGithubBranch = 'main',
   githubConfigured = false,
   onGitHubSetupRequired,
 }: ProjectPanelProps) {
@@ -850,7 +850,7 @@ export default function ProjectPanel({
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectMode, setNewProjectMode] = useState<ProjectMode>(defaultWorkspaceMode === 'github' ? 'github' : 'local');
   const [newProjectRepo, setNewProjectRepo] = useState(defaultGithubRepo);
-  const [newProjectBranch, setNewProjectBranch] = useState(defaultGithubBranch || 'master');
+  const [newProjectBranch, setNewProjectBranch] = useState(defaultGithubBranch || 'main');
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [feedbackError, setFeedbackError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -923,7 +923,7 @@ export default function ProjectPanel({
   }, [defaultGithubRepo]);
 
   useEffect(() => {
-    setNewProjectBranch(defaultGithubBranch || 'master');
+    setNewProjectBranch(defaultGithubBranch || 'main');
   }, [defaultGithubBranch]);
 
   useEffect(() => {
@@ -1128,7 +1128,7 @@ export default function ProjectPanel({
       type: 'app',
       delivery_mode: newProjectMode,
       github_repo: newProjectMode === 'github' ? newProjectRepo.trim() : '',
-      github_branch: newProjectMode === 'github' ? (newProjectBranch.trim() || 'master') : '',
+      github_branch: newProjectMode === 'github' ? (newProjectBranch.trim() || 'main') : '',
     });
     setCreatingProject(false);
     if (created.status !== 'ok' || !created.project?.id) {
@@ -1145,7 +1145,7 @@ export default function ProjectPanel({
     setNewProjectDescription('');
     setNewProjectMode(defaultWorkspaceMode === 'github' ? 'github' : 'local');
     setNewProjectRepo(defaultGithubRepo);
-    setNewProjectBranch(defaultGithubBranch || 'master');
+    setNewProjectBranch(defaultGithubBranch || 'main');
     setShowCreateDrawer(false);
     setSuccess('Project created.');
     onProjectCreated?.(created.project.id);

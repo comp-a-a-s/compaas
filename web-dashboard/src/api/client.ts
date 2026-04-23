@@ -624,9 +624,11 @@ export async function createProject(data: {
   name: string;
   description?: string;
   type?: string;
-  delivery_mode?: 'local' | 'github';
+  delivery_mode?: 'local' | 'github' | 'gitlab';
   github_repo?: string;
   github_branch?: string;
+  gitlab_project_id?: string;
+  gitlab_branch?: string;
   workspace_path?: string;
 }): Promise<{
   status: 'ok' | 'error';
@@ -718,6 +720,27 @@ export async function testLlmConnection(opts: {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export async function fetchLlmModels(opts: {
+  provider: 'anthropic' | 'openai' | 'gemini' | 'openai_compat';
+  anthropic_mode?: 'cli' | 'apikey';
+  openai_mode?: 'apikey' | 'codex';
+  base_url?: string;
+  api_key?: string;
+}): Promise<{
+  status: 'ok' | 'error';
+  source?: string;
+  catalog_source?: 'live' | 'fallback' | 'runtime-fixed' | string;
+  fetched_at?: string;
+  models: string[];
+  message?: string;
+}> {
+  return safeFetch(
+    `${BASE}/llm/models`,
+    { status: 'error', models: [] },
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(opts) },
+  );
 }
 
 // ---- CEO Memory ----
@@ -824,7 +847,8 @@ export async function deleteContextPack(packId: string): Promise<ApiResult<{ sta
 
 // ---- Integrations ----
 
-export async function saveIntegrations(data: {
+export interface IntegrationsPayload {
+  workspace_mode?: 'local' | 'github' | 'gitlab';
   github_token?: string;
   github_repo?: string;
   github_default_branch?: string;
@@ -833,7 +857,6 @@ export async function saveIntegrations(data: {
   github_verified?: boolean;
   github_verified_at?: string;
   github_last_error?: string;
-  workspace_mode?: 'local' | 'github';
   vercel_token?: string;
   vercel_team_id?: string;
   vercel_project_name?: string;
@@ -857,49 +880,46 @@ export async function saveIntegrations(data: {
   stripe_verified?: boolean;
   stripe_verified_at?: string;
   stripe_last_error?: string;
+  telegram_bot_token?: string;
+  telegram_chat_id?: string;
+  telegram_configured?: boolean;
+  telegram_poll_mode?: string;
+  telegram_cursor_map?: Record<string, number>;
   slack_token?: string;
+  slack_default_channel?: string;
+  linear_api_key?: string;
+  linear_team_id?: string;
+  linear_verified?: boolean;
+  linear_verified_at?: string;
+  linear_last_error?: string;
+  notion_token?: string;
+  notion_parent_page_id?: string;
+  notion_verified?: boolean;
+  notion_verified_at?: string;
+  notion_last_error?: string;
+  jira_base_url?: string;
+  jira_email?: string;
+  jira_api_token?: string;
+  jira_project_key?: string;
+  jira_verified?: boolean;
+  jira_verified_at?: string;
+  jira_last_error?: string;
+  gitlab_base_url?: string;
+  gitlab_token?: string;
+  gitlab_project_id?: string;
+  gitlab_default_branch?: string;
+  gitlab_verified?: boolean;
+  gitlab_verified_at?: string;
+  gitlab_last_error?: string;
   webhook_url?: string;
-}): Promise<boolean> {
+}
+
+export async function saveIntegrations(data: IntegrationsPayload): Promise<boolean> {
   const result = await saveIntegrationsResult(data);
   return result.ok;
 }
 
-export async function saveIntegrationsResult(data: {
-  github_token?: string;
-  github_repo?: string;
-  github_default_branch?: string;
-  github_auto_push?: boolean;
-  github_auto_pr?: boolean;
-  github_verified?: boolean;
-  github_verified_at?: string;
-  github_last_error?: string;
-  workspace_mode?: 'local' | 'github';
-  vercel_token?: string;
-  vercel_team_id?: string;
-  vercel_project_name?: string;
-  vercel_default_target?: 'preview' | 'production';
-  vercel_verified?: boolean;
-  vercel_verified_at?: string;
-  vercel_last_error?: string;
-  netlify_token?: string;
-  netlify_site_id?: string;
-  netlify_team_id?: string;
-  netlify_default_target?: 'preview' | 'production';
-  netlify_verified?: boolean;
-  netlify_verified_at?: string;
-  netlify_last_error?: string;
-  deploy_provider_preference?: 'vercel' | 'netlify';
-  stripe_secret_key?: string;
-  stripe_publishable_key?: string;
-  stripe_webhook_secret?: string;
-  stripe_price_basic?: string;
-  stripe_price_pro?: string;
-  stripe_verified?: boolean;
-  stripe_verified_at?: string;
-  stripe_last_error?: string;
-  slack_token?: string;
-  webhook_url?: string;
-}): Promise<ApiResult<Record<string, unknown>>> {
+export async function saveIntegrationsResult(data: IntegrationsPayload): Promise<ApiResult<Record<string, unknown>>> {
   return safeMutateResult<Record<string, unknown>>(`${BASE}/integrations`, 'PATCH', data);
 }
 
@@ -918,13 +938,31 @@ export interface TelegramIncomingMessage {
   chat_id: string;
 }
 
-export async function pollTelegramMessages(token: string): Promise<TelegramIncomingMessage[]> {
+export async function pollTelegramMessages(token: string, chatId?: string): Promise<TelegramIncomingMessage[]> {
   const res = await safeFetch<{ status: string; messages: TelegramIncomingMessage[] }>(
     `${BASE}/integrations/telegram/poll`,
     { status: 'error', messages: [] },
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) },
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, chat_id: chatId || '', timeout_seconds: 25 }),
+    },
   );
   return res.messages ?? [];
+}
+
+export async function pollTelegramMessagesResult(
+  data: {
+    token?: string;
+    chat_id?: string;
+    timeout_seconds?: number;
+  } = {},
+): Promise<ApiResult<{ status: string; messages: TelegramIncomingMessage[] }>> {
+  return safeMutateResult<{ status: string; messages: TelegramIncomingMessage[] }>(
+    `${BASE}/integrations/telegram/poll`,
+    'POST',
+    data,
+  );
 }
 
 // ---- V1 capabilities ----
@@ -1028,7 +1066,7 @@ export async function githubSecretScan(repoPath: string): Promise<{ clean: boole
   );
 }
 
-export async function githubSync(repoPath: string, defaultBranch = 'master'): Promise<Record<string, unknown> | null> {
+export async function githubSync(repoPath: string, defaultBranch = 'main'): Promise<Record<string, unknown> | null> {
   return safeFetch<Record<string, unknown> | null>(
     `${V1}/github/sync`,
     null,
@@ -1036,7 +1074,7 @@ export async function githubSync(repoPath: string, defaultBranch = 'master'): Pr
   );
 }
 
-export async function githubDrift(repoPath: string, defaultBranch = 'master'): Promise<Record<string, unknown> | null> {
+export async function githubDrift(repoPath: string, defaultBranch = 'main'): Promise<Record<string, unknown> | null> {
   return safeFetch<Record<string, unknown> | null>(
     `${V1}/github/drift`,
     null,
@@ -1206,6 +1244,207 @@ export async function netlifyVerifyIntegration(data: { token?: string; site_id?:
 } | null> {
   return safeFetch(
     `${V1}/netlify/verify`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function vercelListProjects(data: { token?: string; team_id?: string }): Promise<{
+  status: string;
+  projects: Array<{ id: string; name: string; framework?: string; updated_at?: number }>;
+} | null> {
+  return safeFetch(
+    `${V1}/vercel/projects/list`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function netlifyListSites(data: { token?: string; team_id?: string }): Promise<{
+  status: string;
+  sites: Array<{ id: string; name: string; url?: string; account_id?: string; account_slug?: string }>;
+} | null> {
+  return safeFetch(
+    `${V1}/netlify/sites/list`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function slackSendMessage(data: { token?: string; channel: string; text: string; thread_ts?: string }): Promise<{
+  status: string;
+  message?: Record<string, unknown>;
+} | null> {
+  return safeFetch(
+    `${V1}/slack/send`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function slackSendMessageResult(data: {
+  token?: string;
+  channel: string;
+  text: string;
+  thread_ts?: string;
+}): Promise<ApiResult<{ status: string; message?: Record<string, unknown> }>> {
+  return safeMutateResult<{ status: string; message?: Record<string, unknown> }>(
+    `${V1}/slack/send`,
+    'POST',
+    data,
+  );
+}
+
+export async function linearVerifyIntegration(data: { api_key?: string }): Promise<{
+  ok: boolean;
+  account?: Record<string, unknown>;
+  message: string;
+} | null> {
+  return safeFetch(
+    `${V1}/linear/verify`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function linearCreateIssue(data: {
+  api_key?: string;
+  team_id: string;
+  title: string;
+  description?: string;
+  priority?: number;
+}): Promise<{
+  status: string;
+  issue?: Record<string, unknown>;
+} | null> {
+  return safeFetch(
+    `${V1}/linear/issues/create`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function notionVerifyIntegration(data: { token?: string }): Promise<{
+  ok: boolean;
+  account?: Record<string, unknown>;
+  message: string;
+} | null> {
+  return safeFetch(
+    `${V1}/notion/verify`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function notionUpsertPage(data: {
+  token?: string;
+  parent_page_id?: string;
+  title: string;
+  markdown?: string;
+  page_id?: string;
+}): Promise<{
+  status: string;
+  page?: Record<string, unknown>;
+} | null> {
+  return safeFetch(
+    `${V1}/notion/pages/upsert`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function jiraVerifyIntegration(data: { base_url: string; email: string; api_token: string }): Promise<{
+  ok: boolean;
+  account?: Record<string, unknown>;
+  message: string;
+} | null> {
+  return safeFetch(
+    `${V1}/jira/verify`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function jiraCreateIssue(data: {
+  base_url: string;
+  email: string;
+  api_token: string;
+  project_key: string;
+  summary: string;
+  description?: string;
+  issue_type?: string;
+}): Promise<{
+  status: string;
+  issue?: Record<string, unknown>;
+} | null> {
+  return safeFetch(
+    `${V1}/jira/issues/create`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function jiraTransitionIssue(data: {
+  base_url: string;
+  email: string;
+  api_token: string;
+  issue_key: string;
+  transition_id: string;
+}): Promise<{
+  status: string;
+  issue_key?: string;
+} | null> {
+  return safeFetch(
+    `${V1}/jira/issues/transition`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function gitlabVerifyIntegration(data: { base_url?: string; token?: string; project_id?: string }): Promise<{
+  ok: boolean;
+  project_ok?: boolean;
+  account?: Record<string, unknown>;
+  message: string;
+} | null> {
+  return safeFetch(
+    `${V1}/gitlab/verify`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function gitlabCreateBranch(data: {
+  base_url?: string;
+  token: string;
+  project_id: string;
+  branch: string;
+  ref?: string;
+}): Promise<{
+  status: string;
+  branch?: Record<string, unknown>;
+} | null> {
+  return safeFetch(
+    `${V1}/gitlab/branches/create`,
+    null,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
+  );
+}
+
+export async function gitlabCreateMergeRequest(data: {
+  base_url?: string;
+  token: string;
+  project_id: string;
+  source_branch: string;
+  target_branch: string;
+  title: string;
+  description?: string;
+}): Promise<{
+  status: string;
+  merge_request?: Record<string, unknown>;
+} | null> {
+  return safeFetch(
+    `${V1}/gitlab/mrs/create`,
     null,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) },
   );

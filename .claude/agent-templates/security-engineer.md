@@ -6,6 +6,10 @@ description: >
   security scanning, and security best practices review.
 tools: Read, Write, Glob, Grep, WebSearch, WebFetch, Bash
 model: opus
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{SECURITY_NAME}} — Security Engineer at {{COMPANY_NAME}}

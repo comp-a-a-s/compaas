@@ -88,7 +88,9 @@ class ProjectService:
         idempotency_key: str = "",
         delivery_mode: str = "local",
         github_repo: str = "",
-        github_branch: str = "master",
+        github_branch: str = "main",
+        gitlab_project_id: str = "",
+        gitlab_branch: str = "main",
         workspace_path: str = "",
     ) -> tuple[dict[str, Any], bool]:
         """Create project with optional idempotency key.
@@ -115,6 +117,8 @@ class ProjectService:
                     delivery_mode=delivery_mode,
                     github_repo=github_repo,
                     github_branch=github_branch,
+                    gitlab_project_id=gitlab_project_id,
+                    gitlab_branch=gitlab_branch,
                 )
                 mapped[idempotency_key] = project_id
                 atomic_yaml_write(self.idempotency_path, {"keys": mapped})
@@ -127,6 +131,8 @@ class ProjectService:
                 delivery_mode=delivery_mode,
                 github_repo=github_repo,
                 github_branch=github_branch,
+                gitlab_project_id=gitlab_project_id,
+                gitlab_branch=gitlab_branch,
             )
 
         project = self.state_manager.get_project(project_id) or {"id": project_id, "name": name}
@@ -187,7 +193,9 @@ class ProjectService:
             project_type=str(source.get("type", "general")),
             delivery_mode=str(source.get("delivery_mode", "local") or "local"),
             github_repo=str(source.get("github_repo", "") or ""),
-            github_branch=str(source.get("github_branch", "master") or "master"),
+            github_branch=str(source.get("github_branch", "main") or "main"),
+            gitlab_project_id=str(source.get("gitlab_project_id", "") or ""),
+            gitlab_branch=str(source.get("gitlab_branch", "main") or "main"),
         )
         cloned_id = str(cloned_project.get("id", "") or "")
 

@@ -20,11 +20,6 @@ interface SetupWizardProps {
 // ---- Constants ----
 
 const TOTAL_STEPS = 8;
-const TELEGRAM_KEYS = {
-  token: 'compaas_telegram_token',
-  chatId: 'compaas_telegram_chatid',
-  configured: 'compaas_telegram_configured',
-} as const;
 
 const AGENT_DEFAULTS: AgentDefault[] = [
   { id: 'ceo', role: 'CEO', defaultName: 'Marcus' },
@@ -1650,7 +1645,7 @@ function StepConnectors({
             type="text"
             value={githubBranch}
             onChange={(e) => onGithubBranchChange(e.target.value)}
-            placeholder="Default branch (master)"
+            placeholder="Default branch (main)"
             style={inputStyle({ maxWidth: '260px' })}
           />
           <input
@@ -1723,7 +1718,7 @@ function StepConnectors({
               <li style={{ marginBottom: '4px' }}>
                 Set the default branch (usually
                 {' '}
-                <Code>master</Code>
+                <Code>main</Code>
                 {' '}
                 or
                 {' '}
@@ -2220,7 +2215,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   // Step 6 — Connectors (optional)
   const [githubToken, setGithubToken] = useState('');
   const [githubRepo, setGithubRepo] = useState('');
-  const [githubBranch, setGithubBranch] = useState('master');
+  const [githubBranch, setGithubBranch] = useState('main');
   const [githubVerified, setGithubVerified] = useState(false);
   const [githubVerifyStatus, setGithubVerifyStatus] = useState('');
 
@@ -2338,17 +2333,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setSubmitting(true);
     setSubmitError(null);
 
-    // Save Telegram credentials if provided; clear any stale values if skipped
-    if (telegramBotToken && telegramChatId) {
-      localStorage.setItem(TELEGRAM_KEYS.token, telegramBotToken);
-      localStorage.setItem(TELEGRAM_KEYS.chatId, telegramChatId);
-      localStorage.setItem(TELEGRAM_KEYS.configured, 'true');
-    } else {
-      localStorage.removeItem(TELEGRAM_KEYS.token);
-      localStorage.removeItem(TELEGRAM_KEYS.chatId);
-      localStorage.removeItem(TELEGRAM_KEYS.configured);
-    }
-
     // Resolve model, base_url, and api_key based on provider + sub-mode
     let resolvedModel = llmModel;
     let resolvedBaseUrl = llmBaseUrl;
@@ -2382,6 +2366,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       proxy_url: proxyUrl,
     };
 
+    const resolvedWorkspaceMode: 'local' | 'github' = githubVerified ? 'github' : 'local';
+    const telegramConfigured = Boolean(telegramBotToken.trim() && telegramChatId.trim());
+
     const config: Partial<AppConfig> = {
       setup_complete: true,
       user: { name: userName.trim() },
@@ -2396,10 +2383,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         auto_open_browser: autoOpenBrowser,
       },
       integrations: {
-        workspace_mode: 'local',
+        workspace_mode: resolvedWorkspaceMode,
         github_token: githubToken.trim(),
         github_repo: githubRepo.trim(),
-        github_default_branch: githubBranch.trim() || 'master',
+        github_default_branch: githubBranch.trim() || 'main',
         github_verified: githubVerified,
         github_verified_at: githubVerified ? new Date().toISOString() : '',
         github_last_error: githubVerified ? '' : githubVerifyStatus,
@@ -2418,6 +2405,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         netlify_verified_at: netlifyVerified ? new Date().toISOString() : '',
         netlify_last_error: netlifyVerified ? '' : netlifyVerifyStatus,
         deploy_provider_preference: netlifyVerified && !vercelVerified ? 'netlify' : 'vercel',
+        telegram_bot_token: telegramBotToken.trim(),
+        telegram_chat_id: telegramChatId.trim(),
+        telegram_configured: telegramConfigured,
       },
       llm: llmConfig,
     };

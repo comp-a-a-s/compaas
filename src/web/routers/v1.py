@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from src.utils import emit_activity
 from src.validators import validate_safe_id
+from src.web.connector_state import set_connector_health as apply_connector_health
 from src.web.problem import problem_http_exception
 from src.web.services.integration_service import IntegrationService
 from src.web.services.project_service import ProjectService
@@ -71,13 +72,13 @@ class GithubVerifyRequest(BaseModel):
 
 class GithubBranchRequest(BaseModel):
     repo_path: str = Field(min_length=1)
-    base_branch: str = Field(default="master")
+    base_branch: str = Field(default="main")
     new_branch: str = Field(min_length=1)
 
 
 class GithubSyncRequest(BaseModel):
     repo_path: str = Field(min_length=1)
-    default_branch: str = Field(default="master")
+    default_branch: str = Field(default="main")
 
 
 class GithubRollbackRequest(BaseModel):
@@ -128,6 +129,16 @@ class ProjectVercelDeployRequest(BaseModel):
 class NetlifyVerifyRequest(BaseModel):
     token: str = ""
     site_id: str = ""
+    team_id: str = ""
+
+
+class VercelProjectsListRequest(BaseModel):
+    token: str = ""
+    team_id: str = ""
+
+
+class NetlifySitesListRequest(BaseModel):
+    token: str = ""
     team_id: str = ""
 
 
@@ -235,6 +246,85 @@ class StripeVerifyRequest(BaseModel):
 class StripeBillingApplyRequest(BaseModel):
     scaffold_files: bool = Field(default=False)
     sync_vercel_env: bool = Field(default=False)
+
+
+class SlackSendRequest(BaseModel):
+    token: str = ""
+    channel: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=8000)
+    thread_ts: str = ""
+
+
+class LinearVerifyRequest(BaseModel):
+    api_key: str = ""
+
+
+class LinearIssueCreateRequest(BaseModel):
+    api_key: str = ""
+    team_id: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=240)
+    description: str = ""
+    priority: int | None = Field(default=None, ge=0, le=4)
+
+
+class NotionVerifyRequest(BaseModel):
+    token: str = ""
+
+
+class NotionPageUpsertRequest(BaseModel):
+    token: str = ""
+    parent_page_id: str = ""
+    title: str = Field(min_length=1, max_length=240)
+    markdown: str = ""
+    page_id: str = ""
+
+
+class JiraVerifyRequest(BaseModel):
+    base_url: str = Field(min_length=1)
+    email: str = Field(min_length=1)
+    api_token: str = Field(min_length=1)
+
+
+class JiraIssueCreateRequest(BaseModel):
+    base_url: str = Field(default="")
+    email: str = Field(default="")
+    api_token: str = Field(default="")
+    project_key: str = Field(default="")
+    summary: str = Field(min_length=1, max_length=255)
+    description: str = ""
+    issue_type: str = Field(default="Task")
+
+
+class JiraIssueTransitionRequest(BaseModel):
+    base_url: str = Field(default="")
+    email: str = Field(default="")
+    api_token: str = Field(default="")
+    issue_key: str = Field(min_length=1)
+    transition_id: str = Field(min_length=1)
+
+
+class GitlabVerifyRequest(BaseModel):
+    base_url: str = Field(default="https://gitlab.com")
+    token: str = ""
+    project_id: str = ""
+
+
+class GitlabBranchCreateRequest(BaseModel):
+    base_url: str = Field(default="https://gitlab.com")
+    token: str = Field(default="")
+    project_id: str = Field(default="")
+    branch: str = Field(min_length=1)
+    ref: str = Field(default="main")
+
+
+class GitlabMergeRequestCreateRequest(BaseModel):
+    base_url: str = Field(default="https://gitlab.com")
+    token: str = Field(default="")
+    project_id: str = Field(default="")
+    source_branch: str = Field(min_length=1)
+    target_branch: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=255)
+    description: str = ""
 
 
 def _classify_intent(message: str) -> dict[str, Any]:
@@ -369,6 +459,27 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         netlify_verified = bool(integrations.get("netlify_verified"))
         stripe_secret = str(integrations.get("stripe_secret_key", "") or "").strip()
         stripe_verified = bool(integrations.get("stripe_verified"))
+        telegram_token = str(integrations.get("telegram_bot_token", "") or "").strip()
+        telegram_chat_id = str(integrations.get("telegram_chat_id", "") or "").strip()
+        telegram_status = str(integrations.get("telegram_status", "disconnected") or "disconnected").strip().lower()
+        slack_token = str(integrations.get("slack_token", "") or "").strip()
+        slack_status = str(integrations.get("slack_status", "disconnected") or "disconnected").strip().lower()
+        linear_api_key = str(integrations.get("linear_api_key", "") or "").strip()
+        linear_verified = bool(integrations.get("linear_verified"))
+        linear_status = str(integrations.get("linear_status", "disconnected") or "disconnected").strip().lower()
+        notion_token = str(integrations.get("notion_token", "") or "").strip()
+        notion_verified = bool(integrations.get("notion_verified"))
+        notion_status = str(integrations.get("notion_status", "disconnected") or "disconnected").strip().lower()
+        jira_base_url = str(integrations.get("jira_base_url", "") or "").strip()
+        jira_email = str(integrations.get("jira_email", "") or "").strip()
+        jira_api_token = str(integrations.get("jira_api_token", "") or "").strip()
+        jira_project_key = str(integrations.get("jira_project_key", "") or "").strip()
+        jira_verified = bool(integrations.get("jira_verified"))
+        jira_status = str(integrations.get("jira_status", "disconnected") or "disconnected").strip().lower()
+        gitlab_project_id = str(integrations.get("gitlab_project_id", "") or "").strip()
+        gitlab_token = str(integrations.get("gitlab_token", "") or "").strip()
+        gitlab_verified = bool(integrations.get("gitlab_verified"))
+        gitlab_status = str(integrations.get("gitlab_status", "disconnected") or "disconnected").strip().lower()
         deploy_preference = str(integrations.get("deploy_provider_preference", "vercel") or "vercel").strip().lower()
         if deploy_preference not in {"vercel", "netlify"}:
             deploy_preference = "vercel"
@@ -441,9 +552,61 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
                 "configured": bool(stripe_secret),
                 "verified": stripe_verified,
             },
+            "telegram": {
+                "configured": bool(telegram_token and telegram_chat_id),
+                "verified": telegram_status == "verified",
+                "status": telegram_status,
+            },
+            "slack": {
+                "configured": bool(slack_token),
+                "verified": slack_status == "verified",
+                "status": slack_status,
+            },
+            "linear": {
+                "configured": bool(linear_api_key),
+                "verified": linear_verified,
+                "status": linear_status,
+            },
+            "notion": {
+                "configured": bool(notion_token),
+                "verified": notion_verified,
+                "status": notion_status,
+            },
+            "jira": {
+                "configured": bool(jira_base_url and jira_email and jira_api_token),
+                "verified": jira_verified,
+                "project_key": jira_project_key,
+                "status": jira_status,
+            },
+            "gitlab": {
+                "configured": bool(gitlab_token and gitlab_project_id),
+                "verified": gitlab_verified,
+                "project_id": gitlab_project_id,
+                "status": gitlab_status,
+            },
             "deployment": {
                 "provider_preference": deploy_preference,
             },
+        }
+        connector_keys = ("github", "gitlab", "vercel", "netlify", "stripe", "telegram", "slack", "linear", "notion", "jira")
+        configured_count = 0
+        verified_count = 0
+        degraded_count = 0
+        for key in connector_keys:
+            row = integrations_payload.get(key, {})
+            if not isinstance(row, dict):
+                continue
+            if bool(row.get("configured")):
+                configured_count += 1
+            if bool(row.get("verified")):
+                verified_count += 1
+            if str(row.get("status", "")).strip().lower() == "degraded":
+                degraded_count += 1
+        integrations_payload["coverage"] = {
+            "total_connectors": len(connector_keys),
+            "configured_connectors": configured_count,
+            "verified_connectors": verified_count,
+            "degraded_connectors": degraded_count,
         }
 
         status = "ok"
@@ -1595,6 +1758,14 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         integrations["github_last_error"] = "" if verified else str(result.get("message", "") or "GitHub verification failed.")
         if verified:
             integrations["github_verified_at"] = datetime.now(timezone.utc).isoformat()
+        _set_connector_health(
+            integrations,
+            "github",
+            configured=bool(token and repo),
+            verified=verified,
+            error_message="" if verified else str(result.get("message", "") or "GitHub verification failed."),
+            verified_at=str(integrations.get("github_verified_at", "") or "").strip(),
+        )
 
         cfg["integrations"] = integrations
         ctx.save_config(cfg)
@@ -1754,6 +1925,52 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             team_id.strip() or str(integrations.get("netlify_team_id", "") or "").strip(),
         )
 
+    def _set_connector_health(
+        integrations: dict[str, Any],
+        connector: str,
+        *,
+        configured: bool,
+        verified: bool,
+        error_message: str = "",
+        verified_at: str = "",
+        allow_verify_promotion: bool = True,
+        record_success_without_verify: bool = False,
+    ) -> None:
+        """Persist normalized health metadata for a connector."""
+        apply_connector_health(
+            integrations,
+            connector,
+            configured=configured,
+            verified=verified,
+            error_message=error_message,
+            verified_at=verified_at,
+            allow_verify_promotion=allow_verify_promotion,
+            record_success_without_verify=record_success_without_verify,
+        )
+
+    def _emit_connector_activity(
+        connector: str,
+        action: str,
+        message: str,
+        *,
+        ok: bool,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "connector": str(connector or "").strip().lower(),
+            "action": str(action or "").strip().lower(),
+            "ok": bool(ok),
+        }
+        if isinstance(metadata, dict):
+            payload.update(metadata)
+        emit_activity(
+            ctx.data_dir,
+            "ceo",
+            "INTEGRATION_EVENT",
+            message,
+            metadata=payload,
+        )
+
     @router.post("/vercel/link")
     def v1_vercel_link(request: Request, body: VercelLinkRequest) -> dict[str, Any]:
         _require_mutation_auth(request)
@@ -1784,6 +2001,14 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         integrations["vercel_last_error"] = "" if verified else str(result.get("message", "") or "Vercel verification failed.")
         if verified:
             integrations["vercel_verified_at"] = datetime.now(timezone.utc).isoformat()
+        _set_connector_health(
+            integrations,
+            "vercel",
+            configured=bool(token and project_name),
+            verified=verified,
+            error_message="" if verified else str(result.get("message", "") or "Vercel verification failed."),
+            verified_at=str(integrations.get("vercel_verified_at", "") or "").strip(),
+        )
 
         cfg["integrations"] = integrations
         ctx.save_config(cfg)
@@ -1819,6 +2044,14 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         integrations["netlify_last_error"] = "" if verified else str(result.get("message", "") or "Netlify verification failed.")
         if verified:
             integrations["netlify_verified_at"] = datetime.now(timezone.utc).isoformat()
+        _set_connector_health(
+            integrations,
+            "netlify",
+            configured=bool(token and site_id),
+            verified=verified,
+            error_message="" if verified else str(result.get("message", "") or "Netlify verification failed."),
+            verified_at=str(integrations.get("netlify_verified_at", "") or "").strip(),
+        )
         cfg["integrations"] = integrations
         ctx.save_config(cfg)
 
@@ -1829,6 +2062,541 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
             "site_ok": bool(result.get("site_ok")),
             "message": result.get("message", ""),
         }
+
+    @router.post("/vercel/projects/list")
+    def v1_vercel_projects_list(request: Request, body: VercelProjectsListRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token, _project_name, team_id = _resolve_vercel_creds(body.token, "", body.team_id)
+        if not token:
+            raise HTTPException(status_code=400, detail="token is required")
+        result = ctx.integration_service.vercel_list_projects(token, team_id=team_id)
+        ok = result.get("status") == "ok"
+        _set_connector_health(
+            integrations,
+            "vercel",
+            configured=bool(token and str(integrations.get("vercel_project_name", "") or "").strip()),
+            verified=str(integrations.get("vercel_status", "") or "").strip().lower() == "verified" and bool(integrations.get("vercel_verified")),
+            error_message="" if ok else str(result.get("message", "") or "Failed to list Vercel projects."),
+            verified_at=str(integrations.get("vercel_verified_at", "") or "").strip(),
+            record_success_without_verify=ok,
+        )
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        if not ok:
+            raise HTTPException(status_code=502, detail=result.get("message", "Failed to list Vercel projects."))
+        return {
+            "status": "ok",
+            "projects": result.get("projects", []),
+        }
+
+    @router.post("/netlify/sites/list")
+    def v1_netlify_sites_list(request: Request, body: NetlifySitesListRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token, _site_id, team_id = _resolve_netlify_creds(body.token, "", body.team_id)
+        if not token:
+            raise HTTPException(status_code=400, detail="token is required")
+        result = ctx.integration_service.netlify_list_sites(token, team_id=team_id)
+        ok = result.get("status") == "ok"
+        _set_connector_health(
+            integrations,
+            "netlify",
+            configured=bool(token and str(integrations.get("netlify_site_id", "") or "").strip()),
+            verified=str(integrations.get("netlify_status", "") or "").strip().lower() == "verified" and bool(integrations.get("netlify_verified")),
+            error_message="" if ok else str(result.get("message", "") or "Failed to list Netlify sites."),
+            verified_at=str(integrations.get("netlify_verified_at", "") or "").strip(),
+            record_success_without_verify=ok,
+        )
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        if not ok:
+            raise HTTPException(status_code=502, detail=result.get("message", "Failed to list Netlify sites."))
+        return {
+            "status": "ok",
+            "sites": result.get("sites", []),
+        }
+
+    @router.post("/slack/send")
+    def v1_slack_send(request: Request, body: SlackSendRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token = body.token.strip() or str(integrations.get("slack_token", "") or "").strip()
+        if not token:
+            raise HTTPException(status_code=400, detail="Slack token is required.")
+        result = ctx.integration_service.slack_send_message(
+            token,
+            channel=body.channel,
+            text=body.text,
+            thread_ts=body.thread_ts,
+        )
+        ok = result.get("status") == "ok"
+        _set_connector_health(
+            integrations,
+            "slack",
+            configured=bool(token),
+            verified=ok,
+            error_message="" if ok else str(result.get("message", "") or "Slack send failed."),
+        )
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        if not ok:
+            raise HTTPException(status_code=502, detail=result.get("message", "Failed to send Slack message."))
+        return {"status": "ok", "message": result.get("message", {})}
+
+    @router.post("/linear/verify")
+    def v1_linear_verify(request: Request, body: LinearVerifyRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("linear_connector", "Linear connector", "linear-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        api_key = body.api_key.strip() or str(integrations.get("linear_api_key", "") or "").strip()
+        result = ctx.integration_service.linear_verify_connection(api_key)
+        if api_key:
+            integrations["linear_api_key"] = api_key
+        verified = bool(result.get("ok"))
+        integrations["linear_verified"] = verified
+        integrations["linear_last_error"] = "" if verified else str(result.get("message", "") or "Linear verification failed.")
+        if verified:
+            integrations["linear_verified_at"] = datetime.now(timezone.utc).isoformat()
+        _set_connector_health(
+            integrations,
+            "linear",
+            configured=bool(api_key),
+            verified=verified,
+            error_message="" if verified else str(result.get("message", "") or "Linear verification failed."),
+            verified_at=str(integrations.get("linear_verified_at", "") or "").strip(),
+        )
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        _emit_connector_activity(
+            "linear",
+            "verify",
+            "Linear connector verified." if verified else "Linear connector verification failed.",
+            ok=verified,
+        )
+        return {
+            "ok": verified,
+            "account": result.get("account", {}) if isinstance(result.get("account"), dict) else {},
+            "message": result.get("message", ""),
+        }
+
+    @router.post("/linear/issues/create")
+    def v1_linear_issue_create(request: Request, body: LinearIssueCreateRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("linear_connector", "Linear connector", "linear-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        api_key = body.api_key.strip() or str(integrations.get("linear_api_key", "") or "").strip()
+        result = ctx.integration_service.linear_create_issue(
+            api_key,
+            team_id=body.team_id,
+            title=body.title,
+            description=body.description,
+            priority=body.priority,
+        )
+        if result.get("status") != "ok":
+            _set_connector_health(
+                integrations,
+                "linear",
+                configured=bool(api_key),
+                verified=False,
+                error_message=str(result.get("message", "") or "Linear issue create failed."),
+            )
+            cfg["integrations"] = integrations
+            ctx.save_config(cfg)
+            _emit_connector_activity(
+                "linear",
+                "create_issue",
+                "Linear issue creation failed.",
+                ok=False,
+                metadata={"error": str(result.get("message", "") or "").strip()},
+            )
+            raise HTTPException(status_code=502, detail=result.get("message", "Failed to create Linear issue."))
+        _set_connector_health(integrations, "linear", configured=bool(api_key), verified=True)
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        issue = result.get("issue", {}) if isinstance(result.get("issue"), dict) else {}
+        _emit_connector_activity(
+            "linear",
+            "create_issue",
+            "Linear issue created.",
+            ok=True,
+            metadata={"issue_id": str(issue.get("id", "") or "").strip(), "identifier": str(issue.get("identifier", "") or "").strip()},
+        )
+        return {"status": "ok", "issue": result.get("issue", {})}
+
+    @router.post("/notion/verify")
+    def v1_notion_verify(request: Request, body: NotionVerifyRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("notion_connector", "Notion connector", "notion-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token = body.token.strip() or str(integrations.get("notion_token", "") or "").strip()
+        result = ctx.integration_service.notion_verify_connection(token)
+        if token:
+            integrations["notion_token"] = token
+        verified = bool(result.get("ok"))
+        integrations["notion_verified"] = verified
+        integrations["notion_last_error"] = "" if verified else str(result.get("message", "") or "Notion verification failed.")
+        if verified:
+            integrations["notion_verified_at"] = datetime.now(timezone.utc).isoformat()
+        _set_connector_health(
+            integrations,
+            "notion",
+            configured=bool(token),
+            verified=verified,
+            error_message="" if verified else str(result.get("message", "") or "Notion verification failed."),
+            verified_at=str(integrations.get("notion_verified_at", "") or "").strip(),
+        )
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        _emit_connector_activity(
+            "notion",
+            "verify",
+            "Notion connector verified." if verified else "Notion connector verification failed.",
+            ok=verified,
+        )
+        return {
+            "ok": verified,
+            "account": result.get("account", {}) if isinstance(result.get("account"), dict) else {},
+            "message": result.get("message", ""),
+        }
+
+    @router.post("/notion/pages/upsert")
+    def v1_notion_page_upsert(request: Request, body: NotionPageUpsertRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("notion_connector", "Notion connector", "notion-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token = body.token.strip() or str(integrations.get("notion_token", "") or "").strip()
+        result = ctx.integration_service.notion_upsert_page(
+            token,
+            parent_page_id=body.parent_page_id,
+            title=body.title,
+            markdown=body.markdown,
+            page_id=body.page_id,
+        )
+        if result.get("status") != "ok":
+            _set_connector_health(
+                integrations,
+                "notion",
+                configured=bool(token),
+                verified=False,
+                error_message=str(result.get("message", "") or "Notion page upsert failed."),
+            )
+            cfg["integrations"] = integrations
+            ctx.save_config(cfg)
+            _emit_connector_activity(
+                "notion",
+                "upsert_page",
+                "Notion page publish failed.",
+                ok=False,
+                metadata={"error": str(result.get("message", "") or "").strip()},
+            )
+            raise HTTPException(status_code=502, detail=result.get("message", "Failed to upsert Notion page."))
+        _set_connector_health(integrations, "notion", configured=bool(token), verified=True)
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        page = result.get("page", {}) if isinstance(result.get("page"), dict) else {}
+        _emit_connector_activity(
+            "notion",
+            "upsert_page",
+            "Notion page upserted.",
+            ok=True,
+            metadata={"page_id": str(page.get("id", "") or "").strip(), "url": str(page.get("url", "") or "").strip()},
+        )
+        return {"status": "ok", "page": result.get("page", {})}
+
+    @router.post("/jira/verify")
+    def v1_jira_verify(request: Request, body: JiraVerifyRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("jira_connector", "Jira connector", "jira-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        result = ctx.integration_service.jira_verify_connection(
+            base_url=body.base_url,
+            email=body.email,
+            api_token=body.api_token,
+        )
+        integrations["jira_base_url"] = body.base_url.strip()
+        integrations["jira_email"] = body.email.strip()
+        integrations["jira_api_token"] = body.api_token.strip()
+        verified = bool(result.get("ok"))
+        integrations["jira_verified"] = verified
+        integrations["jira_last_error"] = "" if verified else str(result.get("message", "") or "Jira verification failed.")
+        if verified:
+            integrations["jira_verified_at"] = datetime.now(timezone.utc).isoformat()
+        _set_connector_health(
+            integrations,
+            "jira",
+            configured=bool(body.base_url and body.email and body.api_token),
+            verified=verified,
+            error_message="" if verified else str(result.get("message", "") or "Jira verification failed."),
+            verified_at=str(integrations.get("jira_verified_at", "") or "").strip(),
+        )
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        _emit_connector_activity(
+            "jira",
+            "verify",
+            "Jira connector verified." if verified else "Jira connector verification failed.",
+            ok=verified,
+        )
+        return {
+            "ok": verified,
+            "account": result.get("account", {}) if isinstance(result.get("account"), dict) else {},
+            "message": result.get("message", ""),
+        }
+
+    @router.post("/jira/issues/create")
+    def v1_jira_issue_create(request: Request, body: JiraIssueCreateRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("jira_connector", "Jira connector", "jira-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        base_url = body.base_url.strip() or str(integrations.get("jira_base_url", "") or "").strip()
+        email = body.email.strip() or str(integrations.get("jira_email", "") or "").strip()
+        api_token = body.api_token.strip() or str(integrations.get("jira_api_token", "") or "").strip()
+        project_key = body.project_key.strip() or str(integrations.get("jira_project_key", "") or "").strip()
+        if not base_url or not email or not api_token:
+            raise HTTPException(status_code=400, detail="Jira base_url, email, and api_token are required.")
+        if not project_key:
+            raise HTTPException(status_code=400, detail="Jira project_key is required.")
+        result = ctx.integration_service.jira_create_issue(
+            base_url=base_url,
+            email=email,
+            api_token=api_token,
+            project_key=project_key,
+            summary=body.summary,
+            description=body.description,
+            issue_type=body.issue_type,
+        )
+        if result.get("status") != "ok":
+            _set_connector_health(
+                integrations,
+                "jira",
+                configured=bool(base_url and email and api_token),
+                verified=False,
+                error_message=str(result.get("message", "") or "Jira issue create failed."),
+            )
+            cfg["integrations"] = integrations
+            ctx.save_config(cfg)
+            _emit_connector_activity(
+                "jira",
+                "create_issue",
+                "Jira issue creation failed.",
+                ok=False,
+                metadata={"error": str(result.get("message", "") or "").strip()},
+            )
+            raise HTTPException(status_code=502, detail=result.get("message", "Failed to create Jira issue."))
+        _set_connector_health(integrations, "jira", configured=True, verified=True)
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        issue = result.get("issue", {}) if isinstance(result.get("issue"), dict) else {}
+        _emit_connector_activity(
+            "jira",
+            "create_issue",
+            "Jira issue created.",
+            ok=True,
+            metadata={"issue_key": str(issue.get("key", "") or "").strip()},
+        )
+        return {"status": "ok", "issue": result.get("issue", {})}
+
+    @router.post("/jira/issues/transition")
+    def v1_jira_issue_transition(request: Request, body: JiraIssueTransitionRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("jira_connector", "Jira connector", "jira-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        base_url = body.base_url.strip() or str(integrations.get("jira_base_url", "") or "").strip()
+        email = body.email.strip() or str(integrations.get("jira_email", "") or "").strip()
+        api_token = body.api_token.strip() or str(integrations.get("jira_api_token", "") or "").strip()
+        if not base_url or not email or not api_token:
+            raise HTTPException(status_code=400, detail="Jira base_url, email, and api_token are required.")
+        result = ctx.integration_service.jira_transition_issue(
+            base_url=base_url,
+            email=email,
+            api_token=api_token,
+            issue_key=body.issue_key,
+            transition_id=body.transition_id,
+        )
+        if result.get("status") != "ok":
+            _set_connector_health(
+                integrations,
+                "jira",
+                configured=bool(base_url and email and api_token),
+                verified=False,
+                error_message=str(result.get("message", "") or "Jira transition failed."),
+            )
+            cfg["integrations"] = integrations
+            ctx.save_config(cfg)
+            _emit_connector_activity(
+                "jira",
+                "transition_issue",
+                "Jira issue transition failed.",
+                ok=False,
+                metadata={"issue_key": body.issue_key, "transition_id": body.transition_id, "error": str(result.get("message", "") or "").strip()},
+            )
+            raise HTTPException(status_code=502, detail=result.get("message", "Failed to transition Jira issue."))
+        _set_connector_health(integrations, "jira", configured=True, verified=True)
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        _emit_connector_activity(
+            "jira",
+            "transition_issue",
+            "Jira issue transitioned.",
+            ok=True,
+            metadata={"issue_key": result.get("issue_key", body.issue_key), "transition_id": body.transition_id},
+        )
+        return {"status": "ok", "issue_key": result.get("issue_key", body.issue_key)}
+
+    @router.post("/gitlab/verify")
+    def v1_gitlab_verify(request: Request, body: GitlabVerifyRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("gitlab_connector", "GitLab connector", "gitlab-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token = body.token.strip() or str(integrations.get("gitlab_token", "") or "").strip()
+        base_url = body.base_url.strip() or str(integrations.get("gitlab_base_url", "https://gitlab.com") or "https://gitlab.com").strip()
+        project_id = body.project_id.strip() or str(integrations.get("gitlab_project_id", "") or "").strip()
+        result = ctx.integration_service.gitlab_verify_connection(base_url=base_url, token=token, project_id=project_id)
+        if token:
+            integrations["gitlab_token"] = token
+        integrations["gitlab_base_url"] = base_url
+        if project_id:
+            integrations["gitlab_project_id"] = project_id
+        verified = bool(result.get("ok")) and (bool(result.get("project_ok")) if project_id else True)
+        integrations["gitlab_verified"] = verified
+        integrations["gitlab_last_error"] = "" if verified else str(result.get("message", "") or "GitLab verification failed.")
+        if verified:
+            integrations["gitlab_verified_at"] = datetime.now(timezone.utc).isoformat()
+        _set_connector_health(
+            integrations,
+            "gitlab",
+            configured=bool(token and base_url),
+            verified=verified,
+            error_message="" if verified else str(result.get("message", "") or "GitLab verification failed."),
+            verified_at=str(integrations.get("gitlab_verified_at", "") or "").strip(),
+        )
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        _emit_connector_activity(
+            "gitlab",
+            "verify",
+            "GitLab connector verified." if verified else "GitLab connector verification failed.",
+            ok=verified,
+            metadata={"project_ok": result.get("project_ok")},
+        )
+        return {
+            "ok": verified,
+            "project_ok": result.get("project_ok"),
+            "account": result.get("account", {}) if isinstance(result.get("account"), dict) else {},
+            "message": result.get("message", ""),
+        }
+
+    @router.post("/gitlab/branches/create")
+    def v1_gitlab_branch_create(request: Request, body: GitlabBranchCreateRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("gitlab_connector", "GitLab connector", "gitlab-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token = body.token.strip() or str(integrations.get("gitlab_token", "") or "").strip()
+        project_id = body.project_id.strip() or str(integrations.get("gitlab_project_id", "") or "").strip()
+        base_url = body.base_url.strip() or str(integrations.get("gitlab_base_url", "https://gitlab.com") or "https://gitlab.com").strip()
+        if not token or not project_id:
+            raise HTTPException(status_code=400, detail="GitLab token and project_id are required.")
+        result = ctx.integration_service.gitlab_create_branch(
+            base_url=base_url,
+            token=token,
+            project_id=project_id,
+            branch=body.branch,
+            ref=body.ref,
+        )
+        if result.get("status") != "ok":
+            _set_connector_health(
+                integrations,
+                "gitlab",
+                configured=bool(token and project_id),
+                verified=False,
+                error_message=str(result.get("message", "") or "GitLab branch create failed."),
+            )
+            cfg["integrations"] = integrations
+            ctx.save_config(cfg)
+            _emit_connector_activity(
+                "gitlab",
+                "create_branch",
+                "GitLab branch creation failed.",
+                ok=False,
+                metadata={"project_id": project_id, "branch": body.branch, "error": str(result.get("message", "") or "").strip()},
+            )
+            raise HTTPException(status_code=502, detail=result.get("message", "Failed to create GitLab branch."))
+        _set_connector_health(integrations, "gitlab", configured=True, verified=True)
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        branch = result.get("branch", {}) if isinstance(result.get("branch"), dict) else {}
+        _emit_connector_activity(
+            "gitlab",
+            "create_branch",
+            "GitLab branch created.",
+            ok=True,
+            metadata={"project_id": project_id, "branch": str(branch.get("name", body.branch) or body.branch)},
+        )
+        return {"status": "ok", "branch": result.get("branch", {})}
+
+    @router.post("/gitlab/mrs/create")
+    def v1_gitlab_merge_request_create(request: Request, body: GitlabMergeRequestCreateRequest) -> dict[str, Any]:
+        _require_mutation_auth(request)
+        _ensure_feature("gitlab_connector", "GitLab connector", "gitlab-disabled")
+        cfg = ctx.load_config()
+        integrations = cfg.get("integrations", {}) if isinstance(cfg.get("integrations"), dict) else {}
+        token = body.token.strip() or str(integrations.get("gitlab_token", "") or "").strip()
+        project_id = body.project_id.strip() or str(integrations.get("gitlab_project_id", "") or "").strip()
+        base_url = body.base_url.strip() or str(integrations.get("gitlab_base_url", "https://gitlab.com") or "https://gitlab.com").strip()
+        if not token or not project_id:
+            raise HTTPException(status_code=400, detail="GitLab token and project_id are required.")
+        result = ctx.integration_service.gitlab_create_merge_request(
+            base_url=base_url,
+            token=token,
+            project_id=project_id,
+            source_branch=body.source_branch,
+            target_branch=body.target_branch,
+            title=body.title,
+            description=body.description,
+        )
+        if result.get("status") != "ok":
+            _set_connector_health(
+                integrations,
+                "gitlab",
+                configured=bool(token and project_id),
+                verified=False,
+                error_message=str(result.get("message", "") or "GitLab merge request create failed."),
+            )
+            cfg["integrations"] = integrations
+            ctx.save_config(cfg)
+            _emit_connector_activity(
+                "gitlab",
+                "create_merge_request",
+                "GitLab merge request creation failed.",
+                ok=False,
+                metadata={"project_id": project_id, "source_branch": body.source_branch, "target_branch": body.target_branch, "error": str(result.get("message", "") or "").strip()},
+            )
+            raise HTTPException(status_code=502, detail=result.get("message", "Failed to create GitLab merge request."))
+        _set_connector_health(integrations, "gitlab", configured=True, verified=True)
+        cfg["integrations"] = integrations
+        ctx.save_config(cfg)
+        mr = result.get("merge_request", {}) if isinstance(result.get("merge_request"), dict) else {}
+        _emit_connector_activity(
+            "gitlab",
+            "create_merge_request",
+            "GitLab merge request created.",
+            ok=True,
+            metadata={"project_id": project_id, "iid": mr.get("iid"), "url": str(mr.get("web_url", "") or "").strip()},
+        )
+        return {"status": "ok", "merge_request": result.get("merge_request", {})}
 
     @router.post("/stripe/verify")
     def v1_stripe_verify(request: Request, body: StripeVerifyRequest) -> dict[str, Any]:
@@ -1845,6 +2613,14 @@ def create_v1_router(ctx: V1Context) -> APIRouter:
         integrations["stripe_last_error"] = "" if verified else str(result.get("message", "") or "Stripe verification failed.")
         if verified:
             integrations["stripe_verified_at"] = datetime.now(timezone.utc).isoformat()
+        _set_connector_health(
+            integrations,
+            "stripe",
+            configured=bool(secret),
+            verified=verified,
+            error_message="" if verified else str(result.get("message", "") or "Stripe verification failed."),
+            verified_at=str(integrations.get("stripe_verified_at", "") or "").strip(),
+        )
         cfg["integrations"] = integrations
         ctx.save_config(cfg)
 

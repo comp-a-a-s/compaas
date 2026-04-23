@@ -173,6 +173,7 @@ Running COMPaaS with local/self-hosted models is fully supported.
 Full guide (all methods, model selection, install/pull steps, and troubleshooting):
 
 - [Local Models Guide](docs/local-models-guide.md)
+- [Integration Operations Playbook](docs/integration-ops-playbook.md)
 
 Included runtimes:
 

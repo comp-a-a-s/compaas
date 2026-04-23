@@ -129,7 +129,9 @@ class ProjectStateManager:
         workspace_path: str = "",
         delivery_mode: str = "local",
         github_repo: str = "",
-        github_branch: str = "master",
+        github_branch: str = "main",
+        gitlab_project_id: str = "",
+        gitlab_branch: str = "main",
     ) -> str:
         for _ in range(10):
             project_id = str(uuid.uuid4())[:8]
@@ -149,6 +151,9 @@ class ProjectStateManager:
         resolved_workspace = os.path.abspath(candidate_workspace)
         os.makedirs(resolved_workspace, exist_ok=True)
 
+        requested_mode = str(delivery_mode).strip().lower()
+        if requested_mode not in {"local", "github", "gitlab"}:
+            requested_mode = "local"
         project_data = {
             "id": project_id,
             "name": name,
@@ -165,9 +170,11 @@ class ProjectStateManager:
             "phases": [],
             "team": [],
             "workspace_path": resolved_workspace,
-            "delivery_mode": "github" if str(delivery_mode).strip().lower() == "github" else "local",
+            "delivery_mode": requested_mode,
             "github_repo": str(github_repo or "").strip(),
-            "github_branch": str(github_branch or "master").strip() or "master",
+            "github_branch": str(github_branch or "main").strip() or "main",
+            "gitlab_project_id": str(gitlab_project_id or "").strip(),
+            "gitlab_branch": str(gitlab_branch or "main").strip() or "main",
         }
 
         atomic_yaml_write(os.path.join(project_path, "project.yaml"), project_data)
@@ -285,7 +292,9 @@ class ProjectStateManager:
                     "workspace_path": data.get("workspace_path", ""),
                     "delivery_mode": data.get("delivery_mode", "local"),
                     "github_repo": data.get("github_repo", ""),
-                    "github_branch": data.get("github_branch", "master"),
+                    "github_branch": data.get("github_branch", "main"),
+                    "gitlab_project_id": data.get("gitlab_project_id", ""),
+                    "gitlab_branch": data.get("gitlab_branch", "main"),
                     "run_instructions": data.get("run_instructions", ""),
                     "quality_latest": data.get("quality_latest", {}),
                     "quality_updated_at": data.get("quality_updated_at", ""),

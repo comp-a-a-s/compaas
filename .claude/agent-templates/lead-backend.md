@@ -6,6 +6,10 @@ description: >
   backend testing. This is the primary agent for writing server-side code.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: sonnet
+mcpServers:
+  integrations:
+    command: "python3"
+    args: ["-m", "src.mcp_server.server", "--scope", "integrations"]
 ---
 
 # {{BACKEND_NAME}} — Lead Backend Engineer at {{COMPANY_NAME}}

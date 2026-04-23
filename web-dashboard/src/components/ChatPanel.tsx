@@ -281,6 +281,7 @@ const PROMPT_EXAMPLES_CATEGORY_KEY = 'compaas_prompt_examples_category';
 const PROMPT_EXAMPLES_RECENT_KEY = 'compaas_prompt_examples_recent';
 const PROMPT_EXAMPLES_SEEN_BY_PROJECT_KEY = 'compaas_prompt_examples_seen_by_project';
 const PROMPT_EXAMPLES_RECENT_LIMIT = 5;
+const STEP_BY_STEP_LOG_PREF_KEY = 'compaas_chat_show_step_by_step_log';
 const HIGH_BUDGET_RETRY_LIMIT = 1;
 
 function looksExecutionRequest(input: string): boolean {
@@ -292,18 +293,22 @@ function looksExecutionRequest(input: string): boolean {
 const TELEGRAM_KEYS = {
   token: 'compaas_telegram_token',
   chatId: 'compaas_telegram_chatid',
-  configured: 'compaas_telegram_configured',
   mirror: 'compaas_telegram_mirror_enabled',
 } as const;
 
-function readTelegramCredentials(): { token: string; chatId: string; configured: boolean } {
+function readTelegramCredentials(
+  fallbackToken = '',
+  fallbackChatId = '',
+): { token: string; chatId: string; configured: boolean } {
   try {
-    const token = localStorage.getItem(TELEGRAM_KEYS.token) ?? '';
-    const chatId = localStorage.getItem(TELEGRAM_KEYS.chatId) ?? '';
-    const configured = (localStorage.getItem(TELEGRAM_KEYS.configured) === 'true') && Boolean(token && chatId);
+    const token = (localStorage.getItem(TELEGRAM_KEYS.token) ?? '').trim() || fallbackToken.trim();
+    const chatId = (localStorage.getItem(TELEGRAM_KEYS.chatId) ?? '').trim() || fallbackChatId.trim();
+    const configured = Boolean(token && chatId);
     return { token, chatId, configured };
   } catch {
-    return { token: '', chatId: '', configured: false };
+    const token = fallbackToken.trim();
+    const chatId = fallbackChatId.trim();
+    return { token, chatId, configured: Boolean(token && chatId) };
   }
 }
 
@@ -1610,7 +1615,7 @@ interface ChatPanelProps {
   microProjectMode?: boolean;
   onMicroProjectModeChange?: (enabled: boolean) => void;
   onNavigateToProject?: (projectId: string) => void;
-  onOpenSettings?: (connector?: 'github' | 'vercel' | 'netlify' | 'stripe') => void;
+  onOpenSettings?: (connector?: 'github' | 'gitlab' | 'vercel' | 'netlify' | 'stripe') => void;
   onOpenEventLog?: () => void;
   pendingApprovalProjects?: Project[];
   onProjectApproved?: (projectId: string) => void;
@@ -1618,6 +1623,8 @@ interface ChatPanelProps {
   activeProjectId?: string;
   onActiveProjectChange?: (projectId: string) => void;
   telegramMirrorEnabled?: boolean;
+  telegramBotToken?: string;
+  telegramChatId?: string;
   onTelegramMirrorChange?: (enabled: boolean) => void;
   microToggleRequestToken?: number;
   onAgentActivity?: (agentId: string, task: string, flow: 'down' | 'up' | 'working') => void;
@@ -1653,6 +1660,8 @@ export default function ChatPanel({
   activeProjectId = '',
   onActiveProjectChange,
   telegramMirrorEnabled = false,
+  telegramBotToken = '',
+  telegramChatId = '',
   onTelegramMirrorChange,
   microToggleRequestToken = 0,
   onAgentActivity,
@@ -1687,7 +1696,13 @@ export default function ChatPanel({
   const [actionLog, setActionLog] = useState<ActionEntry[]>([]);
   const [actionDetails, setActionDetails] = useState<ActionDetailEntry[]>([]);
   const [delegationContext, setDelegationContext] = useState<DelegationContext | null>(null);
-  const [showActionDetails, setShowActionDetails] = useState(false);
+  const [showActionDetails, setShowActionDetails] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(STEP_BY_STEP_LOG_PREF_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [latestRunId, setLatestRunId] = useState('');
   const [liveRunStatus, setLiveRunStatus] = useState<RunStatusEvent | null>(runStatus);
   const [liveRunIncident, setLiveRunIncident] = useState<RunIncidentEvent | null>(runIncident);
@@ -1886,6 +1901,14 @@ export default function ChatPanel({
   }, [promptExamplesSeenByProject]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(STEP_BY_STEP_LOG_PREF_KEY, showActionDetails ? '1' : '0');
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [showActionDetails]);
+
+  useEffect(() => {
     setShowPromptExamplesPanel(false);
   }, [activeProjectId]);
 
@@ -1928,14 +1951,14 @@ export default function ChatPanel({
   // Telegram incoming message polling
   useEffect(() => {
     if (!telegramMirrorEnabled) return;
-    const creds = readTelegramCredentials();
+    const creds = readTelegramCredentials(telegramBotToken, telegramChatId);
     if (!creds.configured || !creds.token) return;
 
     let cancelled = false;
     const poll = async () => {
       if (cancelled) return;
       try {
-        const msgs = await pollTelegramMessages(creds.token);
+        const msgs = await pollTelegramMessages(creds.token, creds.chatId);
         if (cancelled) return;
         for (const msg of msgs) {
           // Skip if chat is busy (CEO is working), queue message display only
@@ -1974,7 +1997,7 @@ export default function ChatPanel({
     const interval = setInterval(poll, 5000);
     poll(); // immediate first poll
     return () => { cancelled = true; clearInterval(interval); };
-  }, [telegramMirrorEnabled]);
+  }, [telegramMirrorEnabled, telegramBotToken, telegramChatId]);
 
   useEffect(() => { if (showSearch) setTimeout(() => searchRef.current?.focus(), 50); }, [showSearch]);
 
@@ -2088,7 +2111,7 @@ export default function ChatPanel({
 
   const mirrorTelegram = useCallback(async (speaker: string, content: string, projectId: string) => {
     if (!telegramMirrorEnabledRef.current) return;
-    const creds = readTelegramCredentials();
+    const creds = readTelegramCredentials(telegramBotToken, telegramChatId);
     if (!creds.configured) {
       onTelegramMirrorChange?.(false);
       return;
@@ -2100,7 +2123,7 @@ export default function ChatPanel({
       chat_id: creds.chatId,
       text: body,
     });
-  }, [onTelegramMirrorChange]);
+  }, [onTelegramMirrorChange, telegramBotToken, telegramChatId]);
 
   const safeMirrorTelegram = useCallback(async (speaker: string, content: string, projectId: string) => {
     try {
@@ -2903,8 +2926,8 @@ export default function ChatPanel({
     }
     if (kind === 'open_settings') {
       const connector = String(payload.connector || '').trim().toLowerCase();
-      if (connector === 'github' || connector === 'vercel' || connector === 'netlify' || connector === 'stripe') {
-        onOpenSettings?.(connector as 'github' | 'vercel' | 'netlify' | 'stripe');
+      if (connector === 'github' || connector === 'gitlab' || connector === 'vercel' || connector === 'netlify' || connector === 'stripe') {
+        onOpenSettings?.(connector as 'github' | 'gitlab' | 'vercel' | 'netlify' | 'stripe');
       } else {
         onOpenSettings?.();
       }
@@ -3043,6 +3066,12 @@ export default function ChatPanel({
     || (contextPacksEnabled && showContextPacks)
     || (previewReviewEnabled && showPreviewReview)
   );
+  const activeAgentCount = Array.isArray(liveRunStatus?.active_agents)
+    ? liveRunStatus.active_agents.length
+    : 0;
+  const latestMilestoneLabel = actionLog.length > 0
+    ? parseActionText(actionLog[actionLog.length - 1]?.text || '').label
+    : delegationContext?.summary || 'Execution is progressing through planned milestones.';
 
   // ---- Shared header controls ----
   const secondaryControls = (
@@ -3090,7 +3119,7 @@ export default function ChatPanel({
             }}
             style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '12px', color: showActionDetails ? 'var(--tf-success)' : 'var(--tf-text-secondary)' }}
           >
-            {showActionDetails ? 'Hide Technical Details' : 'Show Technical Details'}
+            {showActionDetails ? 'Hide Step-by-Step Log' : 'Show Step-by-Step Log'}
           </button>
           <button
             onClick={() => {
@@ -3750,26 +3779,33 @@ export default function ChatPanel({
                       </span>
                     </div>
                     <div className="mt-1.5 text-[11px]" style={{ color: 'var(--tf-text-muted)' }}>
-                      Heartbeat #{Math.max(0, Number(liveRunStatus.heartbeat_seq || 0))}
+                      {showActionDetails
+                        ? `Heartbeat #${Math.max(0, Number(liveRunStatus.heartbeat_seq || 0))}`
+                        : `Team active: ${activeAgentCount} ${activeAgentCount === 1 ? 'agent' : 'agents'}`}
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {Array.isArray(liveRunStatus.active_agents) && liveRunStatus.active_agents.length > 0 ? (
-                        liveRunStatus.active_agents.slice(0, 4).map((agent) => (
-                          <span
-                            key={`${agent.agent_id}-${agent.state}-${agent.source || 'real'}`}
-                            className="px-2 py-1 rounded-full text-[11px]"
-                            style={{ border: '1px solid var(--tf-border)', color: 'var(--tf-text-secondary)', backgroundColor: 'var(--tf-surface)' }}
-                          >
-                            {agent.agent_name} · {agent.state}
-                            {agent.evidence_level ? ` · ${agent.evidence_level}` : ''}
+                    <div className="mt-2 text-[11px]" style={{ color: 'var(--tf-text-muted)' }}>
+                      Latest milestone: {latestMilestoneLabel}
+                    </div>
+                    {showActionDetails && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {Array.isArray(liveRunStatus.active_agents) && liveRunStatus.active_agents.length > 0 ? (
+                          liveRunStatus.active_agents.slice(0, 4).map((agent) => (
+                            <span
+                              key={`${agent.agent_id}-${agent.state}-${agent.source || 'real'}`}
+                              className="px-2 py-1 rounded-full text-[11px]"
+                              style={{ border: '1px solid var(--tf-border)', color: 'var(--tf-text-secondary)', backgroundColor: 'var(--tf-surface)' }}
+                            >
+                              {agent.agent_name} · {agent.state}
+                              {agent.evidence_level ? ` · ${agent.evidence_level}` : ''}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-[11px]" style={{ color: 'var(--tf-text-muted)' }}>
+                            No active agent details yet.
                           </span>
-                        ))
-                      ) : (
-                        <span className="text-[11px]" style={{ color: 'var(--tf-text-muted)' }}>
-                          No active agent details yet.
-                        </span>
-                      )}
-                    </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
                 {liveRunIncident && (
@@ -3856,7 +3892,7 @@ export default function ChatPanel({
                 )}
               </div>
             )}
-            {isWaiting && showThinking && thinkingContent && (
+            {isWaiting && showActionDetails && showThinking && thinkingContent && (
               <div style={{ padding: '8px 12px', backgroundColor: 'var(--tf-bg)', borderRadius: '8px', marginBottom: '4px', borderLeft: '2px solid var(--tf-border)', marginLeft: '40px' }}>
                 <p style={{ color: 'var(--tf-text-muted)', fontSize: '11px', fontStyle: 'italic' }}>{thinkingContent}</p>
               </div>
@@ -3886,15 +3922,15 @@ export default function ChatPanel({
                 billingActionsEnabled={stripeBillingPackEnabled}
               />
             )}
-            {isWaiting && !streamingContent && actionLog.length === 0 && showThinking && (
+            {isWaiting && showActionDetails && !streamingContent && actionLog.length === 0 && showThinking && (
               <ThinkingIndicator ceoName={ceoName} customText={thinkingContent || undefined} />
             )}
-            {isWaiting && delegationContext && <DelegationReasoning context={delegationContext} />}
-            {isWaiting && actionLog.length > 0 && <ActionLog entries={actionLog} ceoName={ceoName} />}
+            {isWaiting && showActionDetails && delegationContext && <DelegationReasoning context={delegationContext} />}
+            {isWaiting && showActionDetails && actionLog.length > 0 && <ActionLog entries={actionLog} ceoName={ceoName} />}
             {showActionDetails && actionDetails.length > 0 && (
               <div className="mx-1 mb-3 rounded-lg overflow-hidden" style={{ border: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-bg)' }}>
                 <div className="px-3 py-1.5 text-xs font-medium" style={{ color: 'var(--tf-text-secondary)', borderBottom: '1px solid var(--tf-border)', backgroundColor: 'var(--tf-surface)' }}>
-                  Technical Details {latestRunId ? `• Run ${latestRunId}` : ''}
+                  Step-by-Step Log {latestRunId ? `• Run ${latestRunId}` : ''}
                 </div>
                 <div className="px-3 py-2 space-y-2 max-h-44 overflow-y-auto">
                   {actionDetails.map((d, idx) => (

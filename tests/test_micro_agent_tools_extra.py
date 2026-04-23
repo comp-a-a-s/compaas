@@ -31,6 +31,9 @@ def test_generate_agent_content_includes_parent_context():
     assert "auth flow" in content
     assert "lead-backend" in content
     assert "Implement authentication middleware" in content
+    assert "mcpServers:" in content
+    assert '"--scope", "integrations"' in content
+    assert "mcp__integrations__get_connector_capabilities" in content
 
 
 def test_spawn_list_retire_micro_agent_cycle(temp_data_dir, tmp_path, monkeypatch):
